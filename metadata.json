@@ -1,0 +1,6 @@
+{
+  "name": "USMBA Doctorat - Candidatures CED",
+  "description": "Portail mobile-first de candidature aux études doctorales de l'Université Sidi Mohamed Ben Abdellah (Fès).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
