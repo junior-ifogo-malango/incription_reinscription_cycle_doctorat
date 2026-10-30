@@ -1,6 +1,6 @@
 export type UserRole = 'candidat' | 'enseignant' | 'directeur_ced';
 
-export type PieceType = 'cin' | 'diplome' | 'releves' | 'cv';
+export type PieceType = 'CIN' | 'DIPLOME' | 'RELEVES' | 'CV' | 'cin' | 'diplome' | 'releves' | 'cv';
 export type PieceStatut = 'declaree' | 'prouvee' | 'illisible' | 'absente';
 export type PieceSource = 'camera' | 'televersement' | 'apogee';
 
@@ -24,6 +24,27 @@ export interface Enseignant {
   structure: string;
 }
 
+export interface Piece {
+  type: PieceType;
+  statut: PieceStatut;
+  source?: PieceSource;
+  fichier?: string; /* dataURL */
+  id?: string;
+  candidatId?: string;
+  dateMaj?: string;
+}
+
+export type MotifCasParticulier = 'ATTESTATION_SANS_DIPLOME' | 'DIPLOME_ETRANGER' | 'INGENIEUR_SANS_LICENCE' | 'AUTRE';
+
+export type CandidatureStatut = 'deposee' | 'retenue';
+
+export interface Candidature {
+  id?: string;
+  sujetId?: string;
+  candidatId?: string;
+  statut: CandidatureStatut;
+}
+
 export interface Candidat {
   id: string;
   nom: string;
@@ -33,20 +54,18 @@ export interface Candidat {
   tel: string;
   panier: string[]; // Panier illimité
   candidatures: string[]; // Max 3 candidatures déposées
+  candidaturesStatuts?: Record<string, CandidatureStatut>; // Statut par sujet : 'deposee' | 'retenue'
   compteCree: boolean;
+  pieces?: Piece[]; // Stockage : Piece[] (4 éléments) sur le candidat, dans localStorage
+  dossier?: {
+    casParticulier: boolean;
+    motif?: MotifCasParticulier;
+    motifAutre?: string;
+    guichet: boolean;
+  };
   // Aliases pour compatibilité
   panierInteret?: string[];
   interets?: string[];
-}
-
-export interface Piece {
-  id: string;
-  candidatId: string;
-  type: PieceType;
-  statut: PieceStatut;
-  fichier?: string; // Nom ou URL/dataURL du fichier
-  source: PieceSource;
-  dateMaj: string;
 }
 
 export interface Dossier {
@@ -68,6 +87,8 @@ export interface Creneau {
   candidatId?: string;
   statut: CreneauStatut;
   dateReservation?: string; // ISO string
+  dateConfirmation?: string; // ISO string
+  relanceLe?: string; // ISO string
 }
 
 export interface ApogeeFictifEntry {

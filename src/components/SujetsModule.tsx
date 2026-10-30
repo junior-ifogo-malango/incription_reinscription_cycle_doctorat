@@ -16,6 +16,11 @@ import {
   ChevronRight,
   SlidersHorizontal,
   FileCheck2,
+  Stethoscope,
+  Cpu,
+  Cog,
+  BookOpen,
+  GraduationCap,
 } from 'lucide-react';
 import { Sujet, Candidat, Enseignant, UserRole } from '../types';
 import { fr } from '../i18n/fr';
@@ -23,6 +28,62 @@ import { storageService } from '../services/storage';
 import { StatusBadge } from './StatusBadge';
 import { AdvancedSearchModal, AdvancedFilterCriteria } from './AdvancedSearchModal';
 import { normalizeText } from './Autocomplete';
+
+const getDisciplineConfig = (discipline: string) => {
+  const norm = discipline
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+
+  if (norm.includes('medecine') || norm.includes('biotechnologie')) {
+    return {
+      Icon: Stethoscope,
+      barColor: 'bg-emerald-600',
+      iconPill: 'bg-emerald-100 text-emerald-800',
+      badge: 'bg-emerald-50 text-emerald-900 border-emerald-200',
+      cardBg: 'bg-emerald-50',
+      cardBorder: 'border-emerald-200',
+    };
+  }
+  if (norm.includes('informatique') || norm.includes('telecom')) {
+    return {
+      Icon: Cpu,
+      barColor: 'bg-blue-600',
+      iconPill: 'bg-blue-100 text-blue-800',
+      badge: 'bg-blue-50 text-blue-900 border-blue-200',
+      cardBg: 'bg-blue-50',
+      cardBorder: 'border-blue-200',
+    };
+  }
+  if (norm.includes('ingenieur') || norm.includes('technique')) {
+    return {
+      Icon: Cog,
+      barColor: 'bg-orange-500',
+      iconPill: 'bg-orange-100 text-orange-800',
+      badge: 'bg-orange-50 text-orange-900 border-orange-200',
+      cardBg: 'bg-orange-50',
+      cardBorder: 'border-orange-200',
+    };
+  }
+  if (norm.includes('lettre') || norm.includes('humaine')) {
+    return {
+      Icon: BookOpen,
+      barColor: 'bg-purple-600',
+      iconPill: 'bg-purple-100 text-purple-800',
+      badge: 'bg-purple-50 text-purple-900 border-purple-200',
+      cardBg: 'bg-purple-50',
+      cardBorder: 'border-purple-200',
+    };
+  }
+  return {
+    Icon: GraduationCap,
+    barColor: 'bg-slate-500',
+    iconPill: 'bg-slate-100 text-slate-700',
+    badge: 'bg-slate-50 text-slate-800 border-slate-200',
+    cardBg: 'bg-slate-50',
+    cardBorder: 'border-slate-200',
+  };
+};
 
 interface SujetsModuleProps {
   role: UserRole;
@@ -412,14 +473,16 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
         <div className="space-y-2">
           {cartItems.map((sujet) => {
             const isChecked = tempSelection.includes(sujet.id);
+            const { Icon: DisciplineIcon, iconPill, badge: badgeColor } = getDisciplineConfig(sujet.discipline);
+
             return (
               <div
                 key={sujet.id}
                 onClick={() => toggleSelectForCandidate(sujet.id)}
                 className={`p-3 rounded-xl border cursor-pointer select-none transition ${
                   isChecked
-                    ? 'bg-emerald-50 border-emerald-400 shadow-xs'
-                    : 'bg-white border-slate-200 hover:border-slate-300'
+                    ? 'bg-emerald-50/70 border-emerald-400 shadow-xs'
+                    : 'bg-white border-slate-200 hover:border-slate-300 hover:shadow-xs'
                 }`}
               >
                 <div className="flex items-start gap-2.5">
@@ -430,10 +493,17 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
                   >
                     {isChecked && <Check size={13} />}
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <span className="text-[10px] font-bold uppercase text-slate-600">{sujet.discipline}</span>
-                    <h4 className="text-xs font-bold text-slate-900 leading-snug">{sujet.titre}</h4>
-                    <p className="text-[11px] text-slate-500 mt-0.5">{sujet.structure}</p>
+                  <div className="flex-1 min-w-0 space-y-1">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <div className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 ${iconPill}`} aria-hidden="true">
+                        <DisciplineIcon size={11} />
+                      </div>
+                      <span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded border ${badgeColor}`}>
+                        {sujet.discipline}
+                      </span>
+                    </div>
+                    <h4 className="text-sm font-bold text-slate-900 leading-snug">{sujet.titre}</h4>
+                    <p className="text-[11px] text-slate-600">{sujet.structure}</p>
                   </div>
                 </div>
               </div>
@@ -617,32 +687,49 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
               const ens = getEnseignant(sujet.enseignantId);
               const isApplied = candidat.candidatures.includes(sujet.id);
 
-              return (
-                <div key={sujet.id} className="bg-white border border-slate-200 rounded-xl p-3 shadow-xs space-y-1.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-slate-100 text-slate-700">
-                      {sujet.discipline}
-                    </span>
-                    {isApplied && (
-                      <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
-                        {fr.sujetsModule.alreadyAppliedBadge}
-                      </span>
-                    )}
-                  </div>
-                  <h4 className="text-xs font-bold text-slate-900 leading-snug">{sujet.titre}</h4>
-                  <p className="text-[11px] text-slate-500">
-                    {sujet.structure} {ens ? `• ${ens.nom}` : ''}
-                  </p>
+              const { Icon: DisciplineIcon, barColor, iconPill, badge: badgeColor, cardBg, cardBorder } = getDisciplineConfig(sujet.discipline);
 
-                  <div className="pt-1 flex justify-end">
-                    <button
-                      type="button"
-                      onClick={() => toggleCart(sujet.id)}
-                      className="text-[11px] font-semibold text-rose-600 hover:text-rose-800 flex items-center gap-1 py-1 px-2 rounded-lg hover:bg-rose-50 transition"
-                    >
-                      <Trash2 size={13} />
-                      <span>{fr.sujetsModule.btnRemove}</span>
-                    </button>
+              return (
+                <div
+                  key={sujet.id}
+                  className={`group ${cardBg} border ${cardBorder} rounded-xl shadow-xs hover:shadow-md hover:-translate-y-0.5 transition-all duration-150 flex flex-col justify-between overflow-hidden`}
+                >
+                  <div className={`h-1 w-full ${barColor}`} />
+                  <div className="p-3.5 space-y-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <div
+                          className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${iconPill}`}
+                          aria-hidden="true"
+                        >
+                          <DisciplineIcon size={13} />
+                        </div>
+                        <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-md border ${badgeColor}`}>
+                          {sujet.discipline}
+                        </span>
+                      </div>
+                      {isApplied && (
+                        <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full flex items-center gap-1">
+                          <FileCheck2 size={12} className="text-emerald-600 shrink-0" />
+                          <span>{fr.sujetsModule.alreadyAppliedBadge}</span>
+                        </span>
+                      )}
+                    </div>
+                    <h4 className="text-sm font-bold text-slate-900 leading-snug">{sujet.titre}</h4>
+                    <p className="text-[11px] text-slate-600">
+                      <span className="font-medium text-slate-700">{sujet.structure}</span> {ens ? `• ${ens.nom}` : ''}
+                    </p>
+
+                    <div className="pt-2 border-t border-slate-100 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => toggleCart(sujet.id)}
+                        className="text-[11px] font-semibold text-rose-600 hover:text-rose-800 flex items-center gap-1 py-1 px-2 rounded-lg hover:bg-rose-50 transition cursor-pointer"
+                      >
+                        <Trash2 size={13} />
+                        <span>{fr.sujetsModule.btnRemove}</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
               );
@@ -860,87 +947,106 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
             const inCart = candidat.panier.includes(sujet.id);
             const isApplied = candidat.candidatures.includes(sujet.id);
             const ens = getEnseignant(sujet.enseignantId);
+            const { Icon: DisciplineIcon, barColor, iconPill, badge: badgeColor, cardBg, cardBorder } = getDisciplineConfig(sujet.discipline);
 
             return (
               <div
                 key={sujet.id}
-                className="bg-white border border-slate-200 rounded-xl p-3 shadow-xs hover:border-slate-300 transition flex flex-col justify-between"
+                className={`group ${cardBg} border ${cardBorder} rounded-xl shadow-xs hover:shadow-md hover:-translate-y-0.5 transition-all duration-150 flex flex-col justify-between overflow-hidden`}
               >
-                {/* Corps de la carte compacte */}
-                <div
-                  onClick={() => setExpandedId(isExpanded ? null : sujet.id)}
-                  className="cursor-pointer space-y-1.5"
-                >
-                  <div className="flex items-start justify-between gap-1.5">
-                    <span className="inline-block text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-slate-100 text-slate-700 leading-tight line-clamp-2">
-                      {sujet.discipline}
-                    </span>
+                {/* Bande colorée de 4 px en haut (couleur de la discipline) */}
+                <div className={`h-1 w-full ${barColor}`} />
+
+                {/* Corps de la carte compacte avec espacements réguliers */}
+                <div className="p-3.5 flex flex-col flex-1 justify-between space-y-3">
+                  <div
+                    onClick={() => setExpandedId(isExpanded ? null : sujet.id)}
+                    className="cursor-pointer space-y-2"
+                  >
+                    {/* Badge de discipline avec pastille icône arrondie */}
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <div
+                        className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${iconPill}`}
+                        aria-hidden="true"
+                      >
+                        <DisciplineIcon size={13} />
+                      </div>
+                      <span className={`inline-block text-[10px] font-bold uppercase px-2 py-0.5 rounded-md border leading-tight line-clamp-1 ${badgeColor}`}>
+                        {sujet.discipline}
+                      </span>
+                    </div>
+
+                    {/* Titre en police plus grande que l'encadrant et la structure */}
+                    <h3 className="text-sm font-bold text-slate-900 leading-snug line-clamp-2 min-h-[2.5rem]">
+                      {sujet.titre}
+                    </h3>
+
+                    {/* Encadrant et structure */}
+                    <div className="space-y-0.5 text-[11px] text-slate-600">
+                      <p className="truncate font-medium text-slate-700">{sujet.structure}</p>
+                      {ens && <p className="truncate text-slate-500">{ens.nom}</p>}
+                    </div>
+
+                    {/* DÉTAIL DÉPLIABLE SUR PLACE (SANS POP-UP) */}
+                    {isExpanded && (
+                      <div className="pt-2 mt-2 border-t border-slate-100 text-xs text-slate-600 space-y-1.5">
+                        {sujet.descriptionCourte && (
+                          <p className="italic bg-slate-50 p-2 rounded-lg text-[11px] leading-relaxed text-slate-700">
+                            {sujet.descriptionCourte}
+                          </p>
+                        )}
+                        <div className="flex flex-wrap gap-1">
+                          {sujet.motsCles.map((k) => (
+                            <span key={k} className="text-[10px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-700 font-medium">
+                              #{k}
+                            </span>
+                          ))}
+                        </div>
+                        {ens && (
+                          <div className="text-[11px] text-slate-600 pt-0.5">
+                            <span className="font-semibold text-slate-800">{ens.nom}</span> • {ens.email}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
 
-                  <h3 className="text-xs font-bold text-slate-900 leading-snug line-clamp-2">
-                    {sujet.titre}
-                  </h3>
-
-                  <p className="text-[11px] text-slate-500 truncate">{sujet.structure}</p>
-                  {ens && <p className="text-[11px] text-slate-500 truncate">{ens.nom}</p>}
-
-                  {/* DÉTAIL DÉPLIABLE SUR PLACE (SANS POP-UP) */}
-                  {isExpanded && (
-                    <div className="pt-2 mt-2 border-t border-slate-100 text-xs text-slate-600 space-y-1.5">
-                      {sujet.descriptionCourte && (
-                        <p className="italic bg-slate-50 p-2 rounded-lg text-[11px]">{sujet.descriptionCourte}</p>
-                      )}
-                      <div className="flex flex-wrap gap-1">
-                        {sujet.motsCles.map((k) => (
-                          <span key={k} className="text-[10px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-600">
-                            #{k}
-                          </span>
-                        ))}
-                      </div>
-                      {ens && (
-                        <div className="text-[11px] text-slate-500 pt-0.5">
-                          <span className="font-semibold">{ens.nom}</span> • {ens.email}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                {/* Bouton ♡ Ajouter au panier / Dans le panier / Candidature déposée */}
-                <div className="pt-2 mt-2 border-t border-slate-100 flex items-center justify-between">
-                  <span
-                    onClick={() => setExpandedId(isExpanded ? null : sujet.id)}
-                    className="text-[11px] text-slate-400 hover:text-slate-600 cursor-pointer p-1"
-                  >
-                    {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                  </span>
-
-                  {isApplied ? (
-                    <button
-                      type="button"
-                      disabled
-                      className="text-xs font-semibold py-1 px-2.5 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-800 flex items-center gap-1.5 cursor-not-allowed opacity-90 select-none"
+                  {/* Bouton ♡ Ajouter au panier / Dans le panier / Candidature déposée */}
+                  <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                    <span
+                      onClick={() => setExpandedId(isExpanded ? null : sujet.id)}
+                      className="text-[11px] text-slate-400 hover:text-slate-600 cursor-pointer p-1"
                     >
-                      <FileCheck2 size={13} className="text-emerald-600 shrink-0" />
-                      <span>{fr.sujetsModule.candidatureDeposeeBadge}</span>
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleCart(sujet.id);
-                      }}
-                      className={`text-xs font-bold py-1 px-2.5 rounded-lg border transition flex items-center gap-1.5 active:scale-95 cursor-pointer ${
-                        inCart
-                          ? 'bg-rose-50 border-rose-300 text-rose-700'
-                          : 'bg-white border-slate-300 text-slate-700 hover:border-slate-400'
-                      }`}
-                    >
-                      <Heart size={13} className={inCart ? 'fill-rose-600 text-rose-600' : 'text-slate-400'} />
-                      <span>{inCart ? fr.sujetsModule.btnInCart : fr.sujetsModule.btnAddToCart}</span>
-                    </button>
-                  )}
+                      {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                    </span>
+
+                    {isApplied ? (
+                      <button
+                        type="button"
+                        disabled
+                        className="text-xs font-semibold py-1 px-2.5 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-800 flex items-center gap-1.5 cursor-not-allowed opacity-90 select-none"
+                      >
+                        <FileCheck2 size={13} className="text-emerald-600 shrink-0" />
+                        <span>{fr.sujetsModule.candidatureDeposeeBadge}</span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleCart(sujet.id);
+                        }}
+                        className={`text-xs font-bold py-1 px-2.5 rounded-lg border transition flex items-center gap-1.5 active:scale-95 cursor-pointer ${
+                          inCart
+                            ? 'bg-rose-50 border-rose-300 text-rose-700'
+                            : 'bg-white border-slate-300 text-slate-700 hover:border-slate-400'
+                        }`}
+                      >
+                        <Heart size={13} className={inCart ? 'fill-rose-600 text-rose-600' : 'text-slate-400'} />
+                        <span>{inCart ? fr.sujetsModule.btnInCart : fr.sujetsModule.btnAddToCart}</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             );

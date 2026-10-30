@@ -10,7 +10,7 @@ import {
   AlertCircle,
   FileText,
 } from 'lucide-react';
-import { UserRole, Candidat, Enseignant, Sujet, Piece, Creneau, Dossier } from './types';
+import { UserRole, Candidat, Enseignant, Sujet, Piece, Creneau, type Dossier as DossierData } from './types';
 import { storageService } from './services/storage';
 import { fr } from './i18n/fr';
 import { Header } from './components/Header';
@@ -18,7 +18,10 @@ import { LoginModal } from './components/LoginModal';
 import { MobileNav, TabType } from './components/MobileNav';
 import { StatusBadge } from './components/StatusBadge';
 import { SujetsModule } from './components/SujetsModule';
-import { DossierModule } from './components/DossierModule';
+import { Dossier } from './components/Dossier';
+import { Entretiens } from './components/Entretiens';
+import { MesCreneaux } from './components/MesCreneaux';
+import { Exceptions } from './components/Exceptions';
 
 export default function App() {
   const [role, setRole] = useState<UserRole>('candidat');
@@ -30,8 +33,10 @@ export default function App() {
   const [sujets, setSujets] = useState<Sujet[]>([]);
   const [enseignants, setEnseignants] = useState<Enseignant[]>([]);
   const [pieces, setPieces] = useState<Piece[]>([]);
+  const [dossier, setDossier] = useState<DossierData>(storageService.getDossier());
   const [creneaux, setCreneaux] = useState<Creneau[]>([]);
   const [showToast, setShowToast] = useState(false);
+  const [simulatedStatuts, setSimulatedStatuts] = useState<Record<string, 'deposee' | 'retenue'>>({});
 
   // Initialisation au montage : démarre en visiteur sans compte
   useEffect(() => {
@@ -45,6 +50,7 @@ export default function App() {
     setSujets(storageService.getSujets());
     setEnseignants(storageService.getEnseignants());
     setPieces(storageService.getPieces());
+    setDossier(storageService.getDossier());
     setCreneaux(storageService.getCreneaux());
   };
 
@@ -84,6 +90,16 @@ export default function App() {
   };
 
   const handleTabChange = (targetTab: TabType) => {
+    try {
+      const raw = localStorage.getItem('usmba_doctorat_candidat');
+      if (raw) {
+        const parsed: Candidat = JSON.parse(raw);
+        setCandidat(parsed);
+      }
+    } catch {
+      // safe fallback
+    }
+
     // Pages ouvertes aux visiteurs
     if (targetTab === 'sujets' || targetTab === 'panier') {
       setTab(targetTab);
@@ -153,27 +169,58 @@ export default function App() {
     return false;
   });
 
-  // Candidatures reçues pour l'enseignant actif (lecture seule)
+  // Candidatures reçues pour l'enseignant actif
   const teacherSubjectIds = sujetsEnseignant.map((s) => s.id);
   const candidaturesEnseignant = useMemo(() => {
     const list: {
+      key: string;
+      candidatId: string;
+      sujetId: string;
       candidatNom: string;
       cne: string;
       sujetTitre: string;
       date: string;
+      statut: 'deposee' | 'retenue';
+      piecesPretes: number;
+      motifCasParticulier?: string;
+      guichet?: boolean;
+      isCurrentCandidat: boolean;
     }[] = [];
 
     // Candidatures de l'étudiant actif
     if (candidat.compteCree && candidat.candidatures) {
+      const activePiecesPretes = (candidat.pieces || []).filter(
+        (p) => p.statut === 'prouvee'
+      ).length;
+
+      let motifLabel: string | undefined = undefined;
+      if (candidat.dossier?.casParticulier && candidat.dossier?.motif) {
+        if (candidat.dossier.motif === 'AUTRE') {
+          motifLabel = candidat.dossier.motifAutre
+            ? `Autre : ${candidat.dossier.motifAutre}`
+            : fr.dossier.casParticulierMotifs.AUTRE;
+        } else {
+          motifLabel = fr.dossier.casParticulierMotifs[candidat.dossier.motif];
+        }
+      }
+
       candidat.candidatures.forEach((id) => {
         if (teacherSubjectIds.includes(id)) {
           const s = sujets.find((x) => x.id === id);
           if (s) {
             list.push({
+              key: `${candidat.id}-${id}`,
+              candidatId: candidat.id,
+              sujetId: s.id,
               candidatNom: candidat.nom || 'Candidat USMBA',
               cne: candidat.cne || 'CNE',
               sujetTitre: s.titre,
               date: '28/10/2026',
+              statut: candidat.candidaturesStatuts?.[id] || 'deposee',
+              piecesPretes: activePiecesPretes,
+              motifCasParticulier: motifLabel,
+              guichet: Boolean(candidat.dossier?.guichet),
+              isCurrentCandidat: true,
             });
           }
         }
@@ -184,22 +231,64 @@ export default function App() {
     if (activeEnseignant.id === 'ens-1') {
       list.push(
         {
+          key: 'salma-suj-07',
+          candidatId: 'cand-salma',
+          sujetId: 'suj-07',
           candidatNom: 'Salma Alami',
           cne: 'N149021873',
           sujetTitre: 'Cybersécurité des Véhicules Connectés et Protocoles V2X',
           date: '25/10/2026',
+          statut: simulatedStatuts['salma-suj-07'] || 'deposee',
+          piecesPretes: 3,
+          isCurrentCandidat: false,
         },
         {
+          key: 'khadija-suj-01',
+          candidatId: 'cand-khadija',
+          sujetId: 'suj-01',
           candidatNom: 'Khadija Tazi',
           cne: 'M142078911',
           sujetTitre: 'Optimisation des Réseaux Électriques Intelligents (Smart Grids)',
           date: '26/10/2026',
+          statut: simulatedStatuts['khadija-suj-01'] || 'deposee',
+          piecesPretes: 4,
+          motifCasParticulier: fr.dossier.casParticulierMotifs.DIPLOME_ETRANGER,
+          isCurrentCandidat: false,
         }
       );
     }
 
     return list;
-  }, [candidat, teacherSubjectIds, sujets, activeEnseignant]);
+  }, [candidat, teacherSubjectIds, sujets, activeEnseignant, simulatedStatuts]);
+
+  const handleToggleRetenir = (item: {
+    key: string;
+    sujetId: string;
+    statut: 'deposee' | 'retenue';
+    isCurrentCandidat: boolean;
+  }) => {
+    const newStatut: 'deposee' | 'retenue' = item.statut === 'deposee' ? 'retenue' : 'deposee';
+    if (item.isCurrentCandidat) {
+      try {
+        const raw = localStorage.getItem('usmba_doctorat_candidat');
+        const curCandidat: Candidat = raw ? JSON.parse(raw) : candidat;
+        const updatedStatuts = {
+          ...(curCandidat.candidaturesStatuts || {}),
+          [item.sujetId]: newStatut,
+        };
+        curCandidat.candidaturesStatuts = updatedStatuts;
+        localStorage.setItem('usmba_doctorat_candidat', JSON.stringify(curCandidat));
+        setCandidat({ ...curCandidat });
+      } catch (err) {
+        console.error('Storage error', err);
+      }
+    } else {
+      setSimulatedStatuts((prev) => ({
+        ...prev,
+        [item.key]: newStatut,
+      }));
+    }
+  };
 
   const piecesPretesCount = pieces.filter(
     (p) => p.statut === 'prouvee' || p.statut === 'declaree'
@@ -283,7 +372,7 @@ export default function App() {
             />
           )}
 
-          {/* Onglet Enseignant : Candidatures reçues (Lecture seule) */}
+          {/* Onglet Enseignant : Candidatures reçues */}
           {tab === 'candidatures_recues' && (
             <div className="space-y-3">
               <div className="bg-slate-900 text-white rounded-xl p-3 flex items-center justify-between">
@@ -305,15 +394,64 @@ export default function App() {
                   <p className="text-xs text-slate-500">{fr.sujetsModule.teacherCandidaturesEmpty}</p>
                 </div>
               ) : (
-                <div className="space-y-2">
-                  {candidaturesEnseignant.map((item, idx) => (
-                    <div key={idx} className="bg-white border border-slate-200 rounded-xl p-3 shadow-xs space-y-1.5">
+                <div className="space-y-2.5">
+                  {candidaturesEnseignant.map((item) => (
+                    <div key={item.key} className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-xs space-y-2">
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-xs font-bold text-slate-900">{item.candidatNom}</span>
-                        <StatusBadge type="candidature" size="sm" />
+                        {item.statut === 'deposee' ? (
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] text-slate-400 italic">
+                              {fr.dossier.simulationMention}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleRetenir(item)}
+                              className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-emerald-700 hover:bg-emerald-800 text-white transition-colors cursor-pointer active:scale-98"
+                            >
+                              {fr.dossier.btnRetenir}
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
+                              <CheckCircle2 size={12} className="text-emerald-700 shrink-0" />
+                              <span>{fr.dossier.badgeRetenu}</span>
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleRetenir(item)}
+                              className="text-[11px] text-slate-500 hover:text-rose-600 underline underline-offset-2 transition-colors cursor-pointer"
+                            >
+                              {fr.dossier.btnAnnuler}
+                            </button>
+                          </div>
+                        )}
                       </div>
+
                       <p className="text-xs text-slate-700 font-medium">{item.sujetTitre}</p>
-                      <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1 border-t border-slate-100">
+
+                      <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md">
+                          <FileText size={11} className="text-slate-500" />
+                          <span>{item.piecesPretes}/4 {fr.dossier.piecesPretes}</span>
+                        </span>
+
+                        {item.motifCasParticulier && (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-purple-700 bg-purple-50 border border-purple-200 px-2 py-0.5 rounded-md">
+                            <span>Cas : {item.motifCasParticulier}</span>
+                          </span>
+                        )}
+
+                        {item.guichet && (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">
+                            <AlertCircle size={11} className="text-amber-600" />
+                            <span>{fr.dossier.guichetBadge}</span>
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1.5 border-t border-slate-100">
                         <span>{item.cne}</span>
                         <span>{item.date}</span>
                       </div>
@@ -324,97 +462,29 @@ export default function App() {
             </div>
           )}
 
-          {/* Onglet Aperçu Dossier (Préparation Module A3) */}
-          {tab === 'dossier' && (
-            <div className="space-y-4">
-              <div className="bg-blue-50 border border-blue-200 rounded-2xl p-5 text-center space-y-3">
-                <div className="w-12 h-12 mx-auto rounded-full bg-blue-100 text-blue-800 flex items-center justify-center">
-                  <FileText size={24} />
-                </div>
-                <div>
-                  <span className="inline-block text-[11px] font-bold text-blue-800 uppercase tracking-wider bg-blue-200/70 px-2 py-0.5 rounded-full mb-1">
-                    {fr.moduleA3Preview.status}
-                  </span>
-                  <h3 className="font-bold text-base text-slate-900">
-                    {fr.moduleA3Preview.title}
-                  </h3>
-                  <p className="text-xs text-slate-600 mt-1">
-                    {fr.moduleA3Preview.sub}
-                  </p>
-                </div>
-                <div className="pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setTab('sujets')}
-                    className="w-full min-h-[46px] rounded-xl font-semibold text-xs bg-blue-700 text-white flex items-center justify-center gap-2"
-                  >
-                    <span>{fr.sujetsModule.btnBackToCatalog}</span>
-                  </button>
-                </div>
-              </div>
-            </div>
+          {/* Onglet « Mon dossier » (candidat) */}
+          {tab === 'dossier' && role === 'candidat' && isLoggedIn && (
+            <Dossier />
           )}
 
-          {/* Onglet Aperçu Entretiens (Préparation Module A5) */}
-          {tab === 'entretiens' && (
-            <div className="space-y-4">
-              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5 text-center space-y-3">
-                <div className="w-12 h-12 mx-auto rounded-full bg-amber-100 text-amber-900 flex items-center justify-center">
-                  <Calendar size={24} />
-                </div>
-                <div>
-                  <span className="inline-block text-[11px] font-bold text-amber-900 uppercase tracking-wider bg-amber-200/70 px-2 py-0.5 rounded-full mb-1">
-                    {fr.moduleA5Preview.status}
-                  </span>
-                  <h3 className="font-bold text-base text-slate-900">
-                    {fr.moduleA5Preview.title}
-                  </h3>
-                  <p className="text-xs text-slate-600 mt-1">
-                    {fr.moduleA5Preview.sub}
-                  </p>
-                </div>
-                <div className="pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setTab('sujets')}
-                    className="w-full min-h-[46px] rounded-xl font-semibold text-xs bg-amber-700 text-white flex items-center justify-center gap-2"
-                  >
-                    <span>{fr.sujetsModule.btnBackToCatalog}</span>
-                  </button>
-                </div>
-              </div>
-            </div>
+          {/* Onglet Entretiens (Candidat) */}
+          {tab === 'entretiens' && role === 'candidat' && (
+            <Entretiens />
           )}
 
-          {/* Onglet Aperçu CED (Préparation Module 5) */}
+          {/* Onglet Mes créneaux (Enseignant) */}
+          {tab === 'entretiens' && role === 'enseignant' && (
+            <MesCreneaux enseignantId={activeEnseignant.id} />
+          )}
+
+          {/* Onglet Entretiens (Directeur CED) */}
+          {tab === 'entretiens' && role === 'directeur_ced' && (
+            <Exceptions />
+          )}
+
+          {/* Onglet Exceptions CED (Directeur CED) */}
           {tab === 'ced' && (
-            <div className="space-y-4">
-              <div className="bg-rose-50 border border-rose-200 rounded-2xl p-5 text-center space-y-3">
-                <div className="w-12 h-12 mx-auto rounded-full bg-rose-100 text-rose-900 flex items-center justify-center">
-                  <AlertCircle size={24} />
-                </div>
-                <div>
-                  <span className="inline-block text-[11px] font-bold text-rose-900 uppercase tracking-wider bg-rose-200/70 px-2 py-0.5 rounded-full mb-1">
-                    {fr.moduleCedPreview.status}
-                  </span>
-                  <h3 className="font-bold text-base text-slate-900">
-                    {fr.moduleCedPreview.title}
-                  </h3>
-                  <p className="text-xs text-slate-600 mt-1">
-                    {fr.moduleCedPreview.sub}
-                  </p>
-                </div>
-                <div className="pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setTab('sujets')}
-                    className="w-full min-h-[46px] rounded-xl font-semibold text-xs bg-rose-700 text-white flex items-center justify-center gap-2"
-                  >
-                    <span>{fr.sujetsModule.btnBackToCatalog}</span>
-                  </button>
-                </div>
-              </div>
-            </div>
+            <Exceptions />
           )}
         </main>
 

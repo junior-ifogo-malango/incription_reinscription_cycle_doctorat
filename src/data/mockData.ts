@@ -191,6 +191,29 @@ export const INITIAL_SUJETS: Sujet[] = [
   },
 ];
 
+export const INITIAL_PIECES_YASSINE: Piece[] = [
+  {
+    type: 'CIN',
+    statut: 'prouvee',
+    source: 'camera',
+    fichier: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="180" viewBox="0 0 300 180"><rect width="300" height="180" rx="10" fill="%23f8fafc" stroke="%23cbd5e1" stroke-width="2"/><rect x="20" y="25" width="80" height="100" rx="6" fill="%23cbd5e1"/><text x="120" y="55" font-family="sans-serif" font-size="13" font-weight="bold" fill="%230f172a">ROYAUME DU MAROC</text><text x="120" y="80" font-family="sans-serif" font-size="12" fill="%23334155">CIN: CD789123</text><text x="120" y="105" font-family="sans-serif" font-size="12" fill="%23334155">Nom: EL FASSI</text><text x="120" y="130" font-family="sans-serif" font-size="12" fill="%23334155">Pr&eacute;nom: Yassine</text></svg>',
+  },
+  {
+    type: 'DIPLOME',
+    statut: 'prouvee',
+    source: 'apogee',
+    fichier: 'master_sciences_techniques_usmba.pdf',
+  },
+  {
+    type: 'RELEVES',
+    statut: 'declaree',
+  },
+  {
+    type: 'CV',
+    statut: 'declaree',
+  },
+];
+
 export const INITIAL_CANDIDAT: Candidat = {
   id: 'visiteur-001',
   nom: '',
@@ -200,7 +223,18 @@ export const INITIAL_CANDIDAT: Candidat = {
   tel: '',
   panier: [],
   candidatures: [],
+  candidaturesStatuts: {},
   compteCree: false,
+  dossier: {
+    casParticulier: false,
+    guichet: false,
+  },
+  pieces: [
+    { type: 'CIN', statut: 'absente' },
+    { type: 'DIPLOME', statut: 'absente' },
+    { type: 'RELEVES', statut: 'absente' },
+    { type: 'CV', statut: 'absente' },
+  ],
 };
 
 export const DEMO_CANDIDAT_YASSINE: Candidat = {
@@ -212,7 +246,16 @@ export const DEMO_CANDIDAT_YASSINE: Candidat = {
   tel: '+212 6 61 23 45 67',
   panier: ['suj-07', 'suj-13'],
   candidatures: ['suj-01', 'suj-04'],
+  candidaturesStatuts: {
+    'suj-01': 'deposee',
+    'suj-04': 'deposee',
+  },
   compteCree: true,
+  dossier: {
+    casParticulier: false,
+    guichet: false,
+  },
+  pieces: INITIAL_PIECES_YASSINE,
 };
 
 export const INITIAL_PIECES: Piece[] = [
@@ -270,7 +313,7 @@ export const INITIAL_CRENEAUX: Creneau[] = [
     date: '2026-11-04',
     heure: '09:30',
     lieu: 'Salle des Thèses 1 - FSDM Fès',
-    candidatId: 'cand-001',
+    candidatId: 'cand-salma',
     statut: 'reserve',
     dateReservation: '2026-10-22T08:00:00Z', // Plus de 48h en arrière : test d'alerte CED
   },
@@ -284,18 +327,18 @@ export const INITIAL_CRENEAUX: Creneau[] = [
   },
   {
     id: 'cr-103',
-    enseignantId: 'ens-2',
+    enseignantId: 'ens-1',
     date: '2026-11-05',
     heure: '14:30',
-    lieu: 'Amphi F - FST Fès',
+    lieu: 'Salle des Thèses 1 - FSDM Fès',
     statut: 'libre',
   },
   {
     id: 'cr-104',
-    enseignantId: 'ens-2',
+    enseignantId: 'ens-1',
     date: '2026-11-05',
     heure: '16:00',
-    lieu: 'Amphi F - FST Fès',
+    lieu: 'Salle des Thèses 1 - FSDM Fès',
     statut: 'libre',
   },
   {
@@ -304,9 +347,10 @@ export const INITIAL_CRENEAUX: Creneau[] = [
     date: '2026-11-06',
     heure: '10:00',
     lieu: 'Visioconférence Google Meet (Lien CED)',
-    candidatId: 'cand-001',
+    candidatId: 'cand-khadija',
     statut: 'confirme',
     dateReservation: '2026-10-24T14:00:00Z',
+    dateConfirmation: '2026-10-24T16:00:00Z',
   },
   {
     id: 'cr-106',
@@ -317,6 +361,11 @@ export const INITIAL_CRENEAUX: Creneau[] = [
     statut: 'libre',
   },
 ];
+
+export const ApogeeFictif: Record<string, string> = {
+  'N138249871': 'Master en Informatique, USMBA 2023',
+  'N145678902': 'Licence en Physique, USMBA 2022',
+};
 
 export const APOGEE_FICTIF_DB: Record<string, ApogeeFictifEntry> = {
   N138249871: {
