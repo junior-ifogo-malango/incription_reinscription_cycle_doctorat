@@ -58,45 +58,45 @@ export const MobileNav: React.FC<MobileNavProps> = ({
   const getTabsForRole = (): TabItem[] => {
     const sujetsTab: TabItem = {
       id: 'sujets',
-      label: fr.nav.sujets,
+      label: fr.nav.court.sujets,
       icon: <Search size={18} />,
     };
 
     const dossierTab: TabItem = {
       id: 'dossier',
-      label: fr.nav.dossier,
+      label: fr.nav.court.dossier,
       icon: <FolderKanban size={18} />,
       badge: badgeCounts.piecesPretes !== undefined ? `${badgeCounts.piecesPretes}/4` : undefined,
     };
 
     const entretiensTab: TabItem = {
       id: 'entretiens',
-      label: fr.nav.entretiens,
+      label: fr.nav.court.entretiens,
       icon: <CalendarCheck2 size={18} />,
     };
 
     const mesSujetsTab: TabItem = {
       id: 'sujets',
-      label: fr.nav.mesSujets,
+      label: fr.nav.court.sujets,
       icon: <Search size={18} />,
     };
 
     const candidaturesRecuesTab: TabItem = {
       id: 'candidatures_recues',
-      label: fr.nav.candidatures,
+      label: fr.nav.court.candidatures,
       icon: <FileText size={18} />,
       badge: badgeCounts.candidaturesCount ? String(badgeCounts.candidaturesCount) : undefined,
     };
 
     const mesCreneauxTab: TabItem = {
       id: 'entretiens',
-      label: fr.nav.mesCreneaux,
+      label: fr.nav.court.creneaux,
       icon: <CalendarCheck2 size={18} />,
     };
 
     const cedTab: TabItem = {
       id: 'ced',
-      label: fr.nav.exceptionsCed,
+      label: fr.nav.court.exceptionsCed,
       icon: <ShieldAlert size={18} />,
       badge: badgeCounts.alertesCed ? `${badgeCounts.alertesCed}` : undefined,
       badgeColor: 'bg-rose-500',
@@ -110,7 +110,7 @@ export const MobileNav: React.FC<MobileNavProps> = ({
 
     const accountTab: TabItem = {
       id: 'account',
-      label: fr.auth.accountMenu,
+      label: fr.nav.court.compte,
       icon: <User size={18} />,
     };
 

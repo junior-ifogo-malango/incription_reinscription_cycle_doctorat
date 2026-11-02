@@ -48,10 +48,11 @@ export interface Candidature {
 export interface Candidat {
   id: string;
   nom: string;
-  cne: string;
-  cin: string;
+  cne?: string;
+  cin?: string;
   email: string;
   tel: string;
+  motDePasse?: string;
   panier: string[]; // Panier illimité
   candidatures: string[]; // Max 3 candidatures déposées
   candidaturesStatuts?: Record<string, CandidatureStatut>; // Statut par sujet : 'deposee' | 'retenue'
@@ -66,6 +67,14 @@ export interface Candidat {
   // Aliases pour compatibilité
   panierInteret?: string[];
   interets?: string[];
+}
+
+export interface Notification {
+  id: string;
+  destinataireId: string;
+  texte: string;
+  date: string; /* ISO */
+  lue: boolean;
 }
 
 export interface Dossier {
@@ -99,4 +108,28 @@ export interface ApogeeFictifEntry {
   mention: string;
   etablissement: string;
   anneeObtention: number;
+}
+
+export type ResultatType = 'ADMIS' | 'LISTE_COMPLEMENTAIRE' | 'REFUSE';
+
+export interface Resultat {
+  creneauId: string;
+  candidatId: string;
+  note: number; /* 0 à 20, 1 décimale */
+  resultat: ResultatType;
+  motif?: string;
+  saisiLe: string; /* ISO */
+}
+
+export type PVStatut = 'a_signer' | 'signe' | 'original_recu' | 'approuve';
+
+export interface PV {
+  id: string;
+  directeurId: string;
+  date: string; /* AAAA-MM-JJ de la séance */
+  resultats: Resultat[]; /* copie figée */
+  statut: PVStatut;
+  code: string;
+  genereLe: string; /* ISO */
+  publieLe?: string; /* ISO */
 }
