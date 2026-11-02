@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Clock, MapPin, CheckCircle2, AlertCircle, RefreshCw, Bell, User, Award, XCircle } from 'lucide-react';
-import { Creneau, CreneauStatut, Candidat, Sujet, Enseignant, PV } from '../types';
+import { Calendar, Clock, MapPin, CheckCircle2, AlertCircle, RefreshCw, Bell, User } from 'lucide-react';
+import { Creneau, CreneauStatut, Candidat, Sujet, Enseignant } from '../types';
 import { fr } from '../i18n/fr';
 import { StatusBadge } from './StatusBadge';
 import { storageService } from '../services/storage';
@@ -13,20 +13,10 @@ export const Entretiens: React.FC = () => {
   const [creneaux, setCreneaux] = useState<Creneau[]>([]);
   const [sujets, setSujets] = useState<Sujet[]>([]);
   const [enseignants, setEnseignants] = useState<Enseignant[]>([]);
-  const [pvs, setPvs] = useState<PV[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
     loadData();
-    const handleSync = () => loadData();
-    window.addEventListener('usmba_pvs_updated', handleSync);
-    window.addEventListener('usmba_creneaux_updated', handleSync);
-    window.addEventListener('storage', handleSync);
-    return () => {
-      window.removeEventListener('usmba_pvs_updated', handleSync);
-      window.removeEventListener('usmba_creneaux_updated', handleSync);
-      window.removeEventListener('storage', handleSync);
-    };
   }, []);
 
   const loadData = () => {
@@ -50,17 +40,6 @@ export const Entretiens: React.FC = () => {
       }
     } catch {
       setCreneaux(storageService.getCreneaux());
-    }
-
-    try {
-      const rawPvs = localStorage.getItem('usmba_doctorat_pvs');
-      if (rawPvs) {
-        setPvs(JSON.parse(rawPvs));
-      } else {
-        setPvs([]);
-      }
-    } catch {
-      setPvs([]);
     }
 
     setSujets(storageService.getSujets());
@@ -101,56 +80,11 @@ export const Entretiens: React.FC = () => {
   // Mon créneau actif (réservé ou confirmé)
   const monCreneau = creneaux.find(
     (c) =>
-      (c.candidatId === candidat.id || (candidat.id === 'cand-001' && c.candidatId === 'cand-001')) &&
+      c.candidatId === candidat.id &&
       (c.statut === 'reserve' || c.statut === 'confirme')
   );
 
   const hasActiveBooking = Boolean(monCreneau);
-
-  // Entretien confirmé du candidat
-  const creneauConfirme = creneaux.find(
-    (c) =>
-      (c.candidatId === candidat.id || (candidat.id === 'cand-001' && c.candidatId === 'cand-001')) &&
-      c.statut === 'confirme'
-  );
-
-  // Recherche du PV publié contenant le résultat de ce candidat
-  const publishedPv = pvs.find(
-    (pv) =>
-      Boolean(pv.publieLe) &&
-      pv.resultats?.some(
-        (r) =>
-          r.candidatId === candidat.id ||
-          (candidat.id === 'cand-001' && r.candidatId === 'cand-001') ||
-          (creneauConfirme && r.creneauId === creneauConfirme.id)
-      )
-  );
-
-  const monResultat = publishedPv
-    ? publishedPv.resultats.find(
-        (r) =>
-          r.candidatId === candidat.id ||
-          (candidat.id === 'cand-001' && r.candidatId === 'cand-001') ||
-          (creneauConfirme && r.creneauId === creneauConfirme.id)
-      )
-    : undefined;
-
-  const formatDatePublication = (isoString?: string) => {
-    if (!isoString) return '';
-    try {
-      const d = new Date(isoString);
-      return `${d.toLocaleDateString('fr-FR', {
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric',
-      })} à ${d.toLocaleTimeString('fr-FR', {
-        hour: '2-digit',
-        minute: '2-digit',
-      })}`;
-    } catch {
-      return isoString;
-    }
-  };
 
   // Réserver un créneau
   const handleReserve = (slotId: string) => {
@@ -307,99 +241,6 @@ export const Entretiens: React.FC = () => {
         <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center gap-2">
           <AlertCircle size={15} className="shrink-0 text-rose-600" />
           <span>{errorMsg}</span>
-        </div>
-      )}
-
-      {/* Carte « Mon résultat » en haut si le candidat a un entretien confirmé */}
-      {creneauConfirme && (
-        <div className="bg-white border-2 border-slate-200 rounded-xl p-4 shadow-sm space-y-3">
-          <div className="flex items-center justify-between gap-2 flex-wrap">
-            <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wide flex items-center gap-1.5">
-              <Award size={15} className="text-amber-500" />
-              <span>{fr.entretiens.myResultTitle}</span>
-            </h3>
-
-            {/* Si résultat non publié : StatusBadge neutre « Résultat en attente de publication » */}
-            {!publishedPv || !monResultat ? (
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200">
-                <Clock size={13} className="text-slate-500 shrink-0" />
-                <span>{fr.entretiens.resultPendingPublication}</span>
-              </span>
-            ) : (
-              /* Statut publié = texte + icône + couleur */
-              <>
-                {monResultat.resultat === 'ADMIS' && (
-                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                    <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />
-                    <span>{fr.entretiens.listePrincipaleBadge}</span>
-                  </span>
-                )}
-                {monResultat.resultat === 'LISTE_COMPLEMENTAIRE' && (
-                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300">
-                    <Clock size={13} className="text-amber-600 shrink-0" />
-                    <span>{fr.entretiens.listeAttenteBadge}</span>
-                  </span>
-                )}
-                {monResultat.resultat === 'REFUSE' && (
-                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-100 text-rose-800 border border-rose-300">
-                    <XCircle size={13} className="text-rose-600 shrink-0" />
-                    <span>{fr.entretiens.refuseBadge}</span>
-                  </span>
-                )}
-              </>
-            )}
-          </div>
-
-          {/* Corps de la carte résultat */}
-          {!publishedPv || !monResultat ? (
-            <p className="text-xs text-slate-500">
-              {fr.entretiens.resultPendingHint}
-            </p>
-          ) : (
-            <div className="space-y-3 pt-1">
-              {monResultat.resultat === 'ADMIS' && (
-                <div className="space-y-2.5">
-                  <p className="text-xs text-slate-700 font-medium">
-                    {fr.entretiens.admisNextStep}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      window.dispatchEvent(
-                        new CustomEvent('usmba_navigate_tab', { detail: 'dossier' })
-                      );
-                    }}
-                    className="px-3.5 py-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold transition-colors cursor-pointer inline-flex items-center gap-1.5 shadow-xs"
-                  >
-                    <span>{fr.entretiens.btnGoToDossier}</span>
-                    <span>→</span>
-                  </button>
-                </div>
-              )}
-
-              {monResultat.resultat === 'LISTE_COMPLEMENTAIRE' && (
-                <p className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-xl p-2.5 font-medium">
-                  {fr.entretiens.listeAttenteNotice}
-                </p>
-              )}
-
-              {monResultat.resultat === 'REFUSE' && (
-                <p className="text-xs text-rose-900 bg-rose-50 border border-rose-200 rounded-xl p-2.5 font-medium">
-                  <span className="font-bold">{fr.entretiens.motifPrefix}</span>{' '}
-                  {monResultat.motif || fr.entretiens.motifNonPrecise}
-                </p>
-              )}
-
-              {/* Date de publication affichée (ne montre JAMAIS la note) */}
-              {publishedPv.publieLe && (
-                <div className="pt-2 border-t border-slate-100 text-[11px] text-slate-400">
-                  <span>
-                    {fr.entretiens.publishedOn} {formatDatePublication(publishedPv.publieLe)}
-                  </span>
-                </div>
-              )}
-            </div>
-          )}
         </div>
       )}
 

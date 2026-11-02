@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { X, LogIn, UserCheck, BookOpenCheck, ShieldCheck, Sparkles, AlertCircle } from 'lucide-react';
-import { UserRole, Candidat } from '../types';
+import { UserRole } from '../types';
 import { fr } from '../i18n/fr';
 
 interface LoginModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onLoginSuccess: (role: UserRole, email: string, candidateData?: Candidat) => void;
+  onLoginSuccess: (role: UserRole, email: string) => void;
   onRequestCreateAccount?: () => void;
   restrictionMessage?: string;
 }
@@ -46,104 +46,36 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const cleanEmail = email.trim().toLowerCase();
-    const cleanPassword = password.trim();
 
-    // Démo : mot de passe en clair dans localStorage, à remplacer par un hachage côté serveur
-
-    // 1. Comptes de démo (mot de passe "demo1234")
-    const isDemoPassword = cleanPassword === 'demo1234';
-
-    if (
-      (cleanEmail === 'yassine@demo.ma' ||
-        cleanEmail === 'yassine.elfassi@etu.usmba.ac.ma' ||
-        cleanEmail.includes('yassine')) &&
-      isDemoPassword
-    ) {
+    if (cleanEmail === 'yassine@demo.ma' || cleanEmail.includes('yassine') || cleanEmail.includes('candidat')) {
       onLoginSuccess('candidat', cleanEmail);
       onClose();
-      return;
-    }
-
-    if (
-      (cleanEmail === 'prof@demo.ma' ||
-        cleanEmail === 'k.elamrani@usmba.ac.ma' ||
-        cleanEmail.includes('prof') ||
-        cleanEmail.includes('elamrani')) &&
-      isDemoPassword
-    ) {
+    } else if (cleanEmail === 'prof@demo.ma' || cleanEmail.includes('prof') || cleanEmail.includes('elamrani') || cleanEmail.includes('enseignant')) {
       onLoginSuccess('enseignant', cleanEmail);
       onClose();
-      return;
-    }
-
-    if (
-      (cleanEmail === 'ced@demo.ma' ||
-        cleanEmail === 'ced@usmba.ac.ma' ||
-        cleanEmail.includes('ced')) &&
-      isDemoPassword
-    ) {
+    } else if (cleanEmail === 'ced@demo.ma' || cleanEmail.includes('ced') || cleanEmail.includes('directeur')) {
       onLoginSuccess('directeur_ced', cleanEmail);
       onClose();
-      return;
+    } else {
+      setError(fr.auth.invalidCredentials);
     }
-
-    // 2. Compte candidat créé par l'utilisateur
-    try {
-      const rawAccounts = localStorage.getItem('usmba_registered_accounts');
-      const accounts: Candidat[] = rawAccounts ? JSON.parse(rawAccounts) : [];
-      const foundInAccounts = accounts.find(
-        (a) => a.email && a.email.toLowerCase().trim() === cleanEmail
-      );
-
-      if (foundInAccounts) {
-        if (foundInAccounts.motDePasse && foundInAccounts.motDePasse === cleanPassword) {
-          onLoginSuccess('candidat', cleanEmail, foundInAccounts);
-          onClose();
-          return;
-        } else {
-          setError(fr.auth.invalidCredentials);
-          return;
-        }
-      }
-
-      const rawCur = localStorage.getItem('usmba_doctorat_candidat');
-      if (rawCur) {
-        const cur: Candidat = JSON.parse(rawCur);
-        if (
-          cur.email &&
-          cur.email.toLowerCase().trim() === cleanEmail &&
-          cur.motDePasse &&
-          cur.motDePasse === cleanPassword
-        ) {
-          onLoginSuccess('candidat', cleanEmail, cur);
-          onClose();
-          return;
-        }
-      }
-    } catch {
-      // safe fallback
-    }
-
-    // Échec de vérification
-    setError(fr.auth.invalidCredentials);
   };
 
   const handleQuickDemo = (role: UserRole) => {
-    // Les boutons « Entrer en démo » continuent de fonctionner sans saisie
     if (role === 'candidat') {
-      setEmail('yassine.elfassi@etu.usmba.ac.ma');
-      setPassword('demo1234');
-      onLoginSuccess('candidat', 'yassine.elfassi@etu.usmba.ac.ma');
+      setEmail('yassine@demo.ma');
+      setPassword('••••••••');
+      onLoginSuccess('candidat', 'yassine@demo.ma');
       onClose();
     } else if (role === 'enseignant') {
-      setEmail('k.elamrani@usmba.ac.ma');
-      setPassword('demo1234');
-      onLoginSuccess('enseignant', 'k.elamrani@usmba.ac.ma');
+      setEmail('prof@demo.ma');
+      setPassword('••••••••');
+      onLoginSuccess('enseignant', 'prof@demo.ma');
       onClose();
     } else {
-      setEmail('ced@usmba.ac.ma');
-      setPassword('demo1234');
-      onLoginSuccess('directeur_ced', 'ced@usmba.ac.ma');
+      setEmail('ced@demo.ma');
+      setPassword('••••••••');
+      onLoginSuccess('directeur_ced', 'ced@demo.ma');
       onClose();
     }
   };

@@ -242,9 +242,8 @@ export const DEMO_CANDIDAT_YASSINE: Candidat = {
   nom: 'Yassine El Fassi',
   cne: 'N138249871',
   cin: 'CD789123',
-  email: 'yassine.elfassi@demo.ma',
-  motDePasse: 'demo1234',
-  tel: '0661234567',
+  email: 'yassine.elfassi@etu.usmba.ac.ma',
+  tel: '+212 6 61 23 45 67',
   panier: ['suj-07', 'suj-13'],
   candidatures: ['suj-01', 'suj-04'],
   candidaturesStatuts: {
@@ -306,90 +305,8 @@ export const INITIAL_DOSSIER: Dossier = {
   statutGlobal: 'en_cours',
 };
 
-export const CANDIDAT_SARA: Candidat = {
-  id: 'cand-sara',
-  nom: 'Sara Benjelloun',
-  cne: 'F134567891',
-  cin: 'CD812345',
-  email: 'sara.benjelloun@demo.ma',
-  tel: '0612345678',
-  panier: ['suj-01'],
-  candidatures: ['suj-01'],
-  candidaturesStatuts: { 'suj-01': 'retenue' },
-  compteCree: true,
-};
-
-export const CANDIDAT_OMAR: Candidat = {
-  id: 'cand-omar',
-  nom: 'Omar Idrissi',
-  cne: 'N142987654',
-  cin: 'CD954321',
-  email: 'omar.idrissi@demo.ma',
-  tel: '0698765432',
-  panier: ['suj-01'],
-  candidatures: ['suj-01'],
-  candidaturesStatuts: { 'suj-01': 'retenue' },
-  compteCree: true,
-};
-
-export const CANDIDAT_SALMA: Candidat = {
-  id: 'cand-salma',
-  nom: 'Salma Alami',
-  cne: 'N149021873',
-  cin: 'CD654321',
-  email: 'salma.alami@demo.ma',
-  tel: '0671234567',
-  panier: ['suj-04'],
-  candidatures: ['suj-04'],
-  candidaturesStatuts: { 'suj-04': 'retenue' },
-  compteCree: true,
-};
-
-export const CANDIDAT_KHADIJA: Candidat = {
-  id: 'cand-khadija',
-  nom: 'Khadija Tazi',
-  cne: 'M142078911',
-  cin: 'CD321987',
-  email: 'khadija.tazi@demo.ma',
-  tel: '0665432198',
-  panier: ['suj-03'],
-  candidatures: ['suj-03'],
-  candidaturesStatuts: { 'suj-03': 'retenue' },
-  compteCree: true,
-};
-
-export const MOCK_CANDIDATS: Candidat[] = [
-  DEMO_CANDIDAT_YASSINE,
-  CANDIDAT_SARA,
-  CANDIDAT_OMAR,
-  CANDIDAT_SALMA,
-  CANDIDAT_KHADIJA,
-];
-
 // Créneaux d'entretien simulés (avec un créneau réservé > 48h pour tester l'alerte CED du module 5)
 export const INITIAL_CRENEAUX: Creneau[] = [
-  {
-    id: 'cr-201',
-    enseignantId: 'ens-1',
-    date: '2026-11-10',
-    heure: '10:00',
-    lieu: 'Salle des Thèses 1 - FSDM Fès',
-    candidatId: 'cand-sara',
-    statut: 'confirme',
-    dateReservation: '2026-10-25T09:00:00Z',
-    dateConfirmation: '2026-10-25T10:30:00Z',
-  },
-  {
-    id: 'cr-202',
-    enseignantId: 'ens-1',
-    date: '2026-11-10',
-    heure: '11:30',
-    lieu: 'Salle des Thèses 1 - FSDM Fès',
-    candidatId: 'cand-omar',
-    statut: 'confirme',
-    dateReservation: '2026-10-25T09:15:00Z',
-    dateConfirmation: '2026-10-25T11:00:00Z',
-  },
   {
     id: 'cr-101',
     enseignantId: 'ens-1',

@@ -113,11 +113,11 @@ export const AdvancedSearchModal: React.FC<AdvancedSearchModalProps> = ({
     >
       {/* Conteneur modal : feuille en bas sur mobile, fenêtré max 480px sur desktop */}
       <div
-        className="w-full md:max-w-[480px] bg-white rounded-t-2xl md:rounded-2xl shadow-2xl border border-slate-200 overflow-visible flex flex-col max-h-[90vh] animate-in fade-in slide-in-from-bottom duration-200"
+        className="w-full md:max-w-[480px] bg-white rounded-t-2xl md:rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in slide-in-from-bottom duration-200"
         onClick={(e) => e.stopPropagation()}
       >
         {/* En-tête de la popup */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 bg-slate-50/80 rounded-t-2xl">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 bg-slate-50/80">
           <div className="flex items-center gap-2">
             <Filter size={16} className="text-emerald-700" />
             <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wide">
@@ -127,14 +127,14 @@ export const AdvancedSearchModal: React.FC<AdvancedSearchModalProps> = ({
           <button
             onClick={onClose}
             aria-label="Fermer"
-            className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200 transition cursor-pointer"
+            className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200 transition"
           >
             <X size={16} />
           </button>
         </div>
 
-        {/* Corps des critères (overflow-visible pour ne jamais couper les listes d'autocomplétion) */}
-        <div className="p-4 space-y-3.5 overflow-visible">
+        {/* Corps des critères */}
+        <div className="p-4 space-y-3.5 overflow-y-auto">
           {/* Encadrant */}
           <div>
             <label className="block text-[11px] font-bold text-slate-700 mb-1">
@@ -183,9 +183,12 @@ export const AdvancedSearchModal: React.FC<AdvancedSearchModalProps> = ({
               <Autocomplete
                 placeholder={fr.sujetsModule.autocompleteKeywordPlaceholder}
                 value={keywordInput}
-                onChange={setKeywordInput}
-                onSelect={(val) => {
-                  handleAddKeyword(val);
+                onChange={(val) => {
+                  setKeywordInput(val);
+                  // Si l'utilisateur clique sur une suggestion exacte, on l'ajoute
+                  if (keywordOptions.includes(val)) {
+                    handleAddKeyword(val);
+                  }
                 }}
                 options={keywordOptions.filter((k) => !localKeywords.includes(k))}
               />
