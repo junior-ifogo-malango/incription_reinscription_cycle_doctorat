@@ -86,7 +86,7 @@ const getDisciplineConfig = (discipline: string) => {
 };
 
 interface SujetsModuleProps {
-  role: UserRole;
+  role: UserRole | string;
   sujets: Sujet[];
   enseignants: Enseignant[];
   candidat: Candidat;
@@ -754,10 +754,50 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
   /* ========================================================================= */
   /* VUE 1 : CATALOGUE DES SUJETS (ACCUEIL CANDIDAT)                           */
   /* ========================================================================= */
+  const isCandidateOrVisitor = role === 'candidat' || role === 'visiteur';
+
   return (
-    <div className="space-y-3">
-      {/* Barre de recherche globale instantanée avec icône filtre à droite */}
-      <div className="relative flex items-center">
+    <div>
+      {isCandidateOrVisitor && (
+        <div className="mt-6 mb-4 relative overflow-hidden bg-white rounded-2xl border border-slate-200/80 shadow-xs text-center py-6 px-4 md:py-8">
+          {/* Motif géométrique discret style zellige (étoile à 8 branches) */}
+          <svg
+            className="absolute inset-0 w-full h-full opacity-5 pointer-events-none"
+            xmlns="http://www.w3.org/2000/svg"
+            aria-hidden="true"
+          >
+            <defs>
+              <pattern id="zellige-pattern" width="48" height="48" patternUnits="userSpaceOnUse">
+                <g stroke="currentColor" strokeWidth="1.2" fill="none" className="text-slate-900">
+                  <rect x="14" y="14" width="20" height="20" />
+                  <rect x="14" y="14" width="20" height="20" transform="rotate(45 24 24)" />
+                  <circle cx="24" cy="24" r="3" />
+                  <path d="M0 24h14 M34 24h14 M24 0v14 M24 34v14" />
+                  <rect x="-6" y="-6" width="12" height="12" transform="rotate(45 0 0)" />
+                  <rect x="42" y="-6" width="12" height="12" transform="rotate(45 48 0)" />
+                  <rect x="-6" y="42" width="12" height="12" transform="rotate(45 0 48)" />
+                  <rect x="42" y="42" width="12" height="12" transform="rotate(45 48 48)" />
+                </g>
+              </pattern>
+            </defs>
+            <rect width="100%" height="100%" fill="url(#zellige-pattern)" />
+          </svg>
+
+          <div className="relative z-10 flex flex-col items-center justify-center">
+            <h1 className="text-3xl md:text-5xl font-bold text-slate-800 leading-tight">
+              <span>{fr.sujetsModule.bannerTitle}</span>{' '}
+              <span className="text-amber-500 font-bold">{fr.sujetsModule.bannerYear}</span>
+            </h1>
+            <p className="mt-2 text-base md:text-xl text-emerald-700 font-medium">
+              {fr.sujetsModule.bannerSubtitle}
+            </p>
+          </div>
+        </div>
+      )}
+
+      <div className="space-y-3">
+        {/* Barre de recherche globale instantanée avec icône filtre à droite */}
+        <div className="relative flex items-center">
         <Search size={15} className="absolute left-3 text-slate-400 pointer-events-none" />
         <input
           type="text"
@@ -1088,6 +1128,7 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
           </button>
         </div>
       )}
+      </div>
     </div>
   );
 };

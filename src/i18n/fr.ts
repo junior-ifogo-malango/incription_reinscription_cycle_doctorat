@@ -146,6 +146,9 @@ export const fr = {
     moduleUpcomingDesc: 'Consultez les sujets, ajoutez au panier, puis candidatez pour choisir vos 3 vœux.',
   },
   sujetsModule: {
+    bannerTitle: 'Sujets de thèse',
+    bannerYear: '2026 - 2027',
+    bannerSubtitle: 'Choisissez votre sujet de thèse',
     catalogTitle: 'Sujets de recherche',
     searchPlaceholder: 'Recherche (titre, mot-clé, encadrant)...',
     btnFilterModal: 'Recherche avancée',
