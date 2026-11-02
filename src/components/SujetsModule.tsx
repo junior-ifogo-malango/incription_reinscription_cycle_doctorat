@@ -11,6 +11,7 @@ import {
   ArrowRight,
   Filter,
   CheckCircle2,
+  FileText,
   RotateCcw,
   ChevronLeft,
   ChevronRight,
@@ -93,7 +94,7 @@ interface SujetsModuleProps {
   onUpdateCandidat: (updated: Candidat) => void;
   initialView?: 'catalog' | 'panier';
   onRequestLogin?: () => void;
-  onNavigateTab?: (tab: 'sujets' | 'panier') => void;
+  onNavigateTab?: (tab: 'sujets' | 'panier' | 'dossier') => void;
 }
 
 type InternalView = 'catalog' | 'panier' | 'register' | 'select3' | 'confirmation';
@@ -136,13 +137,13 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
   // Alerte 4e sujet refusé
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Formulaire d'inscription court (5 champs max)
+  // Formulaire d'inscription avec mot de passe
   const [form, setForm] = useState({
     nom: '',
-    cne: '',
-    cin: '',
     email: '',
     tel: '',
+    motDePasse: '',
+    confirmerMotDePasse: '',
   });
   const [formValidationMsg, setFormValidationMsg] = useState<string | null>(null);
 
@@ -312,40 +313,60 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
     }
   };
 
-  // Validation format CNE & CIN
-  const validateCne = (cne: string) => /^[A-Z][0-9]{9}$/i.test(cne.trim());
-  const validateCin = (cin: string) => /^[A-Z]{1,2}[0-9]{5,6}$/i.test(cin.trim());
-
   const handleRegisterSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.nom || !form.cne || !form.cin || !form.email || !form.tel) {
+    if (!form.nom.trim() || !form.email.trim() || !form.tel.trim()) {
       setFormValidationMsg(fr.sujetsModule.validationRequired);
       return;
     }
-    if (!validateCne(form.cne)) {
-      setFormValidationMsg(fr.sujetsModule.validationCneError);
+    const cleanTel = form.tel.trim().replace(/[\s.-]/g, '');
+    const isZero10Digits = /^0[0-9]{9}$/.test(cleanTel);
+    const isPlus212_9Digits = /^\+212[0-9]{9}$/.test(cleanTel);
+    if (!isZero10Digits && !isPlus212_9Digits) {
+      setFormValidationMsg(fr.sujetsModule.validationTelError);
       return;
     }
-    if (!validateCin(form.cin)) {
-      setFormValidationMsg(fr.sujetsModule.validationCinError);
+    if (!form.motDePasse) {
+      setFormValidationMsg(fr.sujetsModule.passwordRequired);
+      return;
+    }
+    if (form.motDePasse.length < 6) {
+      setFormValidationMsg(fr.sujetsModule.passwordTooShort);
+      return;
+    }
+    if (form.motDePasse !== form.confirmerMotDePasse) {
+      setFormValidationMsg(fr.sujetsModule.passwordMismatch);
       return;
     }
 
     setFormValidationMsg(null);
+    // Démo : mot de passe en clair dans localStorage, à remplacer par un hachage côté serveur
     const updated: Candidat = {
       ...candidat,
       id: `cand-${Date.now()}`,
       nom: form.nom.trim(),
-      cne: form.cne.trim().toUpperCase(),
-      cin: form.cin.trim().toUpperCase(),
       email: form.email.trim(),
       tel: form.tel.trim(),
+      motDePasse: form.motDePasse,
       compteCree: true,
       panier: candidat.panier,
       candidatures: [],
     };
     onUpdateCandidat(updated);
     storageService.setCandidat(updated);
+
+    try {
+      const rawAccounts = localStorage.getItem('usmba_registered_accounts');
+      const accounts: Candidat[] = rawAccounts ? JSON.parse(rawAccounts) : [];
+      const filtered = accounts.filter(
+        (a) => a.email.toLowerCase().trim() !== updated.email.toLowerCase().trim()
+      );
+      filtered.push(updated);
+      localStorage.setItem('usmba_registered_accounts', JSON.stringify(filtered));
+    } catch {
+      // safe fallback
+    }
+
     setTempSelection(candidat.panier.slice(0, Math.min(3, candidat.panier.length)));
     setView('select3');
   };
@@ -416,6 +437,29 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
           <CheckCircle2 size={32} className="text-emerald-600 mx-auto" />
           <h2 className="text-sm font-bold text-slate-900">{fr.sujetsModule.confirmationTitle}</h2>
           <p className="text-xs text-slate-600">{fr.sujetsModule.confirmationSub}</p>
+        </div>
+
+        {/* Encadré Étape suivante : déclare tes pièces dans Mon dossier */}
+        <div className="bg-amber-50 border border-amber-300 rounded-xl p-3.5 sm:p-4 text-amber-950 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
+              <FileText size={18} />
+            </div>
+            <p className="text-xs sm:text-sm font-bold text-amber-950">
+              {fr.sujetsModule.postSubmissionAlert}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setView('catalog');
+              onNavigateTab?.('dossier');
+            }}
+            className="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-amber-600 hover:bg-amber-700 active:scale-98 text-white transition-all shadow-xs flex items-center gap-1.5 cursor-pointer shrink-0 self-end sm:self-auto"
+          >
+            <span>{fr.sujetsModule.btnGoToDossier}</span>
+            <ArrowRight size={14} />
+          </button>
         </div>
 
         <div className="space-y-2">
@@ -573,30 +617,6 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="block text-[11px] font-bold text-slate-700 mb-0.5">{fr.sujetsModule.cneLabel} *</label>
-              <input
-                type="text"
-                placeholder="N138249871"
-                value={form.cne}
-                onChange={(e) => setForm({ ...form, cne: e.target.value })}
-                className="w-full text-xs p-2 rounded-lg border border-slate-300 font-mono uppercase focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                required
-              />
-            </div>
-            <div>
-              <label className="block text-[11px] font-bold text-slate-700 mb-0.5">{fr.sujetsModule.cinLabel} *</label>
-              <input
-                type="text"
-                placeholder="CD789123"
-                value={form.cin}
-                onChange={(e) => setForm({ ...form, cin: e.target.value })}
-                className="w-full text-xs p-2 rounded-lg border border-slate-300 font-mono uppercase focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                required
-              />
-            </div>
-          </div>
 
           <div>
             <label className="block text-[11px] font-bold text-slate-700 mb-0.5">{fr.sujetsModule.emailLabel} *</label>
@@ -618,6 +638,37 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
               className="w-full text-xs p-2 rounded-lg border border-slate-300 focus:outline-none focus:ring-1 focus:ring-emerald-500"
               required
             />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div>
+              <label className="block text-[11px] font-bold text-slate-700 mb-0.5">
+                {fr.sujetsModule.passwordLabel} *
+              </label>
+              <input
+                type="password"
+                minLength={6}
+                placeholder="••••••••"
+                value={form.motDePasse}
+                onChange={(e) => setForm({ ...form, motDePasse: e.target.value })}
+                className="w-full text-xs p-2 rounded-lg border border-slate-300 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-bold text-slate-700 mb-0.5">
+                {fr.sujetsModule.confirmPasswordLabel} *
+              </label>
+              <input
+                type="password"
+                minLength={6}
+                placeholder="••••••••"
+                value={form.confirmerMotDePasse}
+                onChange={(e) => setForm({ ...form, confirmerMotDePasse: e.target.value })}
+                className="w-full text-xs p-2 rounded-lg border border-slate-300 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                required
+              />
+            </div>
           </div>
 
           <div className="pt-2 space-y-2">

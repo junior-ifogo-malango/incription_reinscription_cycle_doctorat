@@ -73,6 +73,8 @@ export const Dossier: React.FC = () => {
   const [apogeeCne, setApogeeCne] = useState<string>('');
   const [apogeeConsent, setApogeeConsent] = useState<boolean>(false);
   const [apogeeMessage, setApogeeMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [cinInput, setCinInput] = useState<string>('');
+  const [cinMessage, setCinMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Cas particulier & Guichet state
   const [casParticulier, setCasParticulier] = useState<boolean>(false);
@@ -93,33 +95,64 @@ export const Dossier: React.FC = () => {
         if (parsed.cne) {
           setApogeeCne(parsed.cne);
         }
+        if (parsed.cin) {
+          setCinInput(parsed.cin);
+        }
         if (parsed.dossier) {
           setCasParticulier(Boolean(parsed.dossier.casParticulier));
           setMotif(parsed.dossier.motif || '');
           setMotifAutre(parsed.dossier.motifAutre || '');
           setGuichet(Boolean(parsed.dossier.guichet));
         }
-        if (parsed.pieces && Array.isArray(parsed.pieces) && parsed.pieces.length === 4) {
-          setPieces(parsed.pieces);
+
+        // Si parsed.pieces existe
+        if (parsed.pieces && Array.isArray(parsed.pieces) && parsed.pieces.length > 0) {
+          const normalized = ORDERED_TYPES.map((t) => {
+            const found = parsed.pieces!.find(
+              (p) => p.type.toUpperCase() === t.toUpperCase()
+            );
+            return found ? { ...found, type: t } : { type: t, statut: 'absente' as const };
+          });
+          setPieces(normalized);
           return;
         }
-
-        // Si c'est le profil démo Yassine sans pièces encore initialisées
-        const isYassine =
-          parsed.id === 'cand-001' ||
-          parsed.cne === 'N138249871' ||
-          parsed.nom?.toLowerCase().includes('yassine');
-
-        const initialList = isYassine ? YASSINE_INITIAL_PIECES : DEFAULT_PIECES;
-        parsed.pieces = initialList;
-        localStorage.setItem('usmba_doctorat_candidat', JSON.stringify(parsed));
-        setPieces(initialList);
-        return;
       }
+
+      // Fallback depuis usmba_doctorat_pieces
+      const rawPieces = localStorage.getItem('usmba_doctorat_pieces');
+      if (rawPieces) {
+        const storedPieces: Piece[] = JSON.parse(rawPieces);
+        if (Array.isArray(storedPieces) && storedPieces.length > 0) {
+          const normalized = ORDERED_TYPES.map((t) => {
+            const found = storedPieces.find(
+              (p) => p.type.toUpperCase() === t.toUpperCase()
+            );
+            return found ? { ...found, type: t } : { type: t, statut: 'absente' as const };
+          });
+          setPieces(normalized);
+          return;
+        }
+      }
+
+      // Si c'est le profil démo Yassine initial
+      const rawCand = raw ? JSON.parse(raw) : null;
+      const isYassine =
+        rawCand?.id === 'cand-001' ||
+        rawCand?.cne === 'N138249871' ||
+        rawCand?.nom?.toLowerCase().includes('yassine');
+
+      const initialList = isYassine ? YASSINE_INITIAL_PIECES : DEFAULT_PIECES;
+      if (rawCand) {
+        rawCand.pieces = initialList;
+        localStorage.setItem('usmba_doctorat_candidat', JSON.stringify(rawCand));
+      }
+      localStorage.setItem('usmba_doctorat_pieces', JSON.stringify(initialList));
+      setPieces(initialList);
+      return;
     } catch {
       // safe fallback
     }
-    setPieces(YASSINE_INITIAL_PIECES);
+    setPieces(DEFAULT_PIECES);
   }, []);
 
   // Détection candidat retenu : au moins une candidature avec statut 'retenue'
@@ -131,12 +164,23 @@ export const Dossier: React.FC = () => {
   const savePieces = (updatedPieces: Piece[]): boolean => {
     try {
       const raw = localStorage.getItem('usmba_doctorat_candidat');
-      const curCandidat: Candidat = raw ? JSON.parse(raw) : (candidat || {});
+      const curCandidat: Candidat = raw
+        ? JSON.parse(raw)
+        : (candidat || {
+            id: 'visiteur-001',
+            nom: '',
+            panier: [],
+            candidatures: [],
+            compteCree: false,
+          });
       curCandidat.pieces = updatedPieces;
       localStorage.setItem('usmba_doctorat_candidat', JSON.stringify(curCandidat));
+      localStorage.setItem('usmba_doctorat_pieces', JSON.stringify(updatedPieces));
+
       setPieces(updatedPieces);
       setCandidat(curCandidat);
       setFeedbackMessage(null);
+      window.dispatchEvent(new CustomEvent('usmba_pieces_updated', { detail: updatedPieces }));
       return true;
     } catch (err: any) {
       const isQuota =
@@ -160,8 +204,16 @@ export const Dossier: React.FC = () => {
     type: PieceType,
     updates: Partial<Piece>
   ) => {
-    const updated = pieces.map((p) => {
-      if (p.type === type || p.type.toUpperCase() === type.toUpperCase()) {
+    const currentList =
+      pieces.length === 4
+        ? pieces
+        : ORDERED_TYPES.map((t) => {
+            const found = pieces.find((p) => p.type.toUpperCase() === t.toUpperCase());
+            return found || { type: t, statut: 'absente' as const };
+          });
+
+    const updated = currentList.map((p) => {
+      if (p.type.toUpperCase() === type.toUpperCase()) {
         return {
           ...p,
           ...updates,
@@ -231,6 +283,25 @@ export const Dossier: React.FC = () => {
 
   const handleVerifyApogee = () => {
     const cleanCne = apogeeCne.trim().toUpperCase();
+    if (!/^[A-Z][0-9]{9}$/.test(cleanCne)) {
+      setApogeeMessage({
+        type: 'error',
+        text: fr.dossier.cneFormatError,
+      });
+      return;
+    }
+
+    // Enregistre aussi le CNE du candidat
+    try {
+      const raw = localStorage.getItem('usmba_doctorat_candidat');
+      const curCandidat: Candidat = raw ? JSON.parse(raw) : (candidat || {});
+      curCandidat.cne = cleanCne;
+      localStorage.setItem('usmba_doctorat_candidat', JSON.stringify(curCandidat));
+      setCandidat(curCandidat);
+    } catch {
+      // safe fallback
+    }
+
     const intitule = ApogeeFictif[cleanCne] || ApogeeFictif[apogeeCne.trim()];
     if (intitule) {
       setApogeeMessage({
@@ -247,6 +318,31 @@ export const Dossier: React.FC = () => {
         type: 'error',
         text: fr.dossier.cneUnknown,
       });
+    }
+  };
+
+  const handleSaveCin = () => {
+    const cleanCin = cinInput.trim().toUpperCase();
+    if (cleanCin && !/^[A-Z]{1,2}[0-9]{5,6}$/.test(cleanCin)) {
+      setCinMessage({
+        type: 'error',
+        text: fr.dossier.cinFormatError,
+      });
+      return;
+    }
+    try {
+      const raw = localStorage.getItem('usmba_doctorat_candidat');
+      const curCandidat: Candidat = raw ? JSON.parse(raw) : (candidat || {});
+      curCandidat.cin = cleanCin || undefined;
+      localStorage.setItem('usmba_doctorat_candidat', JSON.stringify(curCandidat));
+      setCandidat(curCandidat);
+      setCinMessage({
+        type: 'success',
+        text: fr.dossier.cinSaved,
+      });
+      setTimeout(() => setCinMessage(null), 2500);
+    } catch {
+      // safe fallback
     }
   };
 
@@ -316,9 +412,14 @@ export const Dossier: React.FC = () => {
     }
   };
 
-  // Compteur et progression : basés sur statut 'prouvee'
-  const piecesPretes = pieces.filter((p) => p.statut === 'prouvee').length;
-  const progressPercent = Math.round((piecesPretes / 4) * 100);
+  // Compteurs : 1) Pièces déclarées ('declaree' ou 'prouvee') ; 2) Pièces prouvées ('prouvee')
+  const piecesDeclarees = pieces.filter(
+    (p) => p.statut === 'declaree' || p.statut === 'prouvee'
+  ).length;
+  const piecesProuvees = pieces.filter((p) => p.statut === 'prouvee').length;
+
+  const percentDeclarees = Math.round((piecesDeclarees / 4) * 100);
+  const percentProuvees = Math.round((piecesProuvees / 4) * 100);
 
   const getPieceName = (type: PieceType): string => {
     const key = type.toUpperCase() as keyof typeof fr.dossier.pieces;
@@ -337,36 +438,61 @@ export const Dossier: React.FC = () => {
   return (
     <div className="space-y-4 max-w-2xl mx-auto">
       {/* 1. Ligne en haut si Retenu : « Tu es retenu : fournis les preuves manquantes » */}
-      {isRetenu && (
+      {isRetenu && piecesProuvees < 4 && (
         <div className="bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-2xl px-4 py-3 text-xs font-semibold flex items-center gap-2 shadow-xs">
           <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
           <span>{fr.dossier.retenuBanner}</span>
         </div>
       )}
 
-      {/* En haut : compteur « N/4 pièces prêtes » + barre de progression */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-2.5">
-        <div className="flex items-center justify-between text-xs">
-          <div className="flex items-center gap-1.5 font-bold text-slate-900">
-            <span className="text-sm text-emerald-700 font-extrabold">
-              {piecesPretes}/4
-            </span>
-            <span>{fr.dossier.piecesPretes}</span>
+      {/* En haut : deux compteurs « N/4 pièces déclarées » et « N/4 pièces prouvées » avec barres de progression */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3.5">
+        {/* Ligne 1 : Pièces déclarées */}
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between text-xs">
+            <div className="flex items-center gap-1.5 font-bold text-slate-900">
+              <span className="text-sm text-emerald-700 font-extrabold">
+                {piecesDeclarees}/4
+              </span>
+              <span>{fr.dossier.piecesDeclarees}</span>
+            </div>
+            {piecesDeclarees === 4 && (
+              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                <CheckCircle2 size={12} />
+                <span>Complètes</span>
+              </span>
+            )}
           </div>
-          {piecesPretes === 4 && (
-            <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-              <CheckCircle2 size={13} />
-              <span>{fr.dossierModule.allReadyBadge}</span>
-            </span>
-          )}
+          <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+            <div
+              className="bg-emerald-500 h-2 rounded-full transition-all duration-300"
+              style={{ width: `${percentDeclarees}%` }}
+            />
+          </div>
         </div>
 
-        {/* Barre de progression */}
-        <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
-          <div
-            className="bg-emerald-600 h-2 rounded-full transition-all duration-300"
-            style={{ width: `${progressPercent}%` }}
-          />
+        {/* Ligne 2 : Pièces prouvées */}
+        <div className="space-y-1.5 pt-2 border-t border-slate-100">
+          <div className="flex items-center justify-between text-xs">
+            <div className="flex items-center gap-1.5 font-bold text-slate-900">
+              <span className="text-sm text-emerald-700 font-extrabold">
+                {piecesProuvees}/4
+              </span>
+              <span>{fr.dossier.piecesProuvees}</span>
+            </div>
+            {piecesProuvees === 4 && (
+              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                <CheckCircle2 size={12} />
+                <span>{fr.dossierModule.allReadyBadge}</span>
+              </span>
+            )}
+          </div>
+          <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+            <div
+              className="bg-emerald-700 h-2 rounded-full transition-all duration-300"
+              style={{ width: `${percentProuvees}%` }}
+            />
+          </div>
         </div>
       </div>
 
@@ -404,6 +530,7 @@ export const Dossier: React.FC = () => {
           const isImage = isImageFile(piece.fichier);
           const isPdf = piece.fichier && piece.fichier.includes('pdf');
           const isDiplome = type === 'DIPLOME' || type === 'diplome';
+          const isCin = type === 'CIN' || type === 'cin';
           const isProven = piece.statut === 'prouvee';
 
           return (
@@ -453,8 +580,45 @@ export const Dossier: React.FC = () => {
                 </div>
               )}
 
-              {/* Apogée simulé (uniquement si retenu ou diplôme prouvé, sur la carte DIPLOME) */}
-              {isRetenu && isDiplome && (
+              {/* Saisie CIN facultative sur la carte CIN */}
+              {isCin && (
+                <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3 space-y-2">
+                  <label className="block text-[11px] font-bold text-slate-700">
+                    {fr.dossier.cinFieldLabel}
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={cinInput}
+                      onChange={(e) => {
+                        setCinInput(e.target.value);
+                        setCinMessage(null);
+                      }}
+                      placeholder={fr.dossier.cinPlaceholder}
+                      className="flex-1 min-h-[36px] px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-600 font-mono uppercase"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleSaveCin}
+                      className="min-h-[36px] px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white transition-colors cursor-pointer"
+                    >
+                      {fr.dossier.saveCin}
+                    </button>
+                  </div>
+                  {cinMessage && (
+                    <p
+                      className={`text-[11px] font-medium ${
+                        cinMessage.type === 'success' ? 'text-emerald-700' : 'text-rose-600'
+                      }`}
+                    >
+                      {cinMessage.text}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Champ CNE existant (avec consentement) sur la carte DIPLOME */}
+              {isDiplome && (
                 <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3 space-y-2.5">
                   <div className="flex items-center gap-2">
                     <input
@@ -465,7 +629,7 @@ export const Dossier: React.FC = () => {
                         setApogeeMessage(null);
                       }}
                       placeholder={fr.dossier.cnePlaceholder}
-                      className="flex-1 min-h-[36px] px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-600 font-mono"
+                      className="flex-1 min-h-[36px] px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-600 font-mono uppercase"
                     />
                     <button
                       type="button"
@@ -493,6 +657,14 @@ export const Dossier: React.FC = () => {
                     />
                     <span>{fr.dossier.apogeeConsent}</span>
                   </label>
+
+                  {(!apogeeConsent || !apogeeCne.trim()) && (
+                    <p className="text-sm text-slate-500">
+                      {!apogeeConsent
+                        ? fr.dossier.consentRequiredReason
+                        : fr.dossier.cneRequiredReason}
+                    </p>
+                  )}
 
                   {apogeeMessage && (
                     <p
@@ -588,6 +760,10 @@ export const Dossier: React.FC = () => {
           </label>
         </div>
 
+        <p className="text-sm text-slate-500">
+          {fr.dossier.casParticulierHelp}
+        </p>
+
         {casParticulier && (
           <div className="space-y-2.5 pt-2 border-t border-slate-100">
             <div>
@@ -634,30 +810,35 @@ export const Dossier: React.FC = () => {
               </div>
             )}
 
-            {!isCasParticulierValid && (
-              <p className="text-[11px] text-rose-600 font-medium">
-                {fr.dossier.motifRequiredError}
-              </p>
-            )}
-
-            <div className="flex items-center gap-2 pt-1">
-              <button
-                type="button"
-                disabled={!isCasParticulierValid}
-                onClick={handleSaveCasParticulier}
-                className={`min-h-[36px] px-4 py-1.5 rounded-xl text-xs font-semibold transition-colors ${
-                  isCasParticulierValid
-                    ? 'bg-slate-900 hover:bg-slate-800 text-white cursor-pointer active:scale-98'
-                    : 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                }`}
-              >
-                {fr.dossier.saveCasParticulier}
-              </button>
-              {saveCasSuccess && (
-                <span className="text-xs text-emerald-600 font-medium flex items-center gap-1">
-                  <CheckCircle2 size={13} />
-                  {fr.dossier.savedCasParticulier}
-                </span>
+            <div className="pt-1 space-y-1.5">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={!isCasParticulierValid}
+                  onClick={handleSaveCasParticulier}
+                  className={`min-h-[36px] px-4 py-1.5 rounded-xl text-xs font-semibold transition-colors ${
+                    isCasParticulierValid
+                      ? 'bg-slate-900 hover:bg-slate-800 text-white cursor-pointer active:scale-98'
+                      : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                  }`}
+                >
+                  {fr.dossier.saveCasParticulier}
+                </button>
+                {saveCasSuccess && (
+                  <span className="text-xs text-emerald-600 font-medium flex items-center gap-1">
+                    <CheckCircle2 size={13} />
+                    {fr.dossier.savedCasParticulier}
+                  </span>
+                )}
+              </div>
+              {!isCasParticulierValid && (
+                <p className="text-sm text-slate-500">
+                  {!motif
+                    ? fr.dossier.chooseMotifReason
+                    : motif === 'AUTRE' && !motifAutre.trim()
+                    ? fr.dossier.specifyMotifReason
+                    : fr.dossier.motifRequiredError}
+                </p>
               )}
             </div>
           </div>
@@ -683,13 +864,18 @@ export const Dossier: React.FC = () => {
             </button>
           </div>
         ) : (
-          <button
-            type="button"
-            onClick={() => handleToggleGuichet(true)}
-            className="w-full min-h-[40px] px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition-colors cursor-pointer active:scale-98 text-center"
-          >
-            {fr.dossier.guichetButton}
-          </button>
+          <div className="space-y-1.5">
+            <button
+              type="button"
+              onClick={() => handleToggleGuichet(true)}
+              className="w-full min-h-[40px] px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition-colors cursor-pointer active:scale-98 text-center"
+            >
+              {fr.dossier.guichetButton}
+            </button>
+            <p className="text-xs text-slate-500 text-center">
+              {fr.dossier.guichetHelp}
+            </p>
+          </div>
         )}
       </div>
 
