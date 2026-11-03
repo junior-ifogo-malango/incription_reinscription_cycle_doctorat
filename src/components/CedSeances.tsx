@@ -1,7 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { Send, CheckCircle2, Clock, AlertCircle, FileText, Award } from 'lucide-react';
+import { Send, CheckCircle2, Clock, AlertCircle, FileText, Award, MessageCircle, Mail } from 'lucide-react';
 import { PV, Notification, Resultat } from '../types';
 import { fr } from '../i18n/fr';
+import {
+  normaliserTel,
+  lienWhatsApp,
+  lienMail,
+  ouvrirLien,
+  isEmailValide,
+  messageResultat,
+  trouverCandidat,
+} from '../utils/messages';
 
 /**
  * Action de publication des résultats d'un PV par le CED.
@@ -14,8 +23,8 @@ export const publierResultatsPV = (pvId: string): { success: boolean; message?: 
     let pvs: PV[] = rawPvs ? JSON.parse(rawPvs) : [];
 
     const pvIndex = pvs.findIndex((p) => p.id === pvId);
-    if (pvIndex === -1) {
-      return { success: false, message: 'PV introuvable' };
+    if (pvIndex === -1 || pvs[pvIndex].remplaceePar) {
+      return { success: false, message: 'PV introuvable ou remplacé' };
     }
 
     const targetPv = pvs[pvIndex];
@@ -65,7 +74,9 @@ export const CedSeances: React.FC = () => {
     try {
       const raw = localStorage.getItem('usmba_doctorat_pvs');
       if (raw) {
-        setPvs(JSON.parse(raw));
+        const parsed: PV[] = JSON.parse(raw);
+        // Ignore les versions remplacées
+        setPvs(parsed.filter((p) => !p.remplaceePar));
       } else {
         // PV de démonstration initial prêt à être publié si aucun PV n'a encore été généré
         const demoResults: Resultat[] = [
@@ -208,11 +219,14 @@ export const CedSeances: React.FC = () => {
                     <div className="flex items-center gap-2">
                       <FileText size={15} className="text-emerald-700" />
                       <span className="text-xs font-bold text-slate-900 font-mono">
-                        {pv.code || pv.id}
+                        PV-{pv.date}-{(pv.code || '').slice(0, 4)}
+                      </span>
+                      <span className="text-[11px] font-semibold text-slate-500 font-sans">
+                        (v{pv.version ?? 1})
                       </span>
                     </div>
                     <p className="text-xs text-slate-600 mt-1">
-                      {fr.cedSeances.datePrefix} {pv.date} • {pv.resultats?.length || 0} {fr.cedSeances.candidatsCount}
+                      {fr.cedSeances.datePrefix} {pv.date} • {pv.resultats?.length || 0} {fr.cedSeances.candidatsCount} • Code : {pv.code}
                     </p>
                   </div>
 
@@ -258,6 +272,116 @@ export const CedSeances: React.FC = () => {
                     ))}
                   </div>
                 </div>
+
+                {/* Ligne par candidat avec WhatsApp et E-mail (sur un PV publié) */}
+                {isPublished && (
+                  <div className="pt-3 border-t border-slate-100 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">
+                        {fr.messages.notifierCandidatsTitle}
+                      </h4>
+                    </div>
+
+                    <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden bg-white">
+                      {pv.resultats.map((res, i) => {
+                        const candidatInfo = trouverCandidat(res.candidatId);
+                        const resultatText = messageResultat();
+
+                        const hasValidTel = Boolean(
+                          candidatInfo.tel && normaliserTel(candidatInfo.tel)
+                        );
+                        const telError = !candidatInfo.tel
+                          ? fr.messages.missingPhone
+                          : !normaliserTel(candidatInfo.tel)
+                          ? fr.messages.invalidPhone
+                          : null;
+
+                        const hasValidEmail = Boolean(
+                          candidatInfo.email && isEmailValide(candidatInfo.email)
+                        );
+                        const emailError = !candidatInfo.email
+                          ? fr.messages.missingEmail
+                          : !isEmailValide(candidatInfo.email)
+                          ? fr.messages.invalidEmail
+                          : null;
+
+                        const waUrl = lienWhatsApp(candidatInfo.tel, resultatText);
+                        const mailUrl = lienMail(
+                          candidatInfo.email,
+                          fr.messages.resultatSubject,
+                          resultatText
+                        );
+
+                        return (
+                          <div
+                            key={i}
+                            className="p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-white hover:bg-slate-50 transition-colors"
+                          >
+                            <div>
+                              <p className="text-xs font-bold text-slate-900">
+                                {candidatInfo.nom || res.candidatId}
+                              </p>
+                              <p className="text-[11px] text-slate-500 font-mono">
+                                {candidatInfo.tel || fr.messages.missingPhone} • {candidatInfo.email || fr.messages.missingEmail}
+                              </p>
+                            </div>
+
+                            <div className="flex items-start gap-2 flex-wrap">
+                              {/* WhatsApp */}
+                              <div className="flex flex-col items-start">
+                                <button
+                                  type="button"
+                                  disabled={!hasValidTel}
+                                  onClick={() => waUrl && ouvrirLien(waUrl)}
+                                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+                                    hasValidTel
+                                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer shadow-xs active:scale-98'
+                                      : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
+                                  }`}
+                                >
+                                  <MessageCircle size={13} className={hasValidTel ? 'text-white' : 'text-slate-400'} />
+                                  <span>{fr.messages.btnWhatsApp}</span>
+                                </button>
+                                {!hasValidTel && (
+                                  <span className="text-[10px] text-rose-600 font-medium mt-0.5">
+                                    {telError}
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* E-mail */}
+                              <div className="flex flex-col items-start">
+                                <button
+                                  type="button"
+                                  disabled={!hasValidEmail}
+                                  onClick={() => mailUrl && ouvrirLien(mailUrl)}
+                                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+                                    hasValidEmail
+                                      ? 'bg-sky-600 hover:bg-sky-700 text-white cursor-pointer shadow-xs active:scale-98'
+                                      : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
+                                  }`}
+                                >
+                                  <Mail size={13} className={hasValidEmail ? 'text-white' : 'text-slate-400'} />
+                                  <span>{fr.messages.btnEmail}</span>
+                                </button>
+                                {!hasValidEmail && (
+                                  <span className="text-[10px] text-rose-600 font-medium mt-0.5">
+                                    {emailError}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Mention discrète sous les boutons */}
+                    <p className="text-[10px] text-slate-500 italic px-1">
+                      {fr.messages.disclaimer}
+                    </p>
+                  </div>
+                )}
               </div>
             );
           })}

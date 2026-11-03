@@ -9,8 +9,9 @@ import {
   Calendar,
   ShieldAlert,
 } from 'lucide-react';
-import { Creneau, Enseignant, Candidat } from '../types';
+import { Creneau, Enseignant, Candidat, Rapport, PV } from '../types';
 import { storageService } from '../services/storage';
+import { INITIAL_RAPPORTS } from '../data/mockData';
 import { fr } from '../i18n/fr';
 
 // Constante unique du seuil d'inactivité (48 heures)
@@ -20,6 +21,7 @@ export const Exceptions: React.FC = () => {
   const [creneaux, setCreneaux] = useState<Creneau[]>([]);
   const [enseignants, setEnseignants] = useState<Enseignant[]>([]);
   const [candidat, setCandidat] = useState<Candidat | null>(null);
+  const [rapports, setRapports] = useState<Rapport[]>([]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const loadData = () => {
@@ -27,6 +29,14 @@ export const Exceptions: React.FC = () => {
       setCreneaux(storageService.getCreneaux());
       setEnseignants(storageService.getEnseignants());
       setCandidat(storageService.getCandidat());
+
+      const rawRapports = localStorage.getItem('usmba_doctorat_rapports');
+      if (rawRapports) {
+        setRapports(JSON.parse(rawRapports));
+      } else {
+        localStorage.setItem('usmba_doctorat_rapports', JSON.stringify(INITIAL_RAPPORTS));
+        setRapports(INITIAL_RAPPORTS);
+      }
     } catch {
       // fallback
     }
@@ -34,7 +44,24 @@ export const Exceptions: React.FC = () => {
 
   useEffect(() => {
     loadData();
+    const handleSync = () => loadData();
+    window.addEventListener('usmba_rapports_updated', handleSync);
+    return () => {
+      window.removeEventListener('usmba_rapports_updated', handleSync);
+    };
   }, []);
+
+  // Règle : Exceptions ignore les versions remplacées
+  const getPvsValides = (): PV[] => {
+    try {
+      const raw = localStorage.getItem('usmba_doctorat_pvs');
+      if (!raw) return [];
+      const parsed: PV[] = JSON.parse(raw);
+      return parsed.filter((p) => !p.remplaceePar);
+    } catch {
+      return [];
+    }
+  };
 
   const getEnseignantName = (id: string): string => {
     const ens = enseignants.find((e) => e.id === id);
@@ -64,6 +91,45 @@ export const Exceptions: React.FC = () => {
     }
     return false;
   });
+
+  // 1.b Filtrer les rapports de réinscription en retard (> 48h sans action)
+  const rapportsEnRetard = rapports.filter((r) => {
+    if (r.statut !== 'soumis' && r.statut !== 'avis_comite') return false;
+    if (!r.soumisLe) return false;
+    const resTime = new Date(r.soumisLe).getTime();
+    const diffHours = (now - resTime) / (1000 * 60 * 60);
+    return diffHours > SEUIL_HEURES;
+  });
+
+  const handleRelancerRapport = (reportId: string) => {
+    const todayStr = new Date().toLocaleDateString('fr-FR');
+    const updated = rapports.map((r) => {
+      if (r.id === reportId) {
+        return {
+          ...r,
+          relanceLe: new Date().toISOString(),
+          chronologie: [
+            ...(r.chronologie || []),
+            {
+              date: todayStr,
+              acteur: 'Direction CED',
+              action: 'Relance administrative simulée transmise',
+            },
+          ],
+        };
+      }
+      return r;
+    });
+    setRapports(updated);
+    try {
+      localStorage.setItem('usmba_doctorat_rapports', JSON.stringify(updated));
+      setToastMessage(fr.reinscription.relanceReportToast);
+      window.dispatchEvent(new CustomEvent('usmba_rapports_updated'));
+      setTimeout(() => setToastMessage(null), 3000);
+    } catch {
+      setToastMessage('Erreur de stockage');
+    }
+  };
 
   // Calcul du temps écoulé
   const getDureeEcoulee = (dateReservation?: string): string => {
@@ -588,6 +654,81 @@ export const Exceptions: React.FC = () => {
               ))}
             </div>
           </>
+        )}
+      </section>
+
+      {/* SECTION 4 : RAPPORTS DE RÉINSCRIPTION EN RETARD (> 48H SANS ACTION) */}
+      <section className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3">
+        <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+          <div>
+            <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wide flex items-center gap-2">
+              <Clock size={16} className="text-amber-600" />
+              <span>{fr.reinscription.lateReportsSectionTitle}</span>
+            </h3>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              Dossiers 'soumis' ou 'avis_comite' sans décision après {SEUIL_HEURES}h.
+            </p>
+          </div>
+          <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
+            {rapportsEnRetard.length}
+          </span>
+        </div>
+
+        {rapportsEnRetard.length === 0 ? (
+          <div className="py-6 text-center text-xs text-slate-500">
+            {fr.reinscription.lateReportsEmpty}
+          </div>
+        ) : (
+          <div className="space-y-2.5">
+            {rapportsEnRetard.map((r) => {
+              const diffHours = r.soumisLe
+                ? Math.max(0, Math.floor((now - new Date(r.soumisLe).getTime()) / (1000 * 60 * 60)))
+                : 0;
+
+              const waitingWho =
+                r.statut === 'soumis'
+                  ? fr.reinscription.waitingEncadrant
+                  : fr.reinscription.waitingComite;
+
+              return (
+                <div
+                  key={r.id}
+                  className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-bold text-slate-900">{r.titre}</span>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-white border border-slate-200 text-slate-700">
+                        {r.annee}ᵉ année
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      Doctorant : <span className="font-semibold text-slate-700">{r.doctorantId}</span> • {fr.reinscription.waitingPrefix} <span className="font-bold text-amber-800">{waitingWho}</span>
+                    </p>
+                    <div className="flex items-center gap-2 pt-0.5">
+                      <span className="text-[11px] font-semibold text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded">
+                        {fr.reinscription.timeElapsed} {diffHours} h
+                      </span>
+                      {r.relanceLe && (
+                        <span className="text-[10px] text-emerald-700 font-medium">
+                          Relancé le {new Date(r.relanceLe).toLocaleDateString('fr-FR')}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => handleRelancerRapport(r.id)}
+                    className="self-end sm:self-center px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs active:scale-98 shrink-0"
+                  >
+                    <Send size={13} />
+                    <span>{fr.reinscription.btnRelancerReport}</span>
+                  </button>
+                </div>
+              );
+            })}
+          </div>
         )}
       </section>
     </div>

@@ -1,4 +1,4 @@
-export type UserRole = 'candidat' | 'enseignant' | 'directeur_ced';
+export type UserRole = 'candidat' | 'enseignant' | 'directeur_ced' | 'doctorant';
 
 export type PieceType = 'CIN' | 'DIPLOME' | 'RELEVES' | 'CV' | 'cin' | 'diplome' | 'releves' | 'cv';
 export type PieceStatut = 'declaree' | 'prouvee' | 'illisible' | 'absente';
@@ -132,4 +132,56 @@ export interface PV {
   code: string;
   genereLe: string; /* ISO */
   publieLe?: string; /* ISO */
+  version?: number;
+  remplaceePar?: string; /* id de la version suivante */
+  rouvertLe?: string; /* ISO */
+  motifReouverture?: string;
+}
+
+/* Module R : Réinscription */
+export type RapportStatut =
+  | 'brouillon'
+  | 'soumis'
+  | 'valide_encadrant'
+  | 'avis_comite'
+  | 'a_corriger'
+  | 'valide_ced';
+
+export interface Vote {
+  membre: string;
+  code: string; /* 12 car. aléatoires, crypto.getRandomValues */
+  avis?: 'FAVORABLE' | 'DEFAVORABLE';
+  commentaire?: string;
+  votéLe?: string;
+}
+
+export interface Rapport {
+  id: string;
+  doctorantId: string;
+  encadrantId: string;
+  annee: 1 | 2 | 3;
+  titre: string;
+  avancement: string;
+  publications: { titre: string; doi?: string }[];
+  communications: { titre: string; lieu?: string }[];
+  formationsHeures: number;
+  perspectives: string;
+  aucuneActivite: boolean;
+  statut: RapportStatut;
+  commentaires: { auteur: string; date: string; texte: string }[];
+  comite?: Vote[];
+  chronologie: { date: string; acteur: string; action: string }[];
+  soumisLe?: string;
+  relanceLe?: string;
+}
+
+export interface Doctorant {
+  id: string;
+  nom: string;
+  email: string;
+  tel?: string;
+  annee: 1 | 2 | 3;
+  encadrantId: string;
+  sujetTitre: string;
+  structure: string;
 }

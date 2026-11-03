@@ -12,6 +12,7 @@ import {
   Edit2,
   Eye,
   PlusCircle,
+  RotateCcw,
 } from 'lucide-react';
 import { Creneau, Resultat, ResultatType, PV, Candidat } from '../types';
 import { MOCK_CANDIDATS, INITIAL_CRENEAUX } from '../data/mockData';
@@ -53,10 +54,20 @@ export const Commission: React.FC<CommissionProps> = ({
   >({});
   const [openForms, setOpenForms] = useState<Record<string, boolean>>({});
   const [feedback, setFeedback] = useState<{ id: string; text: string } | null>(null);
+  const [reopenModalDate, setReopenModalDate] = useState<string | null>(null);
+  const [reopenMotif, setReopenMotif] = useState('');
+  const [reopenError, setReopenError] = useState<string | null>(null);
 
   // Chargement des données avec persistance localStorage et try/catch
   useEffect(() => {
     loadData();
+    const handleSync = () => loadData();
+    window.addEventListener('usmba_pvs_updated', handleSync);
+    window.addEventListener('storage', handleSync);
+    return () => {
+      window.removeEventListener('usmba_pvs_updated', handleSync);
+      window.removeEventListener('storage', handleSync);
+    };
   }, [enseignantId]);
 
   const loadData = () => {
@@ -138,10 +149,23 @@ export const Commission: React.FC<CommissionProps> = ({
   // Filtrer les créneaux confirmés de cet enseignant
   const creneauxConfirmes = creneaux.filter((c) => c.statut === 'confirme');
 
-  // Vérifier si un PV existe pour une date donnée
-  const getPVForDate = (date: string): PV | undefined => {
-    return pvs.find((p) => p.date === date && p.directeurId === enseignantId);
+  // Vérifier et obtenir la dernière version de PV pour une date donnée
+  const getLatestPVForDate = (date: string): PV | undefined => {
+    const sessionPVs = pvs.filter((p) => p.date === date && p.directeurId === enseignantId);
+    if (sessionPVs.length === 0) return undefined;
+    const active = sessionPVs.find((p) => !p.remplaceePar);
+    if (active) return active;
+    return [...sessionPVs].sort((a, b) => (b.version ?? 1) - (a.version ?? 1))[0];
   };
+
+  // Liste des versions précédentes remplacées (lecture seule)
+  const getReplacedPVsForDate = (date: string): PV[] => {
+    return pvs
+      .filter((p) => p.date === date && p.directeurId === enseignantId && Boolean(p.remplaceePar))
+      .sort((a, b) => (b.version ?? 1) - (a.version ?? 1));
+  };
+
+  const getPVForDate = getLatestPVForDate;
 
   // Obtenir le résultat d'un créneau
   const getResultatForCreneau = (creneauId: string): Resultat | undefined => {
@@ -263,11 +287,10 @@ export const Commission: React.FC<CommissionProps> = ({
 
   const datesSeances = Object.keys(seancesParDate).sort();
 
-  // Génération du PV de séance
+  // Génération ou régénération d'une nouvelle version de PV
   const handleGeneratePV = (date: string, creneauxDate: Creneau[]) => {
-    // Vérifier si un PV existe déjà
-    const existing = getPVForDate(date);
-    if (existing) {
+    const existing = getLatestPVForDate(date);
+    if (existing && !existing.rouvertLe) {
       setActivePV(existing);
       return;
     }
@@ -279,25 +302,96 @@ export const Commission: React.FC<CommissionProps> = ({
 
     // Copie figée des résultats
     const frozenResults: Resultat[] = resultatsDate as Resultat[];
-
-    const newPV: PV = {
-      id: `pv-${Date.now()}`,
-      directeurId: enseignantId,
-      date,
-      resultats: frozenResults,
-      statut: 'a_signer',
-      code: generatePVCode(),
-      genereLe: new Date().toISOString(),
-    };
+    const newCode = generatePVCode();
+    const nowIso = new Date().toISOString();
 
     try {
       const raw = localStorage.getItem('usmba_doctorat_pvs');
-      const curPvs: PV[] = raw ? JSON.parse(raw) : [];
-      curPvs.push(newPV);
+      let curPvs: PV[] = raw ? JSON.parse(raw) : [];
+
+      if (existing && existing.rouvertLe) {
+        // Régénération après réouverture : version = ancienne version + 1
+        const nextVersion = (existing.version ?? 1) + 1;
+        const newId = `pv-${Date.now()}`;
+        existing.remplaceePar = newId;
+
+        const newPV: PV = {
+          id: newId,
+          directeurId: enseignantId,
+          date,
+          resultats: frozenResults,
+          statut: 'a_signer',
+          code: newCode,
+          genereLe: nowIso,
+          version: nextVersion,
+        };
+
+        const idx = curPvs.findIndex((p) => p.id === existing.id);
+        if (idx !== -1) {
+          curPvs[idx] = existing;
+        }
+        curPvs.push(newPV);
+        localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(curPvs));
+        setPvs(curPvs);
+        window.dispatchEvent(new CustomEvent('usmba_pvs_updated'));
+        setActivePV(newPV);
+      } else {
+        // Première version
+        const newPV: PV = {
+          id: `pv-${Date.now()}`,
+          directeurId: enseignantId,
+          date,
+          resultats: frozenResults,
+          statut: 'a_signer',
+          code: newCode,
+          genereLe: nowIso,
+          version: 1,
+        };
+        curPvs.push(newPV);
+        localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(curPvs));
+        setPvs(curPvs);
+        window.dispatchEvent(new CustomEvent('usmba_pvs_updated'));
+        setActivePV(newPV);
+      }
+    } catch {}
+  };
+
+  // Réouverture d'un PV avec motif obligatoire (5 caractères min.)
+  const handleConfirmReopen = (date: string) => {
+    const cleanMotif = (reopenMotif || '').trim();
+    if (cleanMotif.length < 5) {
+      setReopenError(fr.commission.reopenMotifMinError);
+      return;
+    }
+
+    const target = getLatestPVForDate(date);
+    if (!target) return;
+    if (target.publieLe) {
+      setReopenError(fr.commission.reopenDisabledPublished);
+      return;
+    }
+
+    target.rouvertLe = new Date().toISOString();
+    target.motifReouverture = cleanMotif;
+
+    try {
+      const raw = localStorage.getItem('usmba_doctorat_pvs');
+      let curPvs: PV[] = raw ? JSON.parse(raw) : [];
+      const idx = curPvs.findIndex((p) => p.id === target.id);
+      if (idx !== -1) {
+        curPvs[idx] = target;
+      } else {
+        curPvs.push(target);
+      }
       localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(curPvs));
       setPvs(curPvs);
-      setActivePV(newPV);
-    } catch {}
+      window.dispatchEvent(new CustomEvent('usmba_pvs_updated'));
+      setReopenModalDate(null);
+      setReopenMotif('');
+      setReopenError(null);
+    } catch {
+      setReopenError('Erreur de stockage');
+    }
   };
 
   const renderStatusBadgeResultat = (res: ResultatType) => {
@@ -376,7 +470,7 @@ export const Commission: React.FC<CommissionProps> = ({
             {creneauxConfirmes.map((c) => {
               const res = getResultatForCreneau(c.id);
               const pvSeance = getPVForDate(c.date);
-              const isLocked = Boolean(pvSeance);
+              const isLocked = Boolean(pvSeance && !pvSeance.rouvertLe);
               const isFormOpen = openForms[c.id] || (!res && !isLocked);
               const form = editForms[c.id] || {
                 note: res ? String(res.note) : '',
@@ -395,7 +489,7 @@ export const Commission: React.FC<CommissionProps> = ({
                     <div>
                       <h4 className="text-xs font-bold text-slate-900 flex items-center gap-2">
                         <span>{candidatNom}</span>
-                        {isLocked && (
+                        {isLocked ? (
                           <span
                             className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full"
                             title={fr.commission.resultsLocked}
@@ -403,7 +497,15 @@ export const Commission: React.FC<CommissionProps> = ({
                             <Lock size={10} />
                             <span>{fr.commission.resultsLocked}</span>
                           </span>
-                        )}
+                        ) : pvSeance?.rouvertLe ? (
+                          <span
+                            className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full"
+                            title={fr.commission.reopenedBadge}
+                          >
+                            <RotateCcw size={10} />
+                            <span>{fr.commission.reopenedBadge}</span>
+                          </span>
+                        ) : null}
                       </h4>
                       <p className="text-[11px] text-slate-500 mt-0.5">
                         {c.date} à {c.heure} — {c.lieu}
@@ -594,10 +696,17 @@ export const Commission: React.FC<CommissionProps> = ({
 
                     <div className="flex items-center gap-2">
                       {existingPV ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-800 border border-amber-300">
-                          <FileSignature size={13} className="text-amber-600" />
-                          <span>{fr.commission.pvStatuts.a_signer}</span>
-                        </span>
+                        existingPV.rouvertLe ? (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-800 border border-amber-300">
+                            <RotateCcw size={13} className="text-amber-600" />
+                            <span>{fr.commission.reopenedBadge}</span>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                            <FileSignature size={13} className="text-emerald-600" />
+                            <span>{fr.commission.pvStatuts.a_signer}</span>
+                          </span>
+                        )
                       ) : allEvaluated ? (
                         <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
                           <CheckCircle2 size={12} />
@@ -643,25 +752,99 @@ export const Commission: React.FC<CommissionProps> = ({
                     </div>
                   </div>
 
-                  {/* Action PV : Générer ou Consulter (un seul PV par séance) */}
+                  {/* Alerte si séance rouverte */}
+                  {existingPV?.rouvertLe && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-900 space-y-1">
+                      <div className="flex items-center gap-1.5 font-bold">
+                        <RotateCcw size={13} className="text-amber-700" />
+                        <span>{fr.commission.reopenedNotice}</span>
+                      </div>
+                      {existingPV.motifReouverture && (
+                        <p className="text-[11px] text-amber-800 italic">
+                          Motif : « {existingPV.motifReouverture} »
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Action PV : Générer, Consulter, Rouvrir ou Régénérer */}
                   <div className="pt-2 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     {existingPV ? (
                       <>
-                        <div className="flex items-center gap-2 text-xs text-slate-500 font-mono">
-                          <span className="font-semibold text-slate-700 font-sans">Code PV :</span>
-                          <span className="font-bold text-slate-900 tracking-wider">
-                            {existingPV.code}
-                          </span>
+                        <div className="space-y-0.5 text-xs text-slate-500">
+                          <div className="flex items-center gap-2 font-mono">
+                            <span className="font-bold text-slate-900">
+                              PV-{existingPV.date}-{(existingPV.code || '').slice(0, 4)}
+                            </span>
+                            <span className="text-slate-400">•</span>
+                            <span className="font-semibold text-slate-700 font-sans">
+                              Version {existingPV.version ?? 1}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-400 font-mono">
+                            Code : {existingPV.code}
+                          </p>
                         </div>
 
-                        <button
-                          type="button"
-                          onClick={() => setActivePV(existingPV)}
-                          className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-xl shadow-xs transition cursor-pointer"
-                        >
-                          <Eye size={14} />
-                          <span>{fr.commission.btnViewPV}</span>
-                        </button>
+                        <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2">
+                          {/* Consulter le PV */}
+                          <button
+                            type="button"
+                            onClick={() => setActivePV(existingPV)}
+                            className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition cursor-pointer"
+                          >
+                            <Eye size={14} />
+                            <span>
+                              {existingPV.rouvertLe
+                                ? `Consulter (v${existingPV.version ?? 1})`
+                                : fr.commission.btnViewPV}
+                            </span>
+                          </button>
+
+                          {/* Si le PV est rouvert : Bouton Régénérer */}
+                          {existingPV.rouvertLe ? (
+                            <button
+                              type="button"
+                              onClick={() => handleGeneratePV(date, creneauxDate)}
+                              className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl shadow-xs transition cursor-pointer"
+                            >
+                              <FileSignature size={14} />
+                              <span>{fr.commission.btnRegeneratePV}</span>
+                            </button>
+                          ) : (
+                            /* Si non rouvert : Bouton Rouvrir */
+                            <div className="flex flex-col items-end">
+                              {existingPV.publieLe ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    disabled
+                                    className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed"
+                                  >
+                                    <RotateCcw size={13} />
+                                    <span>{fr.commission.btnReopenPV}</span>
+                                  </button>
+                                  <span className="text-[10px] text-rose-600 font-medium mt-1">
+                                    {fr.commission.reopenDisabledPublished}
+                                  </span>
+                                </>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setReopenModalDate(date);
+                                    setReopenMotif('');
+                                    setReopenError(null);
+                                  }}
+                                  className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 transition cursor-pointer"
+                                >
+                                  <RotateCcw size={13} />
+                                  <span>{fr.commission.btnReopenPV}</span>
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
                       </>
                     ) : (
                       <>
@@ -700,6 +883,107 @@ export const Commission: React.FC<CommissionProps> = ({
                       </>
                     )}
                   </div>
+
+                  {/* Formulaire de saisie du motif de réouverture */}
+                  {reopenModalDate === date && (
+                    <div className="mt-3 p-4 bg-amber-50/70 border border-amber-300 rounded-2xl space-y-3">
+                      <div>
+                        <h5 className="text-xs font-bold text-amber-950 flex items-center gap-1.5">
+                          <RotateCcw size={14} className="text-amber-700" />
+                          <span>{fr.commission.reopenModalTitle}</span>
+                        </h5>
+                        <p className="text-[11px] text-amber-800 mt-0.5">
+                          {fr.commission.reopenModalSubtitle}
+                        </p>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                          {fr.commission.reopenMotifLabel} *
+                        </label>
+                        <input
+                          type="text"
+                          value={reopenMotif}
+                          onChange={(e) => {
+                            setReopenMotif(e.target.value);
+                            setReopenError(null);
+                          }}
+                          placeholder={fr.commission.reopenMotifPlaceholder}
+                          className="w-full text-xs p-2.5 rounded-xl border border-amber-300 bg-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                        />
+                      </div>
+
+                      {reopenError && (
+                        <div className="p-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold flex items-center gap-1.5">
+                          <AlertCircle size={14} className="shrink-0" />
+                          <span>{reopenError}</span>
+                        </div>
+                      )}
+
+                      <div className="flex items-center justify-end gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setReopenModalDate(null);
+                            setReopenMotif('');
+                            setReopenError(null);
+                          }}
+                          className="px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-200 rounded-lg transition cursor-pointer"
+                        >
+                          Annuler
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleConfirmReopen(date)}
+                          className="px-4 py-1.5 text-xs font-semibold text-white bg-amber-700 hover:bg-amber-800 rounded-lg shadow-xs transition cursor-pointer"
+                        >
+                          {fr.commission.btnConfirmReopen}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Versions précédentes remplacées (lecture seule, sans aucune action) */}
+                  {getReplacedPVsForDate(date).length > 0 && (
+                    <div className="pt-3 border-t border-slate-100 space-y-2">
+                      <h5 className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                        <RotateCcw size={12} className="text-slate-400" />
+                        <span>{fr.commission.previousVersionsTitle}</span>
+                      </h5>
+                      <div className="space-y-1.5">
+                        {getReplacedPVsForDate(date).map((oldPv) => {
+                          const oldRef = `PV-${oldPv.date}-${(oldPv.code || '').slice(0, 4)}`;
+                          const oldVer = oldPv.version ?? 1;
+                          return (
+                            <div
+                              key={oldPv.id}
+                              className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
+                            >
+                              <div className="space-y-0.5">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="font-bold font-mono text-slate-800">{oldRef}</span>
+                                  <span className="text-slate-600 font-medium">Version {oldVer}</span>
+                                  {/* Badge Remplacée (texte + icône + couleur) */}
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-slate-200 text-slate-700 border border-slate-300">
+                                    <RotateCcw size={10} className="text-slate-500" />
+                                    <span>{fr.commission.replacedBadge}</span>
+                                  </span>
+                                </div>
+                                {oldPv.motifReouverture && (
+                                  <p className="text-[11px] text-slate-500 italic">
+                                    Motif : « {oldPv.motifReouverture} »
+                                  </p>
+                                )}
+                              </div>
+                              <span className="text-[11px] font-mono text-slate-400 self-start sm:self-auto">
+                                Code : {oldPv.code}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })}

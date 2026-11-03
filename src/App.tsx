@@ -23,8 +23,9 @@ import {
   Award,
   X,
 } from 'lucide-react';
-import { UserRole, Candidat, Enseignant, Sujet, Piece, Creneau, Notification, type Dossier as DossierData } from './types';
+import { UserRole, Candidat, Enseignant, Sujet, Piece, Creneau, Notification, type Dossier as DossierData, Rapport, Vote } from './types';
 import { storageService } from './services/storage';
+import { INITIAL_RAPPORTS, DEMO_DOCTORANT_NADIA } from './data/mockData';
 import { fr } from './i18n/fr';
 import { LoginModal } from './components/LoginModal';
 import { TabType } from './components/MobileNav';
@@ -36,8 +37,35 @@ import { Entretiens } from './components/Entretiens';
 import { MesCreneaux } from './components/MesCreneaux';
 import { Exceptions } from './components/Exceptions';
 import { Commission } from './components/Commission';
+import { RapportComponent } from './components/Rapport';
+import { VoteComite } from './components/VoteComite';
+import { CedReinscriptions } from './components/CedReinscriptions';
+import { CedSeances } from './components/CedSeances';
+import { VerifPV } from './components/VerifPV';
 
-export type AppTabType = TabType | 'commission';
+export type AppTabType =
+  | TabType
+  | 'commission'
+  | 'rapport'
+  | 'suivi'
+  | 'reinscriptions'
+  | 'seances'
+  | 'vote_comite';
+
+function genererCodeComite(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const array = new Uint8Array(12);
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    crypto.getRandomValues(array);
+  } else {
+    for (let i = 0; i < 12; i++) array[i] = Math.floor(Math.random() * 256);
+  }
+  let code = '';
+  for (let i = 0; i < 12; i++) {
+    code += chars[array[i] % chars.length];
+  }
+  return code;
+}
 
 function useEstMobile(): boolean {
   const [estMobile, setEstMobile] = useState(() => {
@@ -85,14 +113,54 @@ export default function App() {
   const [pieces, setPieces] = useState<Piece[]>([]);
   const [dossier, setDossier] = useState<DossierData>(storageService.getDossier());
   const [creneaux, setCreneaux] = useState<Creneau[]>([]);
+  const [rapports, setRapports] = useState<Rapport[]>(() => {
+    try {
+      const raw = localStorage.getItem('usmba_rapports');
+      if (raw) return JSON.parse(raw);
+      localStorage.setItem('usmba_rapports', JSON.stringify(INITIAL_RAPPORTS));
+      return INITIAL_RAPPORTS;
+    } catch {
+      return INITIAL_RAPPORTS;
+    }
+  });
+  const [teacherComments, setTeacherComments] = useState<Record<string, string>>({});
+  const [teacherFeedbackMsg, setTeacherFeedbackMsg] = useState<string | null>(null);
   const [showToast, setShowToast] = useState(false);
   const [simulatedStatuts, setSimulatedStatuts] = useState<Record<string, 'deposee' | 'retenue'>>({});
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [verifCode, setVerifCode] = useState<string | null>(() => {
+    if (typeof window !== 'undefined' && window.location.hash.startsWith('#verif/')) {
+      return decodeURIComponent(window.location.hash.replace(/^#verif\/?/, '').trim());
+    }
+    return null;
+  });
+
+  // Écoute de la route de vérification #verif/CODE
+  useEffect(() => {
+    const handleHash = () => {
+      const hash = window.location.hash || '';
+      if (hash.startsWith('#verif/')) {
+        const code = decodeURIComponent(hash.replace(/^#verif\/?/, '').trim());
+        setVerifCode(code || null);
+      } else {
+        setVerifCode(null);
+      }
+    };
+    window.addEventListener('hashchange', handleHash);
+    return () => window.removeEventListener('hashchange', handleHash);
+  }, []);
 
   // Initialisation au montage : démarre en visiteur sans compte
   useEffect(() => {
     storageService.initializeIfNeeded();
+    try {
+      if (!localStorage.getItem('usmba_rapports')) {
+        localStorage.setItem('usmba_rapports', JSON.stringify(INITIAL_RAPPORTS));
+      }
+    } catch {
+      // safe fallback
+    }
     refreshState();
     setTab('sujets');
 
@@ -100,9 +168,11 @@ export default function App() {
       refreshState();
     };
     window.addEventListener('usmba_pieces_updated', handleSync);
+    window.addEventListener('usmba_rapports_updated', handleSync);
     window.addEventListener('storage', handleSync);
     return () => {
       window.removeEventListener('usmba_pieces_updated', handleSync);
+      window.removeEventListener('usmba_rapports_updated', handleSync);
       window.removeEventListener('storage', handleSync);
     };
   }, []);
@@ -114,6 +184,12 @@ export default function App() {
     setPieces(storageService.getPieces());
     setDossier(storageService.getDossier());
     setCreneaux(storageService.getCreneaux());
+    try {
+      const raw = localStorage.getItem('usmba_rapports');
+      if (raw) setRapports(JSON.parse(raw));
+    } catch {
+      // safe fallback
+    }
   };
 
   const handleLoginSuccess = (userRole: UserRole, _email?: string, candidateData?: Candidat) => {
@@ -132,8 +208,10 @@ export default function App() {
       setTab('sujets');
     } else if (userRole === 'enseignant') {
       setTab('sujets');
+    } else if (userRole === 'doctorant') {
+      setTab('rapport');
     } else {
-      setTab('ced');
+      setTab('seances');
     }
   };
 
@@ -168,7 +246,7 @@ export default function App() {
     }
 
     // Pages ouvertes aux visiteurs
-    if (targetTab === 'sujets' || targetTab === 'panier') {
+    if (targetTab === 'sujets' || targetTab === 'panier' || targetTab === 'vote_comite') {
       setTab(targetTab);
       return;
     }
@@ -198,7 +276,16 @@ export default function App() {
       return;
     }
 
-    if (targetTab === 'ced' && role !== 'directeur_ced') {
+    if (
+      (targetTab === 'ced' || targetTab === 'seances' || targetTab === 'reinscriptions') &&
+      role !== 'directeur_ced'
+    ) {
+      setRestrictionMsg(fr.auth.accessRestricted);
+      setIsLoginOpen(true);
+      return;
+    }
+
+    if ((targetTab === 'rapport' || targetTab === 'suivi') && role !== 'doctorant') {
       setRestrictionMsg(fr.auth.accessRestricted);
       setIsLoginOpen(true);
       return;
@@ -423,11 +510,123 @@ export default function App() {
 
   const isRetenuWithUnproven = isCandidatRetenu && piecesAProverCount > 0;
 
+  // Rapports de réinscription en attente de validation par l'encadrant
+  const rapportsAValider = useMemo(() => {
+    return rapports.filter(
+      (r) => r.statut === 'soumis' && (r.encadrantId === activeEnseignant.id || activeEnseignant.id === 'ens-1')
+    );
+  }, [rapports, activeEnseignant]);
+
+  const handleTeacherValiderRapport = (rapportId: string) => {
+    try {
+      const raw = localStorage.getItem('usmba_rapports');
+      const list: Rapport[] = raw ? JSON.parse(raw) : rapports;
+      const index = list.findIndex((r) => r.id === rapportId);
+      if (index === -1) return;
+
+      const dateStr = new Date().toISOString();
+      const commentText = (teacherComments[rapportId] || '').trim();
+
+      const updatedCommentaires = [...list[index].commentaires];
+      if (commentText) {
+        updatedCommentaires.push({
+          auteur: activeEnseignant.nom,
+          date: dateStr,
+          texte: commentText,
+        });
+      }
+
+      const votes: Vote[] = [
+        { membre: 'Pr. A. Benjelloun (Rapporteur externe)', code: genererCodeComite() },
+        { membre: 'Pr. F. Zahraoui (Spécialiste discipline)', code: genererCodeComite() },
+        { membre: 'Pr. M. Idrissi (Représentant laboratoire)', code: genererCodeComite() },
+      ];
+
+      const updatedChronologie = [
+        ...list[index].chronologie,
+        {
+          date: dateStr,
+          acteur: activeEnseignant.nom,
+          action: `${fr.reinscription.btnValiderEncadrant} (signature)`,
+        },
+        {
+          date: dateStr,
+          acteur: 'Système',
+          action: 'Transmission au comité de suivi de thèse (3 membres désignés)',
+        },
+      ];
+
+      list[index] = {
+        ...list[index],
+        statut: 'avis_comite',
+        commentaires: updatedCommentaires,
+        comite: votes,
+        chronologie: updatedChronologie,
+      };
+
+      localStorage.setItem('usmba_rapports', JSON.stringify(list));
+      window.dispatchEvent(new CustomEvent('usmba_rapports_updated'));
+      setRapports(list);
+      setTeacherFeedbackMsg(fr.reinscription.encadrantValidatedToast);
+      setTimeout(() => setTeacherFeedbackMsg(null), 3500);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleTeacherCorrigerRapport = (rapportId: string) => {
+    const commentText = (teacherComments[rapportId] || '').trim();
+    if (commentText.length < 5) return;
+
+    try {
+      const raw = localStorage.getItem('usmba_rapports');
+      const list: Rapport[] = raw ? JSON.parse(raw) : rapports;
+      const index = list.findIndex((r) => r.id === rapportId);
+      if (index === -1) return;
+
+      const dateStr = new Date().toISOString();
+      const updatedCommentaires = [
+        ...list[index].commentaires,
+        {
+          auteur: activeEnseignant.nom,
+          date: dateStr,
+          texte: commentText,
+        },
+      ];
+
+      const updatedChronologie = [
+        ...list[index].chronologie,
+        {
+          date: dateStr,
+          acteur: activeEnseignant.nom,
+          action: `${fr.reinscription.btnCorrigerEncadrant} : "${commentText}"`,
+        },
+      ];
+
+      list[index] = {
+        ...list[index],
+        statut: 'a_corriger',
+        commentaires: updatedCommentaires,
+        chronologie: updatedChronologie,
+      };
+
+      localStorage.setItem('usmba_rapports', JSON.stringify(list));
+      window.dispatchEvent(new CustomEvent('usmba_rapports_updated'));
+      setRapports(list);
+      setTeacherFeedbackMsg(fr.reinscription.encadrantCorrectionToast);
+      setTimeout(() => setTeacherFeedbackMsg(null), 3500);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const currentUserName = isLoggedIn
     ? role === 'candidat'
       ? candidat.nom || 'Candidat'
       : role === 'enseignant'
       ? activeEnseignant.nom
+      : role === 'doctorant'
+      ? DEMO_DOCTORANT_NADIA.nom
       : fr.app.cedName
     : undefined;
 
@@ -551,10 +750,55 @@ export default function App() {
                     </button>
                   </>
                 )}
+                {/* Onglets Doctorant */}
+                {isLoggedIn && role === 'doctorant' && (
+                  <>
+                    <button
+                      onClick={() => handleTabChange('rapport')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                        tab === 'rapport'
+                          ? 'bg-emerald-800 text-amber-300'
+                          : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
+                      }`}
+                    >
+                      <span>{fr.nav.rapport}</span>
+                    </button>
+                    <button
+                      onClick={() => handleTabChange('suivi')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                        tab === 'suivi'
+                          ? 'bg-emerald-800 text-amber-300'
+                          : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
+                      }`}
+                    >
+                      <span>{fr.nav.suivi}</span>
+                    </button>
+                  </>
+                )}
 
                 {/* Onglets CED */}
                 {isLoggedIn && role === 'directeur_ced' && (
                   <>
+                    <button
+                      onClick={() => handleTabChange('seances')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                        tab === 'seances'
+                          ? 'bg-emerald-800 text-amber-300'
+                          : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
+                      }`}
+                    >
+                      <span>{fr.nav.seances}</span>
+                    </button>
+                    <button
+                      onClick={() => handleTabChange('reinscriptions')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                        tab === 'reinscriptions'
+                          ? 'bg-emerald-800 text-amber-300'
+                          : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
+                      }`}
+                    >
+                      <span>{fr.nav.reinscriptions}</span>
+                    </button>
                     <button
                       onClick={() => handleTabChange('ced')}
                       className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
@@ -569,26 +813,6 @@ export default function App() {
                           {alertesCreneaux.length}
                         </span>
                       )}
-                    </button>
-                    <button
-                      onClick={() => handleTabChange('sujets')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
-                        tab === 'sujets'
-                          ? 'bg-emerald-800 text-amber-300'
-                          : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
-                      }`}
-                    >
-                      <span>{fr.nav.sujets}</span>
-                    </button>
-                    <button
-                      onClick={() => handleTabChange('entretiens')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
-                        tab === 'entretiens'
-                          ? 'bg-emerald-800 text-amber-300'
-                          : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
-                      }`}
-                    >
-                      <span>{fr.nav.entretiens}</span>
                     </button>
                   </>
                 )}
@@ -643,6 +867,8 @@ export default function App() {
                               ? fr.auth.roleCandidatBadge
                               : role === 'enseignant'
                               ? fr.auth.roleEnseignantBadge
+                              : role === 'doctorant'
+                              ? fr.auth.roleDoctorantBadge
                               : fr.auth.roleCedBadge}
                           </span>
                         </div>
@@ -740,8 +966,19 @@ export default function App() {
             </div>
           )}
 
-          {/* Onglet Module A2 : Sujets de Recherche (Catalogue) */}
-          {tab === 'sujets' && (
+          {/* Route #verif/CODE : Vérification d'authenticité du PV (sans compte) */}
+          {verifCode !== null ? (
+            <VerifPV
+              code={verifCode}
+              onClose={() => {
+                window.location.hash = '';
+                setVerifCode(null);
+              }}
+            />
+          ) : (
+            <>
+              {/* Onglet Module A2 : Sujets de Recherche (Catalogue) */}
+              {tab === 'sujets' && (
             <SujetsModule
               key="catalog"
               role={role}
@@ -872,12 +1109,171 @@ export default function App() {
                   ))}
                 </div>
               )}
+
+              {/* MODULE R : Section Rapports de réinscription à valider par l'encadrant */}
+              <div className="pt-4 border-t border-slate-200 space-y-3">
+                <div className="bg-emerald-950 text-white rounded-xl p-3 flex items-center justify-between">
+                  <div>
+                    <h2 className="text-xs font-bold uppercase text-amber-300">
+                      {fr.reinscription.teacherSectionTitle}
+                    </h2>
+                    <p className="text-[11px] text-emerald-200">
+                      {fr.reinscription.teacherSectionSubtitle}
+                    </p>
+                  </div>
+                  <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-emerald-800 text-amber-300">
+                    {rapportsAValider.length}
+                  </span>
+                </div>
+
+                {teacherFeedbackMsg && (
+                  <div className="bg-emerald-50 border border-emerald-300 text-emerald-900 rounded-xl p-3 text-xs flex items-center gap-2">
+                    <CheckCircle2 size={16} className="text-emerald-700 shrink-0" />
+                    <span>{teacherFeedbackMsg}</span>
+                  </div>
+                )}
+
+                {rapportsAValider.length === 0 ? (
+                  <div className="bg-white border border-slate-200 rounded-xl p-6 text-center text-xs text-slate-500">
+                    {fr.reinscription.teacherEmptyReports}
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {rapportsAValider.map((r) => {
+                      const commVal = teacherComments[r.id] || '';
+                      const canCorriger = commVal.trim().length >= 5;
+
+                      return (
+                        <div key={r.id} className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs space-y-3">
+                          <div className="flex items-start justify-between gap-2 flex-wrap">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <h3 className="text-sm font-bold text-slate-900">{r.titre}</h3>
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-100 text-amber-900 border border-amber-200">
+                                  {r.annee}ᵉ année
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-500 mt-0.5">
+                                Doctorant : {r.doctorantId === 'doc-nadia' ? 'Nadia Alaoui' : r.doctorantId}
+                              </p>
+                            </div>
+                            <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-blue-100 text-blue-800 border border-blue-200">
+                              {fr.reinscription.statuts.soumis}
+                            </span>
+                          </div>
+
+                          {/* Indicateurs calculés automatiquement */}
+                          <div className="grid grid-cols-3 gap-2 bg-slate-50 p-2.5 rounded-lg text-center">
+                            <div>
+                              <span className="text-xs font-bold text-slate-900">{r.publications?.length || 0}</span>
+                              <p className="text-[10px] text-slate-500">{fr.reinscription.publicationsCount}</p>
+                            </div>
+                            <div>
+                              <span className="text-xs font-bold text-slate-900">{r.communications?.length || 0}</span>
+                              <p className="text-[10px] text-slate-500">{fr.reinscription.communicationsCount}</p>
+                            </div>
+                            <div>
+                              <span className="text-xs font-bold text-slate-900">{r.formationsHeures || 0}h</span>
+                              <p className="text-[10px] text-slate-500">{fr.reinscription.formationsCount}</p>
+                            </div>
+                          </div>
+
+                          {/* Contenu du rapport */}
+                          <div className="space-y-1.5 text-xs text-slate-700 bg-slate-50/70 p-3 rounded-lg border border-slate-100">
+                            <div>
+                              <span className="font-semibold text-slate-900">{fr.reinscription.avancementLabel} :</span>
+                              <p className="text-slate-600 mt-0.5 whitespace-pre-line">{r.avancement}</p>
+                            </div>
+                            {r.perspectives && (
+                              <div className="pt-1.5 border-t border-slate-200/60 mt-1.5">
+                                <span className="font-semibold text-slate-900">{fr.reinscription.perspectivesLabel} :</span>
+                                <p className="text-slate-600 mt-0.5 whitespace-pre-line">{r.perspectives}</p>
+                              </div>
+                            )}
+                            {r.aucuneActivite && (
+                              <div className="pt-1 text-[11px] text-amber-700 font-semibold">
+                                ℹ {fr.reinscription.aucuneActiviteLabel}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Champ commentaire */}
+                          <div className="space-y-1">
+                            <label className="block text-[11px] font-semibold text-slate-700">
+                              {fr.reinscription.commentEncadrantLabel}
+                            </label>
+                            <textarea
+                              rows={2}
+                              value={commVal}
+                              onChange={(e) =>
+                                setTeacherComments((prev) => ({
+                                  ...prev,
+                                  [r.id]: e.target.value,
+                                }))
+                              }
+                              placeholder={fr.reinscription.commentEncadrantPlaceholder}
+                              className="w-full text-xs p-2 rounded-lg border border-slate-300 focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 bg-white"
+                            />
+                          </div>
+
+                          {/* Boutons validation / correction */}
+                          <div className="pt-1 space-y-1.5">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <button
+                                type="button"
+                                onClick={() => handleTeacherValiderRapport(r.id)}
+                                className="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-700 hover:bg-emerald-800 active:scale-98 text-white transition-all shadow-xs cursor-pointer flex items-center gap-1.5"
+                              >
+                                <CheckCircle2 size={13} />
+                                <span>{fr.reinscription.btnValiderEncadrant}</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                disabled={!canCorriger}
+                                onClick={() => handleTeacherCorrigerRapport(r.id)}
+                                className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all shadow-xs cursor-pointer flex items-center gap-1.5 ${
+                                  canCorriger
+                                    ? 'bg-amber-600 hover:bg-amber-700 text-white'
+                                    : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
+                                }`}
+                              >
+                                <span>{fr.reinscription.btnCorrigerEncadrant}</span>
+                              </button>
+                            </div>
+
+                            {!canCorriger && (
+                              <p className="text-[11px] text-slate-500 italic">
+                                {fr.reinscription.commentRequiredCorriger}
+                              </p>
+                            )}
+
+                            <p className="text-[10px] text-slate-400 italic pt-0.5">
+                              {fr.reinscription.signatureDisclaimer}
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
           {/* Onglet « Mon dossier » (candidat) */}
           {tab === 'dossier' && role === 'candidat' && isLoggedIn && (
             <Dossier />
+          )}
+
+          {/* Onglet Rapport (Doctorant) */}
+          {tab === 'rapport' && role === 'doctorant' && (
+            <RapportComponent doctorantId="doc-nadia" initialTab="rapport" />
+          )}
+
+          {/* Onglet Suivi (Doctorant) */}
+          {tab === 'suivi' && role === 'doctorant' && (
+            <RapportComponent doctorantId="doc-nadia" initialTab="suivi" />
           )}
 
           {/* Onglet Entretiens (Candidat) */}
@@ -898,16 +1294,28 @@ export default function App() {
             />
           )}
 
-          {/* Onglet Entretiens (Directeur CED) */}
-          {tab === 'entretiens' && role === 'directeur_ced' && (
-            <Exceptions />
+          {/* Onglet Séances (Directeur CED) */}
+          {tab === 'seances' && role === 'directeur_ced' && (
+            <CedSeances />
+          )}
+
+          {/* Onglet Réinscriptions (Directeur CED) */}
+          {tab === 'reinscriptions' && role === 'directeur_ced' && (
+            <CedReinscriptions />
           )}
 
           {/* Onglet Exceptions CED (Directeur CED) */}
           {tab === 'ced' && (
             <Exceptions />
           )}
-        </main>
+
+          {/* Onglet Vote Comité sans compte */}
+          {tab === 'vote_comite' && (
+            <VoteComite onClose={() => setTab('sujets')} />
+          )}
+        </>
+      )}
+    </main>
 
         {/* Pied de page sobre et discret */}
         <footer className="mt-auto px-4 py-5 border-t border-slate-100 text-center text-xs text-slate-500 flex flex-col sm:flex-row items-center justify-between gap-3">
@@ -921,156 +1329,263 @@ export default function App() {
           </button>
         </footer>
 
-        {/* Barre de navigation mobile inférieure tactile (masquée sur md: et plus) avec repère Preuves à fournir */}
+        {/* Barre de navigation mobile inférieure tactile (masquée sur md: et plus) */}
         <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200 shadow-lg safe-bottom">
           <div className="max-w-md md:max-w-3xl lg:max-w-5xl mx-auto grid grid-flow-col auto-cols-fr px-2 py-1.5">
-            {/* Onglet Sujets */}
-            <button
-              onClick={() => handleTabChange('sujets')}
-              type="button"
-              className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
-                tab === 'sujets' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              <div className="relative">
-                <Search size={18} />
-              </div>
-              <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
-                {estMobile ? fr.nav.court.sujets : (role === 'enseignant' ? fr.nav.mesSujets : fr.nav.sujets)}
-              </span>
-              {tab === 'sujets' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
-            </button>
-
-            {/* Onglet Mon dossier (candidat connecté) avec pastille numérique */}
-            {isLoggedIn && role === 'candidat' && (
-              <button
-                onClick={() => handleTabChange('dossier')}
-                type="button"
-                className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
-                  tab === 'dossier' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                <div className="relative">
-                  <FolderKanban size={18} />
-                  {isRetenuWithUnproven && (
-                    <span
-                      className="absolute -top-1.5 -right-3 text-[9px] font-bold px-1.5 py-0.2 rounded-full text-white bg-amber-500 shadow-xs flex items-center gap-0.5"
-                      title={`${piecesAProverCount} ${fr.dossier.preuvesAFournirCount}`}
-                    >
-                      <AlertCircle size={9} className="shrink-0" />
-                      <span>{piecesAProverCount}</span>
-                    </span>
-                  )}
-                </div>
-                <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
-                  {estMobile ? fr.nav.court.dossier : fr.nav.dossier}
-                </span>
-                {tab === 'dossier' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
-              </button>
-            )}
-
-            {/* Onglet Candidatures reçues (enseignant connecté) */}
-            {isLoggedIn && role === 'enseignant' && (
-              <button
-                onClick={() => handleTabChange('candidatures_recues')}
-                type="button"
-                className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
-                  tab === 'candidatures_recues' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                <div className="relative">
-                  <FileText size={18} />
-                  {candidaturesEnseignant.length > 0 && (
-                    <span className="absolute -top-1.5 -right-3 text-[10px] font-bold px-1.5 py-0.2 rounded-full text-white bg-emerald-600 shadow-xs">
-                      {candidaturesEnseignant.length}
-                    </span>
-                  )}
-                </div>
-                <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
-                  {estMobile ? fr.nav.court.candidatures : fr.nav.candidatures}
-                </span>
-                {tab === 'candidatures_recues' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
-              </button>
-            )}
-
-            {/* Onglet Commission (enseignant connecté) */}
-            {isLoggedIn && role === 'enseignant' && (
-              <button
-                onClick={() => handleTabChange('commission')}
-                type="button"
-                className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
-                  tab === 'commission' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                <div className="relative">
-                  <Award size={18} />
-                </div>
-                <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
-                  {estMobile ? fr.nav.court.commission : fr.commission.tabTitle}
-                </span>
-                {tab === 'commission' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
-              </button>
-            )}
-
-            {/* Onglet Exceptions CED (CED connecté) */}
-            {isLoggedIn && role === 'directeur_ced' && (
-              <button
-                onClick={() => handleTabChange('ced')}
-                type="button"
-                className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
-                  tab === 'ced' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                <div className="relative">
-                  <ShieldAlert size={18} />
-                  {alertesCreneaux.length > 0 && (
-                    <span className="absolute -top-1.5 -right-3 text-[10px] font-bold px-1.5 py-0.2 rounded-full text-white bg-rose-500 shadow-xs">
-                      {alertesCreneaux.length}
-                    </span>
-                  )}
-                </div>
-                <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
-                  {estMobile ? fr.nav.court.exceptionsCed : fr.nav.exceptionsCed}
-                </span>
-                {tab === 'ced' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
-              </button>
-            )}
-
-            {/* Onglet Entretiens (connecté) */}
-            {isLoggedIn && (
-              <button
-                onClick={() => handleTabChange('entretiens')}
-                type="button"
-                className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
-                  tab === 'entretiens' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                <div className="relative">
-                  <CalendarCheck2 size={18} />
-                </div>
-                <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
-                  {estMobile
-                    ? (role === 'enseignant' ? fr.nav.court.creneaux : fr.nav.court.entretiens)
-                    : (role === 'enseignant' ? fr.nav.mesCreneaux : fr.nav.entretiens)}
-                </span>
-                {tab === 'entretiens' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
-              </button>
-            )}
-
-            {/* Non connecté : Se connecter */}
+            {/* Non connecté */}
             {!isLoggedIn && (
-              <button
-                onClick={() => setIsLoginOpen(true)}
-                type="button"
-                className="relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer text-slate-500 hover:text-slate-800"
-              >
-                <div className="relative">
-                  <LogIn size={18} />
-                </div>
-                <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
-                  {fr.auth.login}
-                </span>
-              </button>
+              <>
+                <button
+                  onClick={() => handleTabChange('sujets')}
+                  type="button"
+                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
+                    tab === 'sujets' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <div className="relative">
+                    <Search size={18} />
+                  </div>
+                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
+                    {fr.nav.court.sujets}
+                  </span>
+                  {tab === 'sujets' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
+                </button>
+                <button
+                  onClick={() => setIsLoginOpen(true)}
+                  type="button"
+                  className="relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer text-slate-500 hover:text-slate-800"
+                >
+                  <div className="relative">
+                    <LogIn size={18} />
+                  </div>
+                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
+                    {fr.auth.login}
+                  </span>
+                </button>
+              </>
+            )}
+
+            {/* DOCTORANT : barre du bas = Rapport, Suivi, Compte */}
+            {isLoggedIn && role === 'doctorant' && (
+              <>
+                <button
+                  onClick={() => handleTabChange('rapport')}
+                  type="button"
+                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
+                    tab === 'rapport' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <div className="relative">
+                    <FileText size={18} />
+                  </div>
+                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
+                    {fr.nav.rapport}
+                  </span>
+                  {tab === 'rapport' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
+                </button>
+                <button
+                  onClick={() => handleTabChange('suivi')}
+                  type="button"
+                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
+                    tab === 'suivi' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <div className="relative">
+                    <CheckCircle2 size={18} />
+                  </div>
+                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
+                    {fr.nav.suivi}
+                  </span>
+                  {tab === 'suivi' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
+                </button>
+              </>
+            )}
+
+            {/* CED : barre du bas = Séances, Réinscriptions, Exceptions, Compte */}
+            {isLoggedIn && role === 'directeur_ced' && (
+              <>
+                <button
+                  onClick={() => handleTabChange('seances')}
+                  type="button"
+                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
+                    tab === 'seances' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <div className="relative">
+                    <Calendar size={18} />
+                  </div>
+                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
+                    {fr.nav.court.seances}
+                  </span>
+                  {tab === 'seances' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
+                </button>
+                <button
+                  onClick={() => handleTabChange('reinscriptions')}
+                  type="button"
+                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
+                    tab === 'reinscriptions' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <div className="relative">
+                    <Award size={18} />
+                  </div>
+                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
+                    {fr.nav.court.reinscriptions}
+                  </span>
+                  {tab === 'reinscriptions' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
+                </button>
+                <button
+                  onClick={() => handleTabChange('ced')}
+                  type="button"
+                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
+                    tab === 'ced' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <div className="relative">
+                    <ShieldAlert size={18} />
+                    {alertesCreneaux.length > 0 && (
+                      <span className="absolute -top-1.5 -right-3 text-[10px] font-bold px-1.5 py-0.2 rounded-full text-white bg-rose-500 shadow-xs">
+                        {alertesCreneaux.length}
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
+                    {fr.nav.court.exceptionsCed}
+                  </span>
+                  {tab === 'ced' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
+                </button>
+              </>
+            )}
+
+            {/* CANDIDAT : barre du bas = Sujets, Dossier, Entretiens, Compte */}
+            {isLoggedIn && role === 'candidat' && (
+              <>
+                <button
+                  onClick={() => handleTabChange('sujets')}
+                  type="button"
+                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
+                    tab === 'sujets' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <div className="relative">
+                    <Search size={18} />
+                  </div>
+                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
+                    {fr.nav.court.sujets}
+                  </span>
+                  {tab === 'sujets' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
+                </button>
+                <button
+                  onClick={() => handleTabChange('dossier')}
+                  type="button"
+                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
+                    tab === 'dossier' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <div className="relative">
+                    <FolderKanban size={18} />
+                    {isRetenuWithUnproven && (
+                      <span
+                        className="absolute -top-1.5 -right-3 text-[9px] font-bold px-1.5 py-0.2 rounded-full text-white bg-amber-500 shadow-xs flex items-center gap-0.5"
+                        title={`${piecesAProverCount} ${fr.dossier.preuvesAFournirCount}`}
+                      >
+                        <AlertCircle size={9} className="shrink-0" />
+                        <span>{piecesAProverCount}</span>
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
+                    {fr.nav.court.dossier}
+                  </span>
+                  {tab === 'dossier' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
+                </button>
+                <button
+                  onClick={() => handleTabChange('entretiens')}
+                  type="button"
+                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
+                    tab === 'entretiens' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <div className="relative">
+                    <CalendarCheck2 size={18} />
+                  </div>
+                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
+                    {fr.nav.court.entretiens}
+                  </span>
+                  {tab === 'entretiens' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
+                </button>
+              </>
+            )}
+
+            {/* ENSEIGNANT : barre du bas = Sujets, Candidatures, Créneaux, Commission, Compte */}
+            {isLoggedIn && role === 'enseignant' && (
+              <>
+                <button
+                  onClick={() => handleTabChange('sujets')}
+                  type="button"
+                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
+                    tab === 'sujets' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <div className="relative">
+                    <Search size={18} />
+                  </div>
+                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
+                    {fr.nav.mesSujets}
+                  </span>
+                  {tab === 'sujets' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
+                </button>
+                <button
+                  onClick={() => handleTabChange('candidatures_recues')}
+                  type="button"
+                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
+                    tab === 'candidatures_recues' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <div className="relative">
+                    <FileText size={18} />
+                    {candidaturesEnseignant.length > 0 && (
+                      <span className="absolute -top-1.5 -right-3 text-[10px] font-bold px-1.5 py-0.2 rounded-full text-white bg-emerald-600 shadow-xs">
+                        {candidaturesEnseignant.length}
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
+                    {fr.nav.court.candidatures}
+                  </span>
+                  {tab === 'candidatures_recues' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
+                </button>
+                <button
+                  onClick={() => handleTabChange('entretiens')}
+                  type="button"
+                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
+                    tab === 'entretiens' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <div className="relative">
+                    <CalendarCheck2 size={18} />
+                  </div>
+                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
+                    {fr.nav.court.creneaux}
+                  </span>
+                  {tab === 'entretiens' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
+                </button>
+                <button
+                  onClick={() => handleTabChange('commission')}
+                  type="button"
+                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
+                    tab === 'commission' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <div className="relative">
+                    <Award size={18} />
+                  </div>
+                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
+                    {fr.nav.court.commission}
+                  </span>
+                  {tab === 'commission' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
+                </button>
+              </>
             )}
 
             {/* Connecté : Mon compte */}
@@ -1115,6 +1630,8 @@ export default function App() {
                         ? fr.auth.roleCandidatBadge
                         : role === 'enseignant'
                         ? fr.auth.roleEnseignantBadge
+                        : role === 'doctorant'
+                        ? fr.auth.roleDoctorantBadge
                         : fr.auth.roleCedBadge}
                     </span>
                   </div>
@@ -1172,6 +1689,10 @@ export default function App() {
           onRequestCreateAccount={() => {
             setIsLoginOpen(false);
             setTab('panier');
+          }}
+          onOpenVoteComite={() => {
+            setIsLoginOpen(false);
+            setTab('vote_comite');
           }}
         />
       </div>

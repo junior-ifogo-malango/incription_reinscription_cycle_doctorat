@@ -6,6 +6,8 @@ import {
   Dossier,
   Creneau,
   ApogeeFictifEntry,
+  Rapport,
+  Doctorant,
 } from '../types';
 
 export const INITIAL_ENSEIGNANTS: Enseignant[] = [
@@ -338,7 +340,7 @@ export const CANDIDAT_SALMA: Candidat = {
   cne: 'N149021873',
   cin: 'CD654321',
   email: 'salma.alami@demo.ma',
-  tel: '0671234567',
+  tel: '0612',
   panier: ['suj-04'],
   candidatures: ['suj-04'],
   candidaturesStatuts: { 'suj-04': 'retenue' },
@@ -488,3 +490,122 @@ export const APOGEE_FICTIF_DB: Record<string, ApogeeFictifEntry> = {
     anneeObtention: 2026,
   },
 };
+
+/* ========================================================================= */
+/* MODULE R : RÉINSCRIPTION - DONNÉES DE DÉMONSTRATION                       */
+/* ========================================================================= */
+
+export const DEMO_DOCTORANT_NADIA: Doctorant = {
+  id: 'doc-nadia',
+  nom: 'Nadia Alaoui',
+  email: 'doctorant@demo.ma',
+  tel: '0612345678',
+  annee: 2,
+  encadrantId: 'ens-1',
+  sujetTitre: 'Intelligence Artificielle Distribuée pour l’Optimisation Énergétique des Bâtiments Intelligents',
+  structure: 'Laboratoire LISAC - Faculté des Sciences Dhar El Mehraz (FSDM)',
+};
+
+export const INITIAL_RAPPORTS: Rapport[] = [
+  // 1. Rapport de Nadia Alaoui (Doctorante 2e année) : statut 'soumis' (> 48h)
+  {
+    id: 'rap-nadia-2026',
+    doctorantId: 'doc-nadia',
+    encadrantId: 'ens-1',
+    annee: 2,
+    titre: 'Intelligence Artificielle Distribuée pour l’Optimisation Énergétique des Bâtiments Intelligents',
+    avancement: 'Finalisation de la revue de la littérature et validation expérimentale du modèle prédictif multi-agents sur banc d\'essai. Les premiers résultats indiquent une réduction de 18% de la consommation de pointe.',
+    publications: [
+      {
+        titre: 'Multi-Agent Deep Reinforcement Learning for Microgrid Management',
+        doi: '10.1109/TSE.2026.0142',
+      },
+    ],
+    communications: [
+      {
+        titre: 'Conférence Nationale sur les Réseaux Intelligents (FSDM Fès)',
+        lieu: 'Fès',
+      },
+    ],
+    formationsHeures: 35,
+    perspectives: 'Déploiement à grande échelle sur le campus universitaire et soumission d\'un article de revue internationale Q1.',
+    aucuneActivite: false,
+    statut: 'soumis',
+    soumisLe: '2026-10-25T08:30:00Z', // Plus de 48h
+    commentaires: [],
+    chronologie: [
+      {
+        date: '25/10/2026',
+        acteur: 'Doctorante (Nadia Alaoui)',
+        action: 'Dépôt et soumission du rapport d’activité annuel (2ᵉ année)',
+      },
+    ],
+  },
+  // 2. Rapport de Tariq Mansouri (Doctorant 3e année) : statut 'avis_comite' (> 48h) avec 1 favorable et 2 en attente
+  {
+    id: 'rap-tariq-2026',
+    doctorantId: 'doc-tariq',
+    encadrantId: 'ens-1',
+    annee: 3,
+    titre: 'Matériaux Nanostructurés pour la Captation et le Stockage du Carbone Industriel',
+    avancement: 'Synthèse des zéolithes mésoporeuses et tests d\'adsorption sous différentes conditions de pression et de température.',
+    publications: [
+      {
+        titre: 'Advanced Nanomaterials for CO2 Sequestration in Continental Environments',
+        doi: '10.1016/j.carbon.2025.109',
+      },
+    ],
+    communications: [
+      {
+        titre: 'Congrès International des Matériaux Avancés et Énergies Vertes',
+        lieu: 'Rabat',
+      },
+    ],
+    formationsHeures: 42,
+    perspectives: 'Rédaction du manuscrit de thèse et soutenance prévue au printemps 2027.',
+    aucuneActivite: false,
+    statut: 'avis_comite',
+    soumisLe: '2026-10-24T10:00:00Z', // Plus de 48h
+    comite: [
+      {
+        membre: 'Pr. Mustapha Bennani (Rapporteur 1)',
+        code: 'COMITE77K92M',
+        avis: 'FAVORABLE',
+        commentaire: 'Travail d\'excellente facture, objectifs scientifiques largement atteints.',
+        votéLe: '2026-10-26T14:00:00Z',
+      },
+      {
+        membre: 'Pr. Leila Chraibi (Expert 2)',
+        code: 'COMITE88P44X',
+      },
+      {
+        membre: 'Pr. Rachid Tahiri (Laboratoire 3)',
+        code: 'COMITE99W66Q',
+      },
+    ],
+    commentaires: [
+      {
+        auteur: 'Pr. Karim El Amrani',
+        date: '25/10/2026',
+        texte: 'Très bonne progression. Je valide le rapport pour avis du comité de thèse.',
+      },
+    ],
+    chronologie: [
+      {
+        date: '24/10/2026',
+        acteur: 'Doctorant (Tariq Mansouri)',
+        action: 'Dépôt et soumission du rapport d’activité annuel (3ᵉ année)',
+      },
+      {
+        date: '25/10/2026',
+        acteur: 'Pr. Karim El Amrani (Encadrant)',
+        action: 'Validation du rapport (vaut signature) et saisine du comité',
+      },
+      {
+        date: '26/10/2026',
+        acteur: 'Pr. Mustapha Bennani (Membre 1)',
+        action: 'Avis FAVORABLE émis avec mention',
+      },
+    ],
+  },
+];

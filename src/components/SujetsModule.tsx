@@ -635,6 +635,7 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
               type="tel"
               value={form.tel}
               onChange={(e) => setForm({ ...form, tel: e.target.value })}
+              placeholder={fr.sujetsModule.telPlaceholder}
               className="w-full text-xs p-2 rounded-lg border border-slate-300 focus:outline-none focus:ring-1 focus:ring-emerald-500"
               required
             />

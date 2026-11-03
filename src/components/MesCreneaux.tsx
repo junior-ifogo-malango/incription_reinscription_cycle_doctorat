@@ -1,9 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Plus, Trash2, AlertCircle, Clock, MapPin, UserCheck } from 'lucide-react';
+import { Calendar, Plus, Trash2, AlertCircle, Clock, MapPin, UserCheck, MessageCircle, Mail } from 'lucide-react';
 import { Creneau, CreneauStatut, Candidat } from '../types';
 import { fr } from '../i18n/fr';
 import { StatusBadge } from './StatusBadge';
 import { storageService } from '../services/storage';
+import {
+  normaliserTel,
+  lienWhatsApp,
+  lienMail,
+  ouvrirLien,
+  isEmailValide,
+  messageConvocation,
+  trouverCandidat,
+} from '../utils/messages';
 
 const STORAGE_KEY_CRENEAUX = 'usmba_doctorat_creneaux';
 const STORAGE_KEY_CANDIDAT = 'usmba_doctorat_candidat';
@@ -254,50 +263,141 @@ export const MesCreneaux: React.FC<MesCreneauxProps> = ({
             {mySlots.map((slot) => {
               const isReservedOrConfirmed =
                 slot.statut === 'reserve' || slot.statut === 'confirme';
-              const candidatNom = isReservedOrConfirmed
-                ? getCandidatNom(slot.candidatId)
+              const candidatInfo = isReservedOrConfirmed
+                ? trouverCandidat(slot.candidatId)
+                : { nom: '' };
+
+              const convocationText = isReservedOrConfirmed
+                ? messageConvocation(slot.date, slot.heure, slot.lieu)
                 : '';
+
+              const hasValidTel = Boolean(
+                candidatInfo.tel && normaliserTel(candidatInfo.tel)
+              );
+              const telError = !candidatInfo.tel
+                ? fr.messages.missingPhone
+                : !normaliserTel(candidatInfo.tel)
+                ? fr.messages.invalidPhone
+                : null;
+
+              const hasValidEmail = Boolean(
+                candidatInfo.email && isEmailValide(candidatInfo.email)
+              );
+              const emailError = !candidatInfo.email
+                ? fr.messages.missingEmail
+                : !isEmailValide(candidatInfo.email)
+                ? fr.messages.invalidEmail
+                : null;
+
+              const waUrl = isReservedOrConfirmed
+                ? lienWhatsApp(candidatInfo.tel, convocationText)
+                : null;
+              const mailUrl = isReservedOrConfirmed
+                ? lienMail(
+                    candidatInfo.email,
+                    fr.messages.convocationSubject,
+                    convocationText
+                  )
+                : null;
 
               return (
                 <div
                   key={slot.id}
-                  className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
+                  className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-xs flex flex-col gap-2.5"
                 >
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-xs font-bold text-slate-900 flex items-center gap-1">
-                        <Clock size={13} className="text-slate-500" />
-                        <span>{slot.date} à {slot.heure}</span>
-                      </span>
-                      <StatusBadge
-                        type="creneau"
-                        statut={slot.statut as CreneauStatut}
-                        size="sm"
-                      />
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs font-bold text-slate-900 flex items-center gap-1">
+                          <Clock size={13} className="text-slate-500" />
+                          <span>{slot.date} à {slot.heure}</span>
+                        </span>
+                        <StatusBadge
+                          type="creneau"
+                          statut={slot.statut as CreneauStatut}
+                          size="sm"
+                        />
+                      </div>
+
+                      <p className="text-xs text-slate-600 flex items-center gap-1">
+                        <MapPin size={12} className="text-slate-400 shrink-0" />
+                        <span>{slot.lieu}</span>
+                      </p>
+
+                      {isReservedOrConfirmed && candidatInfo.nom && (
+                        <p className="text-xs font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-md px-2 py-0.5 inline-flex items-center gap-1 mt-1">
+                          <UserCheck size={12} className="text-emerald-700" />
+                          <span>{fr.mesCreneaux.candidatPrefix} {candidatInfo.nom}</span>
+                        </p>
+                      )}
                     </div>
 
-                    <p className="text-xs text-slate-600 flex items-center gap-1">
-                      <MapPin size={12} className="text-slate-400 shrink-0" />
-                      <span>{slot.lieu}</span>
-                    </p>
-
-                    {isReservedOrConfirmed && candidatNom && (
-                      <p className="text-xs font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-md px-2 py-0.5 inline-flex items-center gap-1 mt-1">
-                        <UserCheck size={12} className="text-emerald-700" />
-                        <span>{fr.mesCreneaux.candidatPrefix} {candidatNom}</span>
-                      </p>
+                    {slot.statut === 'libre' && (
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteCreneau(slot.id)}
+                        className="self-end sm:self-center px-2.5 py-1 text-xs font-semibold text-rose-600 hover:text-white hover:bg-rose-600 border border-rose-200 rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
+                      >
+                        <Trash2 size={12} />
+                        <span>{fr.mesCreneaux.btnDelete}</span>
+                      </button>
                     )}
                   </div>
 
-                  {slot.statut === 'libre' && (
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteCreneau(slot.id)}
-                      className="self-end sm:self-center px-2.5 py-1 text-xs font-semibold text-rose-600 hover:text-white hover:bg-rose-600 border border-rose-200 rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
-                    >
-                      <Trash2 size={12} />
-                      <span>{fr.mesCreneaux.btnDelete}</span>
-                    </button>
+                  {/* Actions de communication (WhatsApp et E-mail) pour créneaux réservés ou confirmés */}
+                  {isReservedOrConfirmed && (
+                    <div className="pt-2.5 border-t border-slate-100 flex flex-col gap-1.5">
+                      <div className="flex items-start gap-2 flex-wrap">
+                        {/* Bouton WhatsApp */}
+                        <div className="flex flex-col items-start">
+                          <button
+                            type="button"
+                            disabled={!hasValidTel}
+                            onClick={() => waUrl && ouvrirLien(waUrl)}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+                              hasValidTel
+                                ? 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer shadow-xs active:scale-98'
+                                : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
+                            }`}
+                          >
+                            <MessageCircle size={13} className={hasValidTel ? 'text-white' : 'text-slate-400'} />
+                            <span>{fr.messages.btnWhatsApp}</span>
+                          </button>
+                          {!hasValidTel && (
+                            <span className="text-[10px] text-rose-600 font-medium mt-0.5">
+                              {telError}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Bouton E-mail */}
+                        <div className="flex flex-col items-start">
+                          <button
+                            type="button"
+                            disabled={!hasValidEmail}
+                            onClick={() => mailUrl && ouvrirLien(mailUrl)}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+                              hasValidEmail
+                                ? 'bg-sky-600 hover:bg-sky-700 text-white cursor-pointer shadow-xs active:scale-98'
+                                : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
+                            }`}
+                          >
+                            <Mail size={13} className={hasValidEmail ? 'text-white' : 'text-slate-400'} />
+                            <span>{fr.messages.btnEmail}</span>
+                          </button>
+                          {!hasValidEmail && (
+                            <span className="text-[10px] text-rose-600 font-medium mt-0.5">
+                              {emailError}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Mention discrète */}
+                      <p className="text-[10px] text-slate-500 italic">
+                        {fr.messages.disclaimer}
+                      </p>
+                    </div>
                   )}
                 </div>
               );

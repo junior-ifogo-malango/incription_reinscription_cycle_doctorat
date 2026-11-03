@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, LogIn, UserCheck, BookOpenCheck, ShieldCheck, Sparkles, AlertCircle } from 'lucide-react';
+import { X, LogIn, UserCheck, BookOpenCheck, ShieldCheck, Sparkles, AlertCircle, GraduationCap, KeyRound } from 'lucide-react';
 import { UserRole, Candidat } from '../types';
 import { fr } from '../i18n/fr';
 
@@ -8,6 +8,7 @@ interface LoginModalProps {
   onClose: () => void;
   onLoginSuccess: (role: UserRole, email: string, candidateData?: Candidat) => void;
   onRequestCreateAccount?: () => void;
+  onOpenVoteComite?: () => void;
   restrictionMessage?: string;
 }
 
@@ -16,6 +17,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   onClose,
   onLoginSuccess,
   onRequestCreateAccount,
+  onOpenVoteComite,
   restrictionMessage,
 }) => {
   const [email, setEmail] = useState('');
@@ -87,6 +89,17 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       return;
     }
 
+    if (
+      (cleanEmail === 'doctorant@demo.ma' ||
+        cleanEmail.includes('doctorant') ||
+        cleanEmail.includes('nadia')) &&
+      isDemoPassword
+    ) {
+      onLoginSuccess('doctorant', cleanEmail);
+      onClose();
+      return;
+    }
+
     // 2. Compte candidat créé par l'utilisateur
     try {
       const rawAccounts = localStorage.getItem('usmba_registered_accounts');
@@ -140,10 +153,15 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       setPassword('demo1234');
       onLoginSuccess('enseignant', 'k.elamrani@usmba.ac.ma');
       onClose();
-    } else {
+    } else if (role === 'directeur_ced') {
       setEmail('ced@usmba.ac.ma');
       setPassword('demo1234');
       onLoginSuccess('directeur_ced', 'ced@usmba.ac.ma');
+      onClose();
+    } else {
+      setEmail('doctorant@demo.ma');
+      setPassword('demo1234');
+      onLoginSuccess('doctorant', 'doctorant@demo.ma');
       onClose();
     }
   };
@@ -230,12 +248,12 @@ export const LoginModal: React.FC<LoginModalProps> = ({
           </button>
         </form>
 
-        {/* 3 boutons rapides « Entrer en démo » */}
+        {/* Boutons rapides « Entrer en démo » (4 rôles) */}
         <div className="px-4 pb-3 pt-1 border-t border-slate-100 bg-slate-50/70">
           <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-2 text-center">
             {fr.auth.enterDemoLabel}
           </span>
-          <div className="grid grid-cols-3 gap-1.5">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
             <button
               type="button"
               onClick={() => handleQuickDemo('candidat')}
@@ -262,24 +280,47 @@ export const LoginModal: React.FC<LoginModalProps> = ({
               <ShieldCheck size={14} className="text-amber-600" />
               <span>{fr.auth.btnDemoDirecteur}</span>
             </button>
+
+            <button
+              type="button"
+              onClick={() => handleQuickDemo('doctorant')}
+              className="py-2 px-1 text-[11px] font-semibold rounded-lg bg-white border border-slate-200 text-slate-700 hover:border-purple-600 hover:text-purple-700 transition flex flex-col items-center gap-0.5 active:scale-95 shadow-xs"
+            >
+              <GraduationCap size={14} className="text-purple-600" />
+              <span>{fr.auth.btnDemoDoctorant}</span>
+            </button>
           </div>
         </div>
 
-        {/* Lien de création de compte */}
-        {onRequestCreateAccount && (
-          <div className="p-3 text-center border-t border-slate-100 bg-white">
+        {/* Liens bas de modale : Vote comité SANS compte + Création compte candidat */}
+        <div className="p-3 text-center border-t border-slate-100 bg-white space-y-1.5">
+          {onOpenVoteComite && (
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                onOpenVoteComite();
+              }}
+              className="text-xs font-semibold text-amber-800 hover:text-amber-900 hover:underline flex items-center justify-center gap-1.5 w-full cursor-pointer py-1"
+            >
+              <KeyRound size={13} className="text-amber-600" />
+              <span>{fr.auth.comiteVoteLink}</span>
+            </button>
+          )}
+
+          {onRequestCreateAccount && (
             <button
               type="button"
               onClick={() => {
                 onClose();
                 onRequestCreateAccount();
               }}
-              className="text-xs font-semibold text-emerald-700 hover:underline"
+              className="text-xs font-semibold text-emerald-700 hover:underline block w-full cursor-pointer py-0.5"
             >
               {fr.auth.linkCreateAccount}
             </button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );
