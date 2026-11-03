@@ -22,13 +22,17 @@ import {
   Cog,
   BookOpen,
   GraduationCap,
+  KeyRound,
+  Clock,
 } from 'lucide-react';
-import { Sujet, Candidat, Enseignant, UserRole } from '../types';
+import { Sujet, Candidat, Enseignant, UserRole, Notification } from '../types';
 import { fr } from '../i18n/fr';
 import { storageService } from '../services/storage';
 import { StatusBadge } from './StatusBadge';
 import { AdvancedSearchModal, AdvancedFilterCriteria } from './AdvancedSearchModal';
 import { normalizeText } from './Autocomplete';
+import { normaliserTel } from '../utils/messages';
+import { MOCK_CANDIDATS } from '../data/mockData';
 
 const getDisciplineConfig = (discipline: string) => {
   const norm = discipline
@@ -97,7 +101,7 @@ interface SujetsModuleProps {
   onNavigateTab?: (tab: 'sujets' | 'panier' | 'dossier') => void;
 }
 
-type InternalView = 'catalog' | 'panier' | 'register' | 'select3' | 'confirmation';
+type InternalView = 'catalog' | 'panier' | 'register' | 'verify_code' | 'select3' | 'confirmation';
 
 export const SujetsModule: React.FC<SujetsModuleProps> = ({
   role,
@@ -146,6 +150,14 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
     confirmerMotDePasse: '',
   });
   const [formValidationMsg, setFormValidationMsg] = useState<string | null>(null);
+
+  // Vérification de compte (code SMS simulé)
+  const [verifyCodeInput, setVerifyCodeInput] = useState('');
+  const [verifyCodeError, setVerifyCodeError] = useState<string | null>(null);
+  const [lockoutRemaining, setLockoutRemaining] = useState(0);
+
+  // Attestation sur l'honneur pour l'étape "Choisis tes 3 sujets"
+  const [certifieHonneur, setCertifieHonneur] = useState(false);
 
   // Sélection temporaire pour l'étape "Choisis tes 3 sujets"
   const [tempSelection, setTempSelection] = useState<string[]>(
@@ -298,11 +310,38 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
     storageService.setCandidat(visitor);
   };
 
+  // Timer de déblocage pour la saisie du code SMS
+  React.useEffect(() => {
+    const checkLockout = () => {
+      if (candidat.verificationBloqueJusqua && candidat.verificationBloqueJusqua > Date.now()) {
+        const remaining = Math.ceil((candidat.verificationBloqueJusqua - Date.now()) / 1000);
+        setLockoutRemaining(remaining);
+      } else {
+        setLockoutRemaining(0);
+        if (candidat.verificationBloqueJusqua && candidat.verificationBloqueJusqua <= Date.now()) {
+          const updated: Candidat = {
+            ...candidat,
+            verificationEssaisRestants: 3,
+            verificationBloqueJusqua: 0,
+          };
+          onUpdateCandidat(updated);
+          storageService.setCandidat(updated);
+        }
+      }
+    };
+
+    checkLockout();
+    const interval = setInterval(checkLockout, 1000);
+    return () => clearInterval(interval);
+  }, [candidat.verificationBloqueJusqua, candidat, onUpdateCandidat]);
+
   // Clic sur "Candidater"
   const handleStartCandidater = () => {
     setErrorMsg(null);
     if (!candidat.compteCree) {
       setView('register');
+    } else if (candidat.verificationStatut === 'non_verifie') {
+      setView('verify_code');
     } else {
       setTempSelection(
         candidat.candidatures.length > 0
@@ -339,16 +378,96 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
       return;
     }
 
+    // Démo : unicité et code locaux ; en production, serveur, anti-robot et API Apogée
+    const cleanEmail = form.email.trim().toLowerCase();
+    const normSubmittedTel = normaliserTel(form.tel);
+
+    // Rassembler tous les comptes existants pour tester l'unicité
+    let existingAccounts: Candidat[] = [...MOCK_CANDIDATS];
+    try {
+      const rawAccounts = localStorage.getItem('usmba_registered_accounts');
+      if (rawAccounts) {
+        const stored: Candidat[] = JSON.parse(rawAccounts);
+        existingAccounts = [...existingAccounts, ...stored];
+      }
+      const rawCur = localStorage.getItem('usmba_doctorat_candidat');
+      if (rawCur) {
+        const cur: Candidat = JSON.parse(rawCur);
+        if (cur.compteCree && cur.id !== candidat.id) {
+          existingAccounts.push(cur);
+        }
+      }
+    } catch {
+      // safe fallback
+    }
+
+    const isDuplicate = existingAccounts.some((acc) => {
+      // Unicité e-mail
+      if (acc.email && acc.email.trim().toLowerCase() === cleanEmail) {
+        return true;
+      }
+      // Unicité téléphone normalisé
+      if (normSubmittedTel && acc.tel) {
+        const accNormTel = normaliserTel(acc.tel);
+        if (accNormTel && accNormTel === normSubmittedTel) {
+          return true;
+        }
+      }
+      // Unicité CNE (quand il existe)
+      if (candidat.cne && acc.cne && candidat.cne.trim().toUpperCase() === acc.cne.trim().toUpperCase()) {
+        return true;
+      }
+      // Unicité CIN (quand il existe)
+      if (candidat.cin && acc.cin && candidat.cin.trim().toUpperCase() === acc.cin.trim().toUpperCase()) {
+        return true;
+      }
+      return false;
+    });
+
+    if (isDuplicate) {
+      setFormValidationMsg(fr.sujetsModule.compteExisteDeja);
+      return;
+    }
+
     setFormValidationMsg(null);
-    // Démo : mot de passe en clair dans localStorage, à remplacer par un hachage côté serveur
+
+    // Génération d'un code à 6 chiffres via crypto.getRandomValues
+    const randomArray = new Uint32Array(1);
+    crypto.getRandomValues(randomArray);
+    const verificationCode = String(100000 + (randomArray[0] % 900000));
+    const newCandId = `cand-${Date.now()}`;
+
+    // Notification SMS simulé
+    try {
+      const rawNotifs = localStorage.getItem('usmba_notifications');
+      const notifs: Notification[] = rawNotifs ? JSON.parse(rawNotifs) : [];
+      const newNotif: Notification = {
+        id: `notif-sms-${Date.now()}`,
+        destinataireId: newCandId,
+        texte: `SMS simulé : Votre code de vérification USMBA est ${verificationCode}`,
+        date: new Date().toISOString(),
+        lue: false,
+        canal: 'sms',
+      };
+      notifs.unshift(newNotif);
+      localStorage.setItem('usmba_notifications', JSON.stringify(notifs));
+      window.dispatchEvent(new CustomEvent('usmba_notifications_updated'));
+    } catch {
+      // safe fallback
+    }
+
     const updated: Candidat = {
       ...candidat,
-      id: `cand-${Date.now()}`,
+      id: newCandId,
       nom: form.nom.trim(),
       email: form.email.trim(),
       tel: form.tel.trim(),
       motDePasse: form.motDePasse,
       compteCree: true,
+      verificationStatut: 'non_verifie',
+      verificationCode,
+      verificationEssaisRestants: 3,
+      verificationBloqueJusqua: 0,
       panier: candidat.panier,
       candidatures: [],
     };
@@ -367,8 +486,112 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
       // safe fallback
     }
 
-    setTempSelection(candidat.panier.slice(0, Math.min(3, candidat.panier.length)));
-    setView('select3');
+    setVerifyCodeInput('');
+    setVerifyCodeError(null);
+    setView('verify_code');
+  };
+
+  // Soumission du code de vérification SMS
+  const handleVerifyCodeSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (lockoutRemaining > 0) return;
+
+    const trimmedInput = verifyCodeInput.trim();
+    const expectedCode = candidat.verificationCode?.trim();
+
+    if (expectedCode && trimmedInput === expectedCode) {
+      // Code correct : validation du compte
+      const updated: Candidat = {
+        ...candidat,
+        verificationStatut: 'verifie',
+        verificationCode: undefined,
+        verificationEssaisRestants: 3,
+        verificationBloqueJusqua: 0,
+      };
+      onUpdateCandidat(updated);
+      storageService.setCandidat(updated);
+
+      try {
+        const rawAccounts = localStorage.getItem('usmba_registered_accounts');
+        const accounts: Candidat[] = rawAccounts ? JSON.parse(rawAccounts) : [];
+        const updatedAccounts = accounts.map((a) =>
+          a.id === updated.id || a.email.toLowerCase() === updated.email.toLowerCase() ? updated : a
+        );
+        localStorage.setItem('usmba_registered_accounts', JSON.stringify(updatedAccounts));
+      } catch {
+        // safe fallback
+      }
+
+      setTempSelection(candidat.panier.slice(0, Math.min(3, candidat.panier.length)));
+      setView('select3');
+    } else {
+      // Code incorrect
+      const currentAttempts = candidat.verificationEssaisRestants ?? 3;
+      const nextAttempts = currentAttempts - 1;
+
+      if (nextAttempts <= 0) {
+        // Blocage de 1 minute
+        const lockUntil = Date.now() + 60000;
+        const updated: Candidat = {
+          ...candidat,
+          verificationEssaisRestants: 0,
+          verificationBloqueJusqua: lockUntil,
+        };
+        onUpdateCandidat(updated);
+        storageService.setCandidat(updated);
+        setLockoutRemaining(60);
+        setVerifyCodeError(fr.sujetsModule.codeBloque);
+      } else {
+        const updated: Candidat = {
+          ...candidat,
+          verificationEssaisRestants: nextAttempts,
+        };
+        onUpdateCandidat(updated);
+        storageService.setCandidat(updated);
+        setVerifyCodeError(
+          fr.sujetsModule.codeInvalide.replace('{essais}', String(nextAttempts))
+        );
+      }
+    }
+  };
+
+  // Renvoyer un nouveau code par SMS simulé
+  const handleResendCode = () => {
+    if (lockoutRemaining > 0) return;
+    const array = new Uint32Array(1);
+    crypto.getRandomValues(array);
+    const newCode = String(100000 + (array[0] % 900000));
+
+    const updated: Candidat = {
+      ...candidat,
+      verificationCode: newCode,
+      verificationEssaisRestants: 3,
+      verificationBloqueJusqua: 0,
+      verificationStatut: 'non_verifie',
+    };
+    onUpdateCandidat(updated);
+    storageService.setCandidat(updated);
+
+    try {
+      const rawNotifs = localStorage.getItem('usmba_notifications');
+      const notifs: Notification[] = rawNotifs ? JSON.parse(rawNotifs) : [];
+      const newNotif: Notification = {
+        id: `notif-sms-${Date.now()}`,
+        destinataireId: updated.id,
+        texte: `SMS simulé : Votre code de vérification USMBA est ${newCode}`,
+        date: new Date().toISOString(),
+        lue: false,
+        canal: 'sms',
+      };
+      notifs.unshift(newNotif);
+      localStorage.setItem('usmba_notifications', JSON.stringify(notifs));
+      window.dispatchEvent(new CustomEvent('usmba_notifications_updated'));
+    } catch {
+      // safe fallback
+    }
+
+    setVerifyCodeError(null);
+    setVerifyCodeInput('');
   };
 
   // Sélection dans "Choisis tes 3 sujets"
@@ -403,16 +626,18 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
     }
   }, [candidat.candidatures, candidat.panier, onUpdateCandidat]);
 
-  // Validation finale des candidatures
+  // Validation finale des candidatures avec enregistrement de attesteLe
   const handleValidateCandidatures = () => {
     // Retirer les sujets candidatés du panier
     const remainingPanier = candidat.panier.filter((id) => !tempSelection.includes(id));
+    const nowIso = new Date().toISOString();
     const updated: Candidat = {
       ...candidat,
       panier: remainingPanier,
       panierInteret: remainingPanier,
       candidatures: tempSelection,
       interets: tempSelection,
+      attesteLe: nowIso,
     };
     onUpdateCandidat(updated);
     storageService.setCandidat(updated);
@@ -555,7 +780,20 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
           })}
         </div>
 
-        <div className="pt-2 space-y-2">
+        <div className="pt-2 space-y-2.5">
+          {/* Case obligatoire Attestation sur l'honneur */}
+          <div className="p-3 bg-amber-50/80 border border-amber-200 rounded-xl space-y-1.5 shadow-xs">
+            <label className="flex items-start gap-2.5 text-xs text-amber-950 font-medium cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={certifieHonneur}
+                onChange={(e) => setCertifieHonneur(e.target.checked)}
+                className="w-4 h-4 mt-0.5 rounded text-emerald-600 focus:ring-emerald-500 border-amber-300 cursor-pointer shrink-0"
+              />
+              <span className="leading-snug">{fr.sujetsModule.attestationHonneurLabel}</span>
+            </label>
+          </div>
+
           {!isValidateActive && (
             <p className="text-[11px] text-amber-800 text-center font-medium bg-amber-50 p-2 rounded-lg border border-amber-200">
               {fr.sujetsModule.exact3Notice}
@@ -564,11 +802,11 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
 
           <button
             type="button"
-            disabled={!isValidateActive}
+            disabled={!isValidateActive || !certifieHonneur}
             onClick={handleValidateCandidatures}
             className={`w-full min-h-[48px] py-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 ${
-              isValidateActive
-                ? 'bg-emerald-700 hover:bg-emerald-800 text-white shadow-sm'
+              isValidateActive && certifieHonneur
+                ? 'bg-emerald-700 hover:bg-emerald-800 text-white shadow-sm cursor-pointer active:scale-98'
                 : 'bg-slate-200 text-slate-400 cursor-not-allowed'
             }`}
           >
@@ -576,10 +814,16 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
             <span>{fr.sujetsModule.btnValiderCandidatures}</span>
           </button>
 
+          {isValidateActive && !certifieHonneur && (
+            <p className="text-[11px] text-amber-800 text-center font-medium">
+              {fr.sujetsModule.attestationHonneurRequired}
+            </p>
+          )}
+
           <button
             type="button"
             onClick={() => setView('panier')}
-            className="w-full py-2 text-xs text-slate-600 hover:underline text-center"
+            className="w-full py-2 text-xs text-slate-600 hover:underline text-center cursor-pointer"
           >
             {fr.common.back}
           </button>
@@ -693,9 +937,107 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
   }
 
   /* ========================================================================= */
+  /* VUE 2b : VÉRIFICATION DU CODE SMS SIMULÉ (6 CHIFFRES)                     */
+  /* ========================================================================= */
+  if (view === 'verify_code') {
+    const isLocked = lockoutRemaining > 0;
+    return (
+      <div className="space-y-3.5 max-w-md mx-auto">
+        <div className="bg-slate-900 text-white rounded-xl p-3.5 space-y-1">
+          <div className="flex items-center gap-2">
+            <KeyRound size={16} className="text-amber-400" />
+            <h2 className="text-xs font-bold uppercase text-amber-300">
+              {fr.sujetsModule.codeVerificationTitle}
+            </h2>
+          </div>
+          <p className="text-[11px] text-slate-300">
+            {fr.sujetsModule.codeVerificationSub}
+          </p>
+        </div>
+
+        {verifyCodeError && (
+          <div className="p-3 rounded-xl bg-rose-50 border border-rose-300 text-rose-800 text-xs font-medium flex items-center gap-2">
+            <AlertTriangle size={15} className="text-rose-600 shrink-0" />
+            <span>{verifyCodeError}</span>
+          </div>
+        )}
+
+        {isLocked && (
+          <div className="p-3 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-xs font-medium flex items-center gap-2">
+            <Clock size={15} className="text-amber-700 shrink-0" />
+            <span>{fr.sujetsModule.codeBloque} ({lockoutRemaining}s)</span>
+          </div>
+        )}
+
+        <form onSubmit={handleVerifyCodeSubmit} className="bg-white border border-slate-200 rounded-xl p-4 space-y-3 shadow-xs">
+          <div>
+            <label className="block text-[11px] font-bold text-slate-700 mb-1">
+              {fr.sujetsModule.codeVerificationLabel} *
+            </label>
+            <input
+              type="text"
+              inputMode="numeric"
+              maxLength={6}
+              disabled={isLocked}
+              value={verifyCodeInput}
+              onChange={(e) => {
+                setVerifyCodeInput(e.target.value.replace(/\D/g, '').slice(0, 6));
+                setVerifyCodeError(null);
+              }}
+              placeholder={fr.sujetsModule.codeVerificationPlaceholder}
+              className={`w-full text-center tracking-widest text-lg font-mono p-2.5 rounded-lg border focus:outline-none transition ${
+                isLocked
+                  ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
+                  : 'bg-white border-slate-300 focus:ring-1 focus:ring-emerald-500'
+              }`}
+              required
+            />
+            <p className="text-[10px] text-slate-400 mt-1 text-center">
+              Consulte la cloche des Notifications en haut pour lire ton SMS simulé
+            </p>
+          </div>
+
+          <div className="pt-2 space-y-2">
+            <button
+              type="submit"
+              disabled={isLocked || verifyCodeInput.length !== 6}
+              className={`w-full min-h-[46px] py-2.5 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 shadow-xs ${
+                !isLocked && verifyCodeInput.length === 6
+                  ? 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer active:scale-98'
+                  : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+              }`}
+            >
+              <Check size={16} />
+              <span>{fr.sujetsModule.btnValiderCode}</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={isLocked}
+              onClick={handleResendCode}
+              className="w-full py-1.5 text-xs text-emerald-700 hover:underline text-center cursor-pointer disabled:text-slate-400 disabled:no-underline"
+            >
+              {fr.sujetsModule.btnRenvoyerCode}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setView('panier')}
+              className="w-full py-1 text-xs text-slate-500 hover:text-slate-800 text-center cursor-pointer"
+            >
+              {fr.common.cancel}
+            </button>
+          </div>
+        </form>
+      </div>
+    );
+  }
+
+  /* ========================================================================= */
   /* VUE PANIER (ILLIMITÉ)                                                     */
   /* ========================================================================= */
   if (view === 'panier') {
+    const isUnverified = Boolean(candidat.compteCree && candidat.verificationStatut === 'non_verifie');
     return (
       <div className="space-y-3.5">
         <div className="flex items-center justify-between pb-2 border-b border-slate-200">
@@ -707,14 +1049,33 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
           </div>
 
           {cartItems.length > 0 && (
-            <button
-              type="button"
-              onClick={handleStartCandidater}
-              className="min-h-[42px] px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-700 hover:bg-emerald-800 text-white transition flex items-center gap-1.5 shadow-xs"
-            >
-              <span>{fr.sujetsModule.btnCandidater}</span>
-              <ArrowRight size={14} />
-            </button>
+            <div className="flex flex-col items-end gap-1">
+              <button
+                type="button"
+                disabled={isUnverified}
+                onClick={handleStartCandidater}
+                className={`min-h-[42px] px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs ${
+                  isUnverified
+                    ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                    : 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer'
+                }`}
+              >
+                <span>{fr.sujetsModule.btnCandidater}</span>
+                <ArrowRight size={14} />
+              </button>
+              {isUnverified && (
+                <div className="flex items-center gap-1 text-[11px] text-amber-800 font-medium">
+                  <span>{fr.sujetsModule.compteNonVerifieNotice}</span>
+                  <button
+                    type="button"
+                    onClick={() => setView('verify_code')}
+                    className="text-emerald-700 font-bold underline hover:text-emerald-800 cursor-pointer"
+                  >
+                    {fr.sujetsModule.btnSaisirMonCode}
+                  </button>
+                </div>
+              )}
+            </div>
           )}
         </div>
 
@@ -787,15 +1148,32 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
               );
             })}
 
-            <div className="pt-2">
+            <div className="pt-2 space-y-1.5">
               <button
                 type="button"
+                disabled={isUnverified}
                 onClick={handleStartCandidater}
-                className="w-full min-h-[48px] py-3 rounded-xl font-bold text-xs bg-emerald-700 hover:bg-emerald-800 text-white transition flex items-center justify-center gap-2 shadow-xs"
+                className={`w-full min-h-[48px] py-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-2 shadow-xs ${
+                  isUnverified
+                    ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                    : 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer'
+                }`}
               >
                 <span>{fr.sujetsModule.btnCandidater}</span>
                 <ArrowRight size={16} />
               </button>
+              {isUnverified && (
+                <div className="flex items-center justify-center gap-1.5 text-[11px] text-amber-800 font-medium text-center">
+                  <span>{fr.sujetsModule.candidaterDisabledUnverifiedReason}</span>
+                  <button
+                    type="button"
+                    onClick={() => setView('verify_code')}
+                    className="text-emerald-700 font-bold underline hover:text-emerald-800 cursor-pointer"
+                  >
+                    {fr.sujetsModule.btnSaisirMonCode}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         )}

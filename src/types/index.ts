@@ -24,6 +24,12 @@ export interface Enseignant {
   structure: string;
 }
 
+export interface OcrResultatCIN {
+  nom: string;
+  cin: string;
+  confiance: number;
+}
+
 export interface Piece {
   type: PieceType;
   statut: PieceStatut;
@@ -32,6 +38,7 @@ export interface Piece {
   id?: string;
   candidatId?: string;
   dateMaj?: string;
+  ocrResultat?: OcrResultatCIN;
 }
 
 export type MotifCasParticulier = 'ATTESTATION_SANS_DIPLOME' | 'DIPLOME_ETRANGER' | 'INGENIEUR_SANS_LICENCE' | 'AUTRE';
@@ -43,6 +50,7 @@ export interface Candidature {
   sujetId?: string;
   candidatId?: string;
   statut: CandidatureStatut;
+  attesteLe?: string;
 }
 
 export interface Candidat {
@@ -67,6 +75,12 @@ export interface Candidat {
   // Aliases pour compatibilité
   panierInteret?: string[];
   interets?: string[];
+  // Garde-fous anti-fausses candidatures
+  verificationStatut?: 'non_verifie' | 'verifie';
+  verificationCode?: string;
+  verificationEssaisRestants?: number;
+  verificationBloqueJusqua?: number; // timestamp en millisecondes
+  attesteLe?: string;
 }
 
 export interface Notification {
@@ -75,6 +89,7 @@ export interface Notification {
   texte: string;
   date: string; /* ISO */
   lue: boolean;
+  canal?: 'email' | 'sms';
 }
 
 export interface Dossier {

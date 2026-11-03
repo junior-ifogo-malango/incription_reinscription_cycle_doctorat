@@ -1,10 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Camera, Upload, FileText, CheckCircle2, AlertCircle, X } from 'lucide-react';
-import { Piece, PieceType, Candidat, MotifCasParticulier } from '../types';
+import { Camera, Upload, FileText, CheckCircle2, AlertCircle, X, Eye, RotateCcw, Award, ShieldCheck } from 'lucide-react';
+import { Piece, PieceType, Candidat, MotifCasParticulier, PV } from '../types';
 import { ApogeeFictif } from '../data/mockData';
 import { StatusBadge } from './StatusBadge';
 import { CameraCapture } from './CameraCapture';
 import { fr } from '../i18n/fr';
+import { lireCIN, OcrResultatCIN } from '../utils/ocrSimule';
 
 const ORDERED_TYPES: PieceType[] = ['CIN', 'DIPLOME', 'RELEVES', 'CV'];
 
@@ -75,6 +76,16 @@ export const Dossier: React.FC = () => {
   const [apogeeMessage, setApogeeMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [cinInput, setCinInput] = useState<string>('');
   const [cinMessage, setCinMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [ocrLoading, setOcrLoading] = useState<boolean>(false);
+  const [ocrResult, setOcrResult] = useState<OcrResultatCIN | null>(null);
+  const [showOcrPanel, setShowOcrPanel] = useState<boolean>(false);
+  const [ocrEditNom, setOcrEditNom] = useState<string>('');
+  const [ocrEditCin, setOcrEditCin] = useState<string>('');
+  const [ecartChoix, setEcartChoix] = useState<'lue' | 'saisie' | null>(null);
+  const [cinImgError, setCinImgError] = useState<boolean>(false);
+  const [provenCinImgError, setProvenCinImgError] = useState<boolean>(false);
+  const [pvs, setPvs] = useState<PV[]>([]);
+  const [viewingPiece, setViewingPiece] = useState<Piece | null>(null);
 
   // Cas particulier & Guichet state
   const [casParticulier, setCasParticulier] = useState<boolean>(false);
@@ -87,79 +98,101 @@ export const Dossier: React.FC = () => {
 
   // Charger le candidat et ses données depuis le localStorage
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem('usmba_doctorat_candidat');
-      if (raw) {
-        const parsed: Candidat = JSON.parse(raw);
-        setCandidat(parsed);
-        if (parsed.cne) {
-          setApogeeCne(parsed.cne);
-        }
-        if (parsed.cin) {
-          setCinInput(parsed.cin);
-        }
-        if (parsed.dossier) {
-          setCasParticulier(Boolean(parsed.dossier.casParticulier));
-          setMotif(parsed.dossier.motif || '');
-          setMotifAutre(parsed.dossier.motifAutre || '');
-          setGuichet(Boolean(parsed.dossier.guichet));
-        }
+    const loadData = () => {
+      try {
+        const raw = localStorage.getItem('usmba_doctorat_candidat');
+        if (raw) {
+          const parsed: Candidat = JSON.parse(raw);
+          setCandidat(parsed);
+          if (parsed.cne) {
+            setApogeeCne(parsed.cne);
+          }
+          if (parsed.cin) {
+            setCinInput(parsed.cin);
+          }
+          if (parsed.dossier) {
+            setCasParticulier(Boolean(parsed.dossier.casParticulier));
+            setMotif(parsed.dossier.motif || '');
+            setMotifAutre(parsed.dossier.motifAutre || '');
+            setGuichet(Boolean(parsed.dossier.guichet));
+          }
 
-        // Si parsed.pieces existe
-        if (parsed.pieces && Array.isArray(parsed.pieces) && parsed.pieces.length > 0) {
-          const normalized = ORDERED_TYPES.map((t) => {
-            const found = parsed.pieces!.find(
-              (p) => p.type.toUpperCase() === t.toUpperCase()
-            );
-            return found ? { ...found, type: t } : { type: t, statut: 'absente' as const };
-          });
-          setPieces(normalized);
-          return;
+          // Si parsed.pieces existe
+          if (parsed.pieces && Array.isArray(parsed.pieces) && parsed.pieces.length > 0) {
+            const normalized = ORDERED_TYPES.map((t) => {
+              const found = parsed.pieces!.find(
+                (p) => p.type.toUpperCase() === t.toUpperCase()
+              );
+              return found ? { ...found, type: t } : { type: t, statut: 'absente' as const };
+            });
+            setPieces(normalized);
+          }
+        } else {
+          // Fallback depuis usmba_doctorat_pieces
+          const rawPieces = localStorage.getItem('usmba_doctorat_pieces');
+          if (rawPieces) {
+            const storedPieces: Piece[] = JSON.parse(rawPieces);
+            if (Array.isArray(storedPieces) && storedPieces.length > 0) {
+              const normalized = ORDERED_TYPES.map((t) => {
+                const found = storedPieces.find(
+                  (p) => p.type.toUpperCase() === t.toUpperCase()
+                );
+                return found ? { ...found, type: t } : { type: t, statut: 'absente' as const };
+              });
+              setPieces(normalized);
+            }
+          } else {
+            // Si c'est le profil démo Yassine initial
+            const initialList = YASSINE_INITIAL_PIECES;
+            localStorage.setItem('usmba_doctorat_pieces', JSON.stringify(initialList));
+            setPieces(initialList);
+          }
         }
+      } catch {
+        // safe fallback
       }
 
-      // Fallback depuis usmba_doctorat_pieces
-      const rawPieces = localStorage.getItem('usmba_doctorat_pieces');
-      if (rawPieces) {
-        const storedPieces: Piece[] = JSON.parse(rawPieces);
-        if (Array.isArray(storedPieces) && storedPieces.length > 0) {
-          const normalized = ORDERED_TYPES.map((t) => {
-            const found = storedPieces.find(
-              (p) => p.type.toUpperCase() === t.toUpperCase()
-            );
-            return found ? { ...found, type: t } : { type: t, statut: 'absente' as const };
-          });
-          setPieces(normalized);
-          return;
+      try {
+        const rawPvs = localStorage.getItem('usmba_doctorat_pvs');
+        if (rawPvs) {
+          setPvs(JSON.parse(rawPvs));
+        } else {
+          setPvs([]);
         }
+      } catch {
+        setPvs([]);
       }
+    };
 
-      // Si c'est le profil démo Yassine initial
-      const rawCand = raw ? JSON.parse(raw) : null;
-      const isYassine =
-        rawCand?.id === 'cand-001' ||
-        rawCand?.cne === 'N138249871' ||
-        rawCand?.nom?.toLowerCase().includes('yassine');
-
-      const initialList = isYassine ? YASSINE_INITIAL_PIECES : DEFAULT_PIECES;
-      if (rawCand) {
-        rawCand.pieces = initialList;
-        localStorage.setItem('usmba_doctorat_candidat', JSON.stringify(rawCand));
-      }
-      localStorage.setItem('usmba_doctorat_pieces', JSON.stringify(initialList));
-      setPieces(initialList);
-      return;
-    } catch {
-      // safe fallback
-    }
-    setPieces(DEFAULT_PIECES);
+    loadData();
+    window.addEventListener('usmba_pvs_updated', loadData);
+    window.addEventListener('usmba_pieces_updated', loadData);
+    window.addEventListener('storage', loadData);
+    return () => {
+      window.removeEventListener('usmba_pvs_updated', loadData);
+      window.removeEventListener('usmba_pieces_updated', loadData);
+      window.removeEventListener('storage', loadData);
+    };
   }, []);
 
-  // Détection candidat retenu : au moins une candidature avec statut 'retenue'
-  const isRetenu = Boolean(
+  // PVs actifs publiés et non remplacés
+  const activePublishedPvs = pvs.filter((pv) => Boolean(pv.publieLe) && !pv.remplaceePar);
+  const candidatResultat = activePublishedPvs
+    .flatMap((pv) => pv.resultats || [])
+    .find(
+      (r) =>
+        r.candidatId === candidat?.id ||
+        (candidat?.id === 'cand-001' && r.candidatId === 'cand-001')
+    );
+
+  // 2. peutProuver = le candidat a au moins une candidature de statut 'retenue' (libellé « Validée »),
+  // OU un PV non remplacé, publié, contient un Resultat ADMIS pour lui.
+  const hasRetenueCandidature = Boolean(
     candidat?.candidaturesStatuts &&
     Object.values(candidat.candidaturesStatuts).some((s) => s === 'retenue')
   );
+  const isAdmisPv = candidatResultat?.resultat === 'ADMIS';
+  const peutProuver = hasRetenueCandidature || isAdmisPv;
 
   const savePieces = (updatedPieces: Piece[]): boolean => {
     try {
@@ -225,6 +258,54 @@ export const Dossier: React.FC = () => {
     savePieces(updated);
   };
 
+  const demarrerOcr = (dataUrl: string) => {
+    setOcrLoading(true);
+    setOcrResult(null);
+    setShowOcrPanel(false);
+    setCinImgError(false);
+    setEcartChoix(null);
+
+    const currentCinSaisi = candidat?.cin || cinInput;
+    lireCIN(dataUrl, currentCinSaisi).then((res) => {
+      setOcrLoading(false);
+      setOcrResult(res);
+      setOcrEditNom(res.nom);
+      setOcrEditCin(res.cin);
+    });
+  };
+
+  const handleConfirmerPieceCin = () => {
+    const cleanNom = ocrEditNom.trim();
+    const cleanCin = ocrEditCin.trim().toUpperCase();
+
+    try {
+      const raw = localStorage.getItem('usmba_doctorat_candidat');
+      const curCandidat: Candidat = raw ? JSON.parse(raw) : (candidat || {});
+      curCandidat.nom = cleanNom;
+      curCandidat.cin = cleanCin;
+      localStorage.setItem('usmba_doctorat_candidat', JSON.stringify(curCandidat));
+      setCandidat(curCandidat);
+      setCinInput(cleanCin);
+    } catch {
+      // safe fallback
+    }
+
+    handleUpdatePiece('CIN', {
+      statut: 'prouvee',
+      ocrResultat: ocrResult || undefined,
+    });
+
+    setShowOcrPanel(false);
+    setOcrResult(null);
+  };
+
+  const handleRefairePhoto = () => {
+    setShowOcrPanel(false);
+    setOcrResult(null);
+    setOcrLoading(false);
+    setActiveCameraPiece('CIN');
+  };
+
   const handleFileUpload = (type: PieceType, e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -246,11 +327,20 @@ export const Dossier: React.FC = () => {
       if (!isPdf && (file.type.startsWith('image/') || result.startsWith('data:image'))) {
         result = await compressImageDataUrl(result);
       }
-      handleUpdatePiece(type, {
-        statut: 'prouvee',
-        source: 'televersement',
-        fichier: result,
-      });
+      if (type.toUpperCase() === 'CIN') {
+        handleUpdatePiece(type, {
+          statut: 'declaree',
+          source: 'televersement',
+          fichier: result,
+        });
+        demarrerOcr(result);
+      } else {
+        handleUpdatePiece(type, {
+          statut: 'prouvee',
+          source: 'televersement',
+          fichier: result,
+        });
+      }
     };
     reader.readAsDataURL(file);
     e.target.value = '';
@@ -258,12 +348,22 @@ export const Dossier: React.FC = () => {
 
   const handleCaptureSuccess = (dataUrl: string) => {
     if (activeCameraPiece) {
-      handleUpdatePiece(activeCameraPiece, {
-        statut: 'prouvee',
-        source: 'camera',
-        fichier: dataUrl,
-      });
-      setActiveCameraPiece(null);
+      if (activeCameraPiece.toUpperCase() === 'CIN') {
+        handleUpdatePiece(activeCameraPiece, {
+          statut: 'declaree',
+          source: 'camera',
+          fichier: dataUrl,
+        });
+        setActiveCameraPiece(null);
+        demarrerOcr(dataUrl);
+      } else {
+        handleUpdatePiece(activeCameraPiece, {
+          statut: 'prouvee',
+          source: 'camera',
+          fichier: dataUrl,
+        });
+        setActiveCameraPiece(null);
+      }
     }
   };
 
@@ -437,11 +537,15 @@ export const Dossier: React.FC = () => {
 
   return (
     <div className="space-y-4 max-w-2xl mx-auto">
-      {/* 1. Ligne en haut si Retenu : « Tu es retenu : fournis les preuves manquantes » */}
-      {isRetenu && piecesProuvees < 4 && (
+      {/* 1. Ligne en haut si peutProuver : bandeau dynamique */}
+      {peutProuver && piecesProuvees < 4 && (
         <div className="bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-2xl px-4 py-3 text-xs font-semibold flex items-center gap-2 shadow-xs">
           <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
-          <span>{fr.dossier.retenuBanner}</span>
+          <span>
+            {isAdmisPv
+              ? fr.dossier.bannerAdmisPreuves
+              : fr.dossier.bannerConvoquePreuves}
+          </span>
         </div>
       )}
 
@@ -551,20 +655,34 @@ export const Dossier: React.FC = () => {
                   )}
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap justify-end">
-                  {/* Si retenu et non prouvée : badge « Preuve à fournir » */}
-                  {isRetenu && !isProven && (
+                  {/* Si peutProuver et pièce déclarée : badge « Preuve à fournir » */}
+                  {peutProuver && piece.statut === 'declaree' && (
                     <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
                       <AlertCircle size={12} className="shrink-0" />
                       <span>{fr.dossier.preuveAFournir}</span>
                     </span>
                   )}
+                  {/* Niveau de confiance sur chaque pièce prouvée */}
+                  {isProven && (
+                    piece.source === 'apogee' ? (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full shadow-2xs">
+                        <ShieldCheck size={12} className="text-emerald-700 shrink-0" />
+                        <span>{fr.dossier.confianceApogee}</span>
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-bold text-blue-800 bg-blue-50 border border-blue-200 px-2.5 py-0.5 rounded-full shadow-2xs">
+                        <AlertCircle size={12} className="text-blue-600 shrink-0" />
+                        <span>{fr.dossier.confianceAutre}</span>
+                      </span>
+                    )
+                  )}
                   <StatusBadge type="piece" statut={piece.statut} size="sm" />
                 </div>
               </div>
 
-              {/* RÈGLE NON RETENU : case à cocher « Je déclare avoir cette pièce » si non prouvée */}
-              {!isRetenu && !isProven && (
-                <div className="pt-2 border-t border-slate-100">
+              {/* RÈGLE NON PEUT PROUVER : case à cocher « Je déclare avoir cette pièce » + phrase explicative */}
+              {!peutProuver && !isProven && (
+                <div className="pt-2 border-t border-slate-100 space-y-1.5">
                   <label className="flex items-center gap-2.5 text-xs text-slate-700 cursor-pointer select-none">
                     <input
                       type="checkbox"
@@ -572,6 +690,32 @@ export const Dossier: React.FC = () => {
                       onChange={(e) => {
                         const newStatut = e.target.checked ? 'declaree' : 'absente';
                         handleUpdatePiece(type, { statut: newStatut });
+                      }}
+                      className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 cursor-pointer"
+                    />
+                    <span className="font-medium">{fr.dossier.declarePiece}</span>
+                  </label>
+                  <p className="text-xs text-slate-500 pl-6.5">
+                    {candidatResultat?.resultat === 'LISTE_COMPLEMENTAIRE'
+                      ? fr.dossier.explicationListeAttente
+                      : candidatResultat?.resultat === 'REFUSE'
+                      ? fr.dossier.explicationRefuse
+                      : fr.dossier.explicationNonValide}
+                  </p>
+                </div>
+              )}
+
+              {/* RÈGLE PEUT PROUVER ET PIÈCE ABSENTE : case à cocher pour déclarer */}
+              {peutProuver && piece.statut === 'absente' && (
+                <div className="pt-2 border-t border-slate-100">
+                  <label className="flex items-center gap-2.5 text-xs text-slate-700 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={false}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          handleUpdatePiece(type, { statut: 'declaree' });
+                        }
                       }}
                       className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 cursor-pointer"
                     />
@@ -616,6 +760,190 @@ export const Dossier: React.FC = () => {
                   )}
                 </div>
               )}
+
+              {/* État OCR en cours sur la carte CIN */}
+              {isCin && ocrLoading && (
+                <div className="flex items-center gap-2.5 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800">
+                  <div className="w-4 h-4 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin shrink-0" />
+                  <span className="font-semibold">{fr.dossier.ocrLectureEnCours}</span>
+                </div>
+              )}
+
+              {/* Bouton pour afficher les informations extraites après lecture */}
+              {isCin && !ocrLoading && ocrResult && !showOcrPanel && (
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setShowOcrPanel(true)}
+                    className="w-full min-h-[40px] px-3.5 py-2 text-xs font-semibold rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white transition-colors cursor-pointer flex items-center justify-center gap-2 shadow-xs active:scale-98"
+                  >
+                    <FileText size={15} />
+                    <span>{fr.dossier.ocrAfficherInfos}</span>
+                  </button>
+                </div>
+              )}
+
+              {/* Panneau d'informations extraites OCR */}
+              {isCin && showOcrPanel && ocrResult && (() => {
+                const cinSaisiRef = (candidat?.cin || cinInput || '').trim().toUpperCase();
+                const curCinClean = ocrEditCin.trim().toUpperCase();
+                const isCinFormatValid = /^[A-Z]{1,2}[0-9]{5,6}$/.test(curCinClean);
+                const hasEcart = Boolean(cinSaisiRef && curCinClean !== cinSaisiRef);
+                const isEcartResolu = !hasEcart || ecartChoix === 'lue';
+
+                let ocrDisabledReason: string | null = null;
+                if (!ocrEditNom.trim()) {
+                  ocrDisabledReason = fr.dossier.ocrNomRequis;
+                } else if (!ocrEditCin.trim()) {
+                  ocrDisabledReason = fr.dossier.ocrCinRequis;
+                } else if (!isCinFormatValid) {
+                  ocrDisabledReason = fr.dossier.ocrCinFormatInvalide;
+                } else if (hasEcart && !isEcartResolu) {
+                  ocrDisabledReason = fr.dossier.ocrEcartNonResolu;
+                }
+
+                const isOcrConfirmDisabled = ocrDisabledReason !== null;
+
+                return (
+                  <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5 space-y-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="text-xs text-slate-600 font-medium leading-relaxed">
+                        {fr.dossier.ocrSimulationAvertissement}
+                      </p>
+                      {ocrResult.confiance < 0.8 && (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-800 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-full shrink-0">
+                          <AlertCircle size={12} className="shrink-0" />
+                          <span>{fr.dossier.ocrAVerifier}</span>
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex items-start gap-3">
+                      <div className="w-24 h-24 shrink-0 rounded-xl overflow-hidden border border-slate-200 bg-white flex flex-col items-center justify-center p-1 relative shadow-xs">
+                        {!cinImgError && piece.fichier ? (
+                          <img
+                            src={piece.fichier}
+                            alt={getPieceName(type)}
+                            onError={() => setCinImgError(true)}
+                            className="w-full h-full object-cover rounded-lg"
+                          />
+                        ) : (
+                          <div className="w-full h-full flex flex-col items-center justify-center gap-1 text-slate-400 p-1 text-center overflow-hidden">
+                            <FileText size={22} className="shrink-0 text-slate-400" />
+                            <span className="text-xs text-slate-600 font-medium truncate w-full text-center block">
+                              {getPieceName(type)}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex-1 space-y-2 min-w-0">
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 mb-0.5">
+                            {fr.dossier.ocrChampNom}
+                          </label>
+                          <input
+                            type="text"
+                            value={ocrEditNom}
+                            onChange={(e) => setOcrEditNom(e.target.value)}
+                            className="w-full min-h-[36px] px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-600"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 mb-0.5">
+                            {fr.dossier.ocrChampCin}
+                          </label>
+                          <input
+                            type="text"
+                            value={ocrEditCin}
+                            onChange={(e) => {
+                              setOcrEditCin(e.target.value);
+                              setEcartChoix(null);
+                            }}
+                            className="w-full min-h-[36px] px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-600 font-mono uppercase"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {hasEcart && (
+                      <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 space-y-2">
+                        <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-900">
+                          <AlertCircle size={14} className="shrink-0 text-amber-700" />
+                          <span>{fr.dossier.ocrEcartNumero}</span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOcrEditCin(ocrResult.cin);
+                              setEcartChoix('lue');
+                            }}
+                            className={`p-2 rounded-lg border text-left transition-colors cursor-pointer ${
+                              ecartChoix === 'lue' || curCinClean === ocrResult.cin.toUpperCase()
+                                ? 'bg-amber-100 border-amber-400 text-amber-900 font-bold'
+                                : 'bg-white border-amber-200 text-amber-800 hover:bg-amber-50'
+                            }`}
+                          >
+                            <div className="text-[10px] text-amber-700 font-medium">{fr.dossier.ocrValeurLue}</div>
+                            <div className="font-mono font-bold truncate">{ocrResult.cin}</div>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOcrEditCin(cinSaisiRef);
+                              setEcartChoix('saisie');
+                            }}
+                            className={`p-2 rounded-lg border text-left transition-colors cursor-pointer ${
+                              ecartChoix === 'saisie' || curCinClean === cinSaisiRef
+                                ? 'bg-amber-100 border-amber-400 text-amber-900 font-bold'
+                                : 'bg-white border-amber-200 text-amber-800 hover:bg-amber-50'
+                            }`}
+                          >
+                            <div className="text-[10px] text-amber-700 font-medium">{fr.dossier.ocrValeurSaisie}</div>
+                            <div className="font-mono font-bold truncate">{cinSaisiRef}</div>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="space-y-1.5 pt-1">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleConfirmerPieceCin}
+                          disabled={isOcrConfirmDisabled}
+                          className={`flex-1 min-h-[40px] px-3 py-2 rounded-xl text-xs font-semibold transition-colors flex items-center justify-center gap-1.5 ${
+                            !isOcrConfirmDisabled
+                              ? 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer shadow-xs active:scale-98'
+                              : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                          }`}
+                        >
+                          <CheckCircle2 size={15} />
+                          <span>{fr.dossier.ocrConfirmerPiece}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={handleRefairePhoto}
+                          className="flex-1 min-h-[40px] px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition-colors cursor-pointer active:scale-98 flex items-center justify-center gap-1.5"
+                        >
+                          <Camera size={15} />
+                          <span>{fr.dossier.ocrRefairePhoto}</span>
+                        </button>
+                      </div>
+
+                      {ocrDisabledReason && (
+                        <p className="text-xs text-amber-700 font-medium text-center">
+                          {ocrDisabledReason}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Champ CNE existant (avec consentement) sur la carte DIPLOME */}
               {isDiplome && (
@@ -678,59 +1006,119 @@ export const Dossier: React.FC = () => {
                 </div>
               )}
 
-              {/* Aperçu miniature si image (visible si pièce prouvée) */}
-              {isProven && isImage && piece.fichier && (
-                <div className="pt-1">
-                  <img
-                    src={piece.fichier}
-                    alt={getPieceName(type)}
-                    className="w-24 h-16 object-cover rounded-xl border border-slate-200 shadow-xs"
-                  />
+              {/* Pièce 'prouvee' (CIN, diplôme Apogée, etc.) : aperçu + boutons Voir et Remplacer */}
+              {isProven && !showOcrPanel && (
+                <div className="pt-2 border-t border-slate-100 space-y-2">
+                  <div className="flex items-center gap-2 flex-wrap justify-between">
+                    {/* Miniature ou résumé */}
+                    {isImage && piece.fichier ? (
+                      <div className="flex items-center gap-2">
+                        {!provenCinImgError ? (
+                          <img
+                            src={piece.fichier}
+                            alt={getPieceName(type)}
+                            onClick={() => setViewingPiece(piece)}
+                            onError={() => {
+                              if (isCin) setProvenCinImgError(true);
+                            }}
+                            className="w-16 h-11 object-cover rounded-lg border border-slate-200 shadow-xs cursor-pointer hover:opacity-90 transition-opacity"
+                          />
+                        ) : (
+                          <div
+                            onClick={() => setViewingPiece(piece)}
+                            className="w-16 h-11 rounded-lg border border-slate-200 bg-slate-50 flex flex-col items-center justify-center p-1 cursor-pointer hover:bg-slate-100 transition-colors"
+                          >
+                            <FileText size={16} className="text-slate-400" />
+                          </div>
+                        )}
+                        <span className="text-[11px] text-slate-500 font-medium truncate max-w-[130px]">
+                          {piece.source === 'camera' ? 'Photo prise' : 'Fichier image'}
+                        </span>
+                      </div>
+                    ) : isDiplome && piece.source === 'apogee' ? (
+                      <div className="flex items-center gap-1.5 text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1.5 flex-1 min-w-0">
+                        <Award size={14} className="text-emerald-700 shrink-0" />
+                        <span className="truncate font-semibold">{piece.fichier || fr.dossier.apogeeDiplomeTitle}</span>
+                      </div>
+                    ) : isPdf ? (
+                      <div className="flex items-center gap-1.5 text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 flex-1 min-w-0">
+                        <FileText size={14} className="text-slate-400 shrink-0" />
+                        <span className="truncate font-medium">{piece.fichier?.startsWith('data:') ? fr.dossier.pdfDocument : (piece.fichier || fr.dossier.pdfDocument)}</span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1.5 text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 flex-1 min-w-0">
+                        <CheckCircle2 size={14} className="text-emerald-600 shrink-0" />
+                        <span className="truncate font-medium">{piece.fichier || 'Pièce validée'}</span>
+                      </div>
+                    )}
+
+                    {/* Boutons Voir et Remplacer */}
+                    <div className="flex items-center gap-1.5 ml-auto">
+                      <button
+                        type="button"
+                        onClick={() => setViewingPiece(piece)}
+                        className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 hover:border-slate-400 transition-colors cursor-pointer flex items-center gap-1 active:scale-98"
+                      >
+                        <Eye size={13} className="text-slate-500" />
+                        <span>{fr.dossier.btnVoirPiece}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleUpdatePiece(type, { statut: 'declaree' });
+                          if (isCin) {
+                            setShowOcrPanel(false);
+                            setOcrResult(null);
+                            setOcrLoading(false);
+                          }
+                        }}
+                        className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-rose-200 text-rose-700 hover:bg-rose-50 transition-colors cursor-pointer flex items-center gap-1 active:scale-98"
+                      >
+                        <RotateCcw size={13} className="text-rose-600" />
+                        <span>{fr.dossier.btnRemplacerPiece}</span>
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
 
-              {isProven && isPdf && !isImage && (
-                <div className="flex items-center gap-2 text-xs text-slate-600 bg-slate-50 border border-slate-100 rounded-xl px-2.5 py-1.5 w-fit">
-                  <FileText size={15} className="text-slate-400 shrink-0" />
-                  <span className="text-[11px] font-medium truncate max-w-[180px]">
-                    {piece.fichier?.startsWith('data:')
-                      ? fr.dossier.pdfDocument
-                      : piece.fichier}
-                  </span>
-                </div>
-              )}
+              {/* RÈGLE PEUT PROUVER : boutons visibles pour chaque pièce au statut 'declaree' */}
+              {peutProuver && piece.statut === 'declaree' && (!isCin || (!showOcrPanel && !ocrLoading)) && (
+                <div className="space-y-1.5 pt-2 border-t border-slate-100">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setActiveCameraPiece(type)}
+                      className="flex-1 min-h-[40px] px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer active:scale-98"
+                    >
+                      <Camera size={15} />
+                      <span>{fr.dossier.takePhoto}</span>
+                    </button>
 
-              {/* RÈGLE RETENU : les boutons de preuve réapparaissent */}
-              {isRetenu && (
-                <div className="flex items-center gap-2 pt-1 border-t border-slate-100">
-                  <button
-                    type="button"
-                    onClick={() => setActiveCameraPiece(type)}
-                    className="flex-1 min-h-[40px] px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer active:scale-98"
-                  >
-                    <Camera size={15} />
-                    <span>{fr.dossier.takePhoto}</span>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => fileInputRefs.current[type]?.click()}
+                      className="flex-1 min-h-[40px] px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer active:scale-98"
+                    >
+                      <Upload size={15} />
+                      <span>{fr.dossier.upload}</span>
+                    </button>
 
-                  <button
-                    type="button"
-                    onClick={() => fileInputRefs.current[type]?.click()}
-                    className="flex-1 min-h-[40px] px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer active:scale-98"
-                  >
-                    <Upload size={15} />
-                    <span>{fr.dossier.upload}</span>
-                  </button>
-
-                  {/* Input fichier caché */}
-                  <input
-                    type="file"
-                    accept="image/*,application/pdf"
-                    ref={(el) => {
-                      fileInputRefs.current[type] = el;
-                    }}
-                    onChange={(e) => handleFileUpload(type, e)}
-                    className="hidden"
-                  />
+                    {/* Input fichier caché */}
+                    <input
+                      type="file"
+                      accept="image/*,application/pdf"
+                      ref={(el) => {
+                        fileInputRefs.current[type] = el;
+                      }}
+                      onChange={(e) => handleFileUpload(type, e)}
+                      className="hidden"
+                    />
+                  </div>
+                  <p className="text-xs text-slate-500">
+                    {fr.dossier.noteScanOriginal}
+                  </p>
                 </div>
               )}
             </div>
@@ -887,6 +1275,88 @@ export const Dossier: React.FC = () => {
           onClose={() => setActiveCameraPiece(null)}
           onErrorFallback={() => handleCameraErrorFallback(activeCameraPiece)}
         />
+      )}
+
+      {/* Modal Aperçu Agrandie (Voir) */}
+      {viewingPiece && (
+        <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl max-w-lg w-full overflow-hidden shadow-2xl border border-slate-200 flex flex-col max-h-[90vh]">
+            {/* En-tête modal */}
+            <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+              <div className="flex items-center gap-2 min-w-0">
+                <Eye size={16} className="text-emerald-700 shrink-0" />
+                <h3 className="text-xs font-bold text-slate-900 truncate">
+                  {getPieceName(viewingPiece.type)}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setViewingPiece(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-200 transition-colors cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Corps modal : aperçu agrandi */}
+            <div className="p-4 overflow-y-auto flex-1 flex flex-col items-center justify-center bg-slate-100/60 min-h-[220px]">
+              {isImageFile(viewingPiece.fichier) ? (
+                <img
+                  src={viewingPiece.fichier}
+                  alt={getPieceName(viewingPiece.type)}
+                  className="max-h-[65vh] w-auto max-w-full object-contain rounded-xl border border-slate-300 shadow-md bg-white"
+                />
+              ) : viewingPiece.source === 'apogee' ? (
+                <div className="bg-white border border-emerald-200 rounded-2xl p-6 text-center space-y-3 max-w-md w-full shadow-sm">
+                  <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center mx-auto">
+                    <Award size={26} />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-900">
+                      {fr.dossier.apogeeDiplomeTitle}
+                    </h4>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      {fr.dossier.apogeeDiplomeDesc}
+                    </p>
+                  </div>
+                  <div className="p-3 bg-emerald-50/80 rounded-xl border border-emerald-100 text-xs text-emerald-950 font-semibold">
+                    {viewingPiece.fichier || 'Master / Diplôme certifié USMBA'}
+                  </div>
+                  {candidat?.cne && (
+                    <p className="text-[11px] text-slate-400 font-mono">
+                      CNE : {candidat.cne}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div className="bg-white border border-slate-200 rounded-2xl p-6 text-center space-y-3 max-w-md w-full shadow-sm">
+                  <FileText size={36} className="text-slate-400 mx-auto" />
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-900">
+                      {fr.dossier.pdfDocument}
+                    </h4>
+                    <p className="text-xs text-slate-500 font-mono mt-1 break-all">
+                      {viewingPiece.fichier?.startsWith('data:')
+                        ? 'document_televerse.pdf'
+                        : (viewingPiece.fichier || 'document.pdf')}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Pied modal */}
+            <div className="px-4 py-2.5 border-t border-slate-200 bg-white flex justify-end">
+              <button
+                type="button"
+                onClick={() => setViewingPiece(null)}
+                className="px-4 py-1.5 rounded-xl text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-white transition-colors cursor-pointer"
+              >
+                {fr.dossier.close}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
