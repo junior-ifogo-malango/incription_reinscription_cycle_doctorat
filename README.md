@@ -6,11 +6,13 @@
 
 
 # Espace Candidat
+
 ## page mon dossier
 <img width="1645" height="825" alt="image" src="https://github.com/user-attachments/assets/df9d62c4-a9c1-4d27-8587-a928f57beff0" />
+<img width="1657" height="825" alt="image" src="https://github.com/user-attachments/assets/8e8da3c1-8ce8-4438-8ac1-379c610c331b" />
 ## page Entretien
 <img width="1663" height="592" alt="image" src="https://github.com/user-attachments/assets/e0a5ee52-c210-40cc-a987-bc3c608a045c" />
-<img width="1657" height="825" alt="image" src="https://github.com/user-attachments/assets/8e8da3c1-8ce8-4438-8ac1-379c610c331b" />
+
 
 # Espace Directeur de these
 <img width="1666" height="841" alt="image" src="https://github.com/user-attachments/assets/0bf59239-6ed7-4ecc-a7f7-b1523c037ef3" />
@@ -20,7 +22,10 @@
 ## Page Commission pour le PV
 <img width="1648" height="613" alt="image" src="https://github.com/user-attachments/assets/695388a4-2ac5-40d7-b93e-77e4fd71ec98" />
 <img width="1662" height="400" alt="image" src="https://github.com/user-attachments/assets/85f129e6-3c5f-4c0a-bcd8-18d91a846131" />
+
 # Espace CED/Structure
+
+
 ## page  seances pv et publication de resultat
 <img width="1656" height="816" alt="image" src="https://github.com/user-attachments/assets/a5ad8d72-2f7c-4dea-a84c-c21aa4a18cd6" />
 ## Reinscription
