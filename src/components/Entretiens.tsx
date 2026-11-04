@@ -4,17 +4,41 @@ import { Creneau, CreneauStatut, Candidat, Sujet, Enseignant, PV } from '../type
 import { fr } from '../i18n/fr';
 import { StatusBadge } from './StatusBadge';
 import { storageService } from '../services/storage';
+import { ProgressionCandidat } from './ProgressionCandidat';
 
 const STORAGE_KEY_CRENEAUX = 'usmba_doctorat_creneaux';
 const STORAGE_KEY_CANDIDAT = 'usmba_doctorat_candidat';
 
-export const Entretiens: React.FC = () => {
-  const [candidat, setCandidat] = useState<Candidat>(storageService.getCandidat());
+interface EntretiensProps {
+  candidat?: Candidat;
+  onNavigate?: (tab: any) => void;
+}
+
+export const Entretiens: React.FC<EntretiensProps> = ({
+  candidat: propsCandidat,
+  onNavigate,
+}) => {
+  const [candidat, setCandidat] = useState<Candidat>(() => {
+    if (propsCandidat) return propsCandidat;
+    try {
+      const rawCand = localStorage.getItem(STORAGE_KEY_CANDIDAT);
+      if (rawCand) return JSON.parse(rawCand);
+      return storageService.getCandidat();
+    } catch {
+      return storageService.getCandidat();
+    }
+  });
   const [creneaux, setCreneaux] = useState<Creneau[]>([]);
   const [sujets, setSujets] = useState<Sujet[]>([]);
   const [enseignants, setEnseignants] = useState<Enseignant[]>([]);
   const [pvs, setPvs] = useState<PV[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (propsCandidat) {
+      setCandidat(propsCandidat);
+    }
+  }, [propsCandidat]);
 
   useEffect(() => {
     loadData();
@@ -34,11 +58,13 @@ export const Entretiens: React.FC = () => {
       const rawCand = localStorage.getItem(STORAGE_KEY_CANDIDAT);
       if (rawCand) {
         setCandidat(JSON.parse(rawCand));
+      } else if (propsCandidat) {
+        setCandidat(propsCandidat);
       } else {
         setCandidat(storageService.getCandidat());
       }
     } catch {
-      setCandidat(storageService.getCandidat());
+      setCandidat(propsCandidat || storageService.getCandidat());
     }
 
     try {
@@ -255,53 +281,57 @@ export const Entretiens: React.FC = () => {
       return a.heure.localeCompare(b.heure);
     });
 
-  // CAS 1 : Candidat NON retenu
-  if (!isRetenu) {
-    return (
-      <div className="space-y-4">
-        <div className="bg-slate-900 text-white rounded-xl p-4 flex items-center justify-between shadow-xs">
-          <div>
-            <h2 className="text-sm font-bold text-amber-300">
-              {fr.entretiens.title}
-            </h2>
-            <p className="text-xs text-slate-300 mt-0.5">
-              Auditions doctorales CED USMBA
-            </p>
-          </div>
-          <div className="w-9 h-9 rounded-lg bg-slate-800 text-amber-300 flex items-center justify-center">
-            <Calendar size={18} />
-          </div>
-        </div>
-
-        <div className="bg-white border border-slate-200 rounded-xl p-6 text-center space-y-3 shadow-xs">
-          <div className="w-11 h-11 mx-auto rounded-full bg-slate-100 text-slate-500 flex items-center justify-center">
-            <Calendar size={22} />
-          </div>
-          <p className="text-sm font-medium text-slate-700 max-w-md mx-auto">
-            {fr.entretiens.notRetainedNotice}
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  // CAS 2 : Candidat RETENU
   return (
     <div className="space-y-4">
-      {/* En-tête */}
-      <div className="bg-slate-900 text-white rounded-xl p-4 flex items-center justify-between shadow-xs">
-        <div>
-          <h2 className="text-sm font-bold text-amber-300">
-            {fr.entretiens.title}
-          </h2>
-          <p className="text-xs text-slate-300 mt-0.5">
-            Candidature retenue : choisis et confirme ton créneau d'audition
-          </p>
-        </div>
-        <div className="w-9 h-9 rounded-lg bg-slate-800 text-amber-300 flex items-center justify-center">
-          <Calendar size={18} />
-        </div>
-      </div>
+      {/* 1. ProgressionCandidat TOUT EN HAUT du rendu, avant tout message conditionnel */}
+      <ProgressionCandidat
+        candidatId={candidat.id}
+        candidat={candidat}
+        onNavigate={onNavigate}
+      />
+
+      {/* CAS 1 : Candidat NON retenu */}
+      {!isRetenu ? (
+        <>
+          <div className="bg-slate-900 text-white rounded-xl p-4 flex items-center justify-between shadow-xs">
+            <div>
+              <h2 className="text-sm font-bold text-amber-300">
+                {fr.entretiens.title}
+              </h2>
+              <p className="text-xs text-slate-300 mt-0.5">
+                Auditions doctorales CED USMBA
+              </p>
+            </div>
+            <div className="w-9 h-9 rounded-lg bg-slate-800 text-amber-300 flex items-center justify-center">
+              <Calendar size={18} />
+            </div>
+          </div>
+
+          <div className="bg-white border border-slate-200 rounded-xl p-6 text-center space-y-3 shadow-xs">
+            <div className="w-11 h-11 mx-auto rounded-full bg-slate-100 text-slate-500 flex items-center justify-center">
+              <Calendar size={22} />
+            </div>
+            <p className="text-sm font-medium text-slate-700 max-w-md mx-auto">
+              {fr.entretiens.notRetainedNotice}
+            </p>
+          </div>
+        </>
+      ) : (
+        <>
+          {/* En-tête */}
+          <div className="bg-slate-900 text-white rounded-xl p-4 flex items-center justify-between shadow-xs">
+            <div>
+              <h2 className="text-sm font-bold text-amber-300">
+                {fr.entretiens.title}
+              </h2>
+              <p className="text-xs text-slate-300 mt-0.5">
+                Candidature retenue : choisis et confirme ton créneau d'audition
+              </p>
+            </div>
+            <div className="w-9 h-9 rounded-lg bg-slate-800 text-amber-300 flex items-center justify-center">
+              <Calendar size={18} />
+            </div>
+          </div>
 
       {errorMsg && (
         <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center gap-2">
@@ -312,7 +342,7 @@ export const Entretiens: React.FC = () => {
 
       {/* Carte « Mon résultat » en haut si le candidat a un entretien confirmé */}
       {creneauConfirme && (
-        <div className="bg-white border-2 border-slate-200 rounded-xl p-4 shadow-sm space-y-3">
+        <div id="mon-resultat" className="bg-white border-2 border-slate-200 rounded-xl p-4 shadow-sm space-y-3">
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wide flex items-center gap-1.5">
               <Award size={15} className="text-amber-500" />
@@ -472,7 +502,7 @@ export const Entretiens: React.FC = () => {
       )}
 
       {/* Liste des créneaux disponibles */}
-      <div className="space-y-2">
+      <div id="creneaux-section" className="space-y-2">
         <div className="flex items-center justify-between px-1">
           <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wide">
             {fr.entretiens.availableSlotsTitle}
@@ -543,6 +573,8 @@ export const Entretiens: React.FC = () => {
           </div>
         )}
       </div>
+        </>
+      )}
     </div>
   );
 };

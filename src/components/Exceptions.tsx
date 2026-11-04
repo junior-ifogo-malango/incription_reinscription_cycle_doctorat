@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { Creneau, Enseignant, Candidat, Rapport, PV } from '../types';
 import { storageService } from '../services/storage';
-import { INITIAL_RAPPORTS } from '../data/mockData';
+import { INITIAL_RAPPORTS, MOCK_CANDIDATS } from '../data/mockData';
 import { fr } from '../i18n/fr';
 
 // Constante unique du seuil d'inactivité (48 heures)
@@ -244,33 +244,86 @@ export const Exceptions: React.FC = () => {
     cne: string;
     piecesPretes: number;
     motif?: string;
+    statut: string;
+    statutRaw?: string;
+    agent: string;
+    derniereAction: string;
   }
+
+  const tousCandidats: Candidat[] = [...MOCK_CANDIDATS];
+  try {
+    const rawCur = localStorage.getItem('usmba_doctorat_candidat');
+    if (rawCur) {
+      const cur: Candidat = JSON.parse(rawCur);
+      const idx = tousCandidats.findIndex((c) => c.id === cur.id);
+      if (idx !== -1) tousCandidats[idx] = cur;
+      else tousCandidats.push(cur);
+    }
+    const rawOverrides = localStorage.getItem('usmba_candidats_overrides');
+    if (rawOverrides) {
+      const overrides: Record<string, Candidat> = JSON.parse(rawOverrides);
+      Object.values(overrides).forEach((cand) => {
+        const idx = tousCandidats.findIndex((c) => c.id === cand.id);
+        if (idx !== -1) tousCandidats[idx] = cand;
+        else tousCandidats.push(cand);
+      });
+    }
+    const rawAccounts = localStorage.getItem('usmba_registered_accounts');
+    if (rawAccounts) {
+      const accounts: Candidat[] = JSON.parse(rawAccounts);
+      accounts.forEach((cand) => {
+        const idx = tousCandidats.findIndex((c) => c.id === cand.id);
+        if (idx !== -1) tousCandidats[idx] = cand;
+        else tousCandidats.push(cand);
+      });
+    }
+  } catch {}
 
   const guichetDossiers: GuichetDossier[] = [];
+  tousCandidats.forEach((c) => {
+    if (c.dossier?.guichet || (c.dossier as any)?.traiterAuGuichet) {
+      const piecesCount = (c.pieces || []).filter((p) => p.statut === 'prouvee').length;
+      let motifLabel: string | undefined = undefined;
 
-  if (candidat && (candidat.dossier?.guichet || (candidat.dossier as any)?.traiterAuGuichet)) {
-    const piecesCount = (candidat.pieces || []).filter((p) => p.statut === 'prouvee').length;
-    let motifLabel: string | undefined = undefined;
-
-    if (candidat.dossier?.casParticulier && candidat.dossier?.motif) {
-      const m = candidat.dossier.motif;
-      if (m === 'AUTRE') {
-        motifLabel = candidat.dossier.motifAutre || 'Autre motif';
-      } else if (m in fr.dossier.casParticulierMotifs) {
-        motifLabel = fr.dossier.casParticulierMotifs[m as keyof typeof fr.dossier.casParticulierMotifs];
-      } else {
-        motifLabel = m;
+      if (c.dossier?.casParticulier && c.dossier?.motif) {
+        const m = c.dossier.motif;
+        if (m === 'AUTRE') {
+          motifLabel = c.dossier.motifAutre || 'Autre motif';
+        } else if (m in fr.dossier.casParticulierMotifs) {
+          motifLabel = fr.dossier.casParticulierMotifs[m as keyof typeof fr.dossier.casParticulierMotifs];
+        } else {
+          motifLabel = m;
+        }
       }
-    }
 
-    guichetDossiers.push({
-      id: candidat.id || 'cand-001',
-      nom: candidat.nom || 'Yassine El Fassi',
-      cne: candidat.cne || 'N138249871',
-      piecesPretes: piecesCount,
-      motif: motifLabel,
-    });
-  }
+      const statutRaw = c.dossier?.guichetStatut || 'a_contacter';
+      const statutLabel =
+        statutRaw === 'saisi'
+          ? fr.guichetAgent.statuts.saisi
+          : statutRaw === 'venu'
+          ? fr.guichetAgent.statuts.venu
+          : statutRaw === 'contacte'
+          ? fr.guichetAgent.statuts.contacte
+          : fr.guichetAgent.statuts.a_contacter;
+
+      const journal = c.dossier?.journalGuichet || [];
+      const derniereEntree = journal.length > 0 ? journal[journal.length - 1] : undefined;
+      const agentNom = c.dossier?.saisiPar || derniereEntree?.agent || '-';
+      const derniereAction = derniereEntree?.action || 'Demande initiale';
+
+      guichetDossiers.push({
+        id: c.id,
+        nom: c.nom || 'Candidat inconnu',
+        cne: c.cne || '-',
+        piecesPretes: piecesCount,
+        motif: motifLabel,
+        statut: statutLabel,
+        statutRaw,
+        agent: agentNom,
+        derniereAction,
+      });
+    }
+  });
 
   const scrollToSection = (id: string) => {
     const el = document.getElementById(id);
@@ -592,6 +645,9 @@ export const Exceptions: React.FC = () => {
                     <th className="px-4 py-3">{fr.exceptions.colCne}</th>
                     <th className="px-4 py-3">{fr.exceptions.colPieces}</th>
                     <th className="px-4 py-3">{fr.exceptions.colMotif}</th>
+                    <th className="px-4 py-3">{fr.guichetAgent.colStatut}</th>
+                    <th className="px-4 py-3">{fr.guichetAgent.colJournalAgent}</th>
+                    <th className="px-4 py-3">{fr.guichetAgent.colJournalAction}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -620,6 +676,27 @@ export const Exceptions: React.FC = () => {
                           </span>
                         )}
                       </td>
+                      <td className="px-4 py-3.5">
+                        <span
+                          className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full border ${
+                            g.statutRaw === 'saisi'
+                              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                              : g.statutRaw === 'venu'
+                              ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
+                              : g.statutRaw === 'contacte'
+                              ? 'bg-sky-50 text-sky-800 border-sky-200'
+                              : 'bg-amber-50 text-amber-800 border-amber-200'
+                          }`}
+                        >
+                          {g.statut}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3.5 font-medium text-slate-800">
+                        {g.agent}
+                      </td>
+                      <td className="px-4 py-3.5 text-slate-600">
+                        {g.derniereAction}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -645,10 +722,33 @@ export const Exceptions: React.FC = () => {
                     </span>
 
                     {g.motif && (
-                      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-purple-800 bg-purple-50 border border-purple-200 px-2 py-0.5 rounded-md">
+                      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-purple-800 bg-purple-50 border border-purple-200 px-2.5 py-0.5 rounded-md">
                         {g.motif}
                       </span>
                     )}
+
+                    <span
+                      className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                        g.statutRaw === 'saisi'
+                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                          : g.statutRaw === 'venu'
+                          ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
+                          : g.statutRaw === 'contacte'
+                          ? 'bg-sky-50 text-sky-800 border-sky-200'
+                          : 'bg-amber-50 text-amber-800 border-amber-200'
+                      }`}
+                    >
+                      {g.statut}
+                    </span>
+                  </div>
+
+                  <div className="pt-1.5 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-600">
+                    <span>
+                      Agent : <strong className="text-slate-800">{g.agent}</strong>
+                    </span>
+                    <span className="text-slate-500 italic">
+                      {g.derniereAction}
+                    </span>
                   </div>
                 </div>
               ))}

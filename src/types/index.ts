@@ -1,4 +1,13 @@
-export type UserRole = 'candidat' | 'enseignant' | 'directeur_ced' | 'doctorant';
+export type UserRole = 'candidat' | 'enseignant' | 'directeur_ced' | 'doctorant' | 'agent';
+
+export type GuichetStatut = 'a_contacter' | 'contacte' | 'venu' | 'saisi';
+
+export interface JournalGuichetEntry {
+  date: string;
+  agent: string;
+  action: string;
+  note?: string;
+}
 
 export type PieceType = 'CIN' | 'DIPLOME' | 'RELEVES' | 'CV' | 'cin' | 'diplome' | 'releves' | 'cv';
 export type PieceStatut = 'declaree' | 'prouvee' | 'illisible' | 'absente';
@@ -22,6 +31,8 @@ export interface Enseignant {
   email: string;
   etablissement: string;
   structure: string;
+  role?: UserRole;
+  desactive?: boolean;
 }
 
 export interface OcrResultatCIN {
@@ -65,12 +76,19 @@ export interface Candidat {
   candidatures: string[]; // Max 3 candidatures déposées
   candidaturesStatuts?: Record<string, CandidatureStatut>; // Statut par sujet : 'deposee' | 'retenue'
   compteCree: boolean;
+  role?: UserRole;
+  desactive?: boolean;
   pieces?: Piece[]; // Stockage : Piece[] (4 éléments) sur le candidat, dans localStorage
   dossier?: {
     casParticulier: boolean;
     motif?: MotifCasParticulier;
     motifAutre?: string;
     guichet: boolean;
+    guichetStatut?: GuichetStatut;
+    journalGuichet?: JournalGuichetEntry[];
+    saisiPar?: string;
+    saisiLe?: string;
+    consentementGuichet?: boolean;
   };
   // Aliases pour compatibilité
   panierInteret?: string[];
@@ -100,6 +118,12 @@ export interface Dossier {
   consentementApogee: boolean;
   statutGlobal: 'en_cours' | 'soumis' | 'complet' | 'retenu';
   traiterAuGuichet?: boolean;
+  guichet?: boolean;
+  guichetStatut?: GuichetStatut;
+  journalGuichet?: JournalGuichetEntry[];
+  saisiPar?: string;
+  saisiLe?: string;
+  consentementGuichet?: boolean;
 }
 
 export interface Creneau {
@@ -199,4 +223,16 @@ export interface Doctorant {
   encadrantId: string;
   sujetTitre: string;
   structure: string;
+}
+
+export type ProgressionEtapeStatut = 'faite' | 'en_cours' | 'future';
+
+export interface ProgressionEtapeInfo {
+  numero: number;
+  cle: 'candidature' | 'validee' | 'entretien' | 'resultat' | 'preuves' | 'inscription';
+  nom: string;
+  statut: ProgressionEtapeStatut;
+  estNonApplicable?: boolean;
+  infobulle: string;
+  actionTexte?: string;
 }

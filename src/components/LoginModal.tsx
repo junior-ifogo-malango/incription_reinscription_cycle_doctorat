@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { X, LogIn, UserCheck, BookOpenCheck, ShieldCheck, Sparkles, AlertCircle, GraduationCap, KeyRound } from 'lucide-react';
+import { X, LogIn, ChevronDown, ChevronUp, AlertCircle, KeyRound } from 'lucide-react';
 import { UserRole, Candidat } from '../types';
 import { fr } from '../i18n/fr';
+import { DEMO_CANDIDAT_YASSINE, INITIAL_ENSEIGNANTS, MOCK_CANDIDATS } from '../data/mockData';
 
 interface LoginModalProps {
   isOpen: boolean;
@@ -23,6 +24,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [showDemoAccounts, setShowDemoAccounts] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
@@ -50,27 +52,31 @@ export const LoginModal: React.FC<LoginModalProps> = ({
     const cleanEmail = email.trim().toLowerCase();
     const cleanPassword = password.trim();
 
-    // Démo : mot de passe en clair dans localStorage, à remplacer par un hachage côté serveur
+    if (!cleanEmail || !cleanPassword) return;
 
-    // 1. Comptes de démo (mot de passe "demo1234")
+    // Détection du compte et lecture dynamique de son rôle (compte.role)
     const isDemoPassword = cleanPassword === 'demo1234';
 
+    // 1. Compte Yassine (Candidat)
     if (
       (cleanEmail === 'yassine@demo.ma' ||
-        cleanEmail === 'yassine.elfassi@etu.usmba.ac.ma' ||
-        cleanEmail.includes('yassine')) &&
+        cleanEmail === 'yassine.elfassi@demo.ma' ||
+        cleanEmail === 'yassine.elfassi@etu.usmba.ac.ma') &&
       isDemoPassword
     ) {
-      onLoginSuccess('candidat', cleanEmail);
+      if (DEMO_CANDIDAT_YASSINE.desactive) {
+        setError(fr.auth.accountDeactivated);
+        return;
+      }
+      onLoginSuccess('candidat', cleanEmail, DEMO_CANDIDAT_YASSINE);
       onClose();
       return;
     }
 
+    // 2. Compte Directeur de thèse (Enseignant)
     if (
       (cleanEmail === 'prof@demo.ma' ||
-        cleanEmail === 'k.elamrani@usmba.ac.ma' ||
-        cleanEmail.includes('prof') ||
-        cleanEmail.includes('elamrani')) &&
+        cleanEmail === 'k.elamrani@usmba.ac.ma') &&
       isDemoPassword
     ) {
       onLoginSuccess('enseignant', cleanEmail);
@@ -78,10 +84,10 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       return;
     }
 
+    // 3. Compte Structure (CED)
     if (
       (cleanEmail === 'ced@demo.ma' ||
-        cleanEmail === 'ced@usmba.ac.ma' ||
-        cleanEmail.includes('ced')) &&
+        cleanEmail === 'ced@usmba.ac.ma') &&
       isDemoPassword
     ) {
       onLoginSuccess('directeur_ced', cleanEmail);
@@ -89,18 +95,35 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       return;
     }
 
-    if (
-      (cleanEmail === 'doctorant@demo.ma' ||
-        cleanEmail.includes('doctorant') ||
-        cleanEmail.includes('nadia')) &&
-      isDemoPassword
-    ) {
-      onLoginSuccess('doctorant', cleanEmail);
+    // Autres enseignants
+    const teacherMatch = INITIAL_ENSEIGNANTS.find(
+      (t) => t.email && t.email.toLowerCase().trim() === cleanEmail
+    );
+    if (teacherMatch && isDemoPassword) {
+      if (teacherMatch.desactive) {
+        setError(fr.auth.accountDeactivated);
+        return;
+      }
+      onLoginSuccess('enseignant', cleanEmail);
       onClose();
       return;
     }
 
-    // 2. Compte candidat créé par l'utilisateur
+    // Autres candidats de démonstration
+    const candMatch = MOCK_CANDIDATS.find(
+      (c) => c.email && c.email.toLowerCase().trim() === cleanEmail
+    );
+    if (candMatch && isDemoPassword) {
+      if (candMatch.desactive) {
+        setError(fr.auth.accountDeactivated);
+        return;
+      }
+      onLoginSuccess('candidat', cleanEmail, candMatch);
+      onClose();
+      return;
+    }
+
+    // Comptes enregistrés dans localStorage (toujours rôle candidat)
     try {
       const rawAccounts = localStorage.getItem('usmba_registered_accounts');
       const accounts: Candidat[] = rawAccounts ? JSON.parse(rawAccounts) : [];
@@ -109,6 +132,10 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       );
 
       if (foundInAccounts) {
+        if (foundInAccounts.desactive) {
+          setError(fr.auth.accountDeactivated);
+          return;
+        }
         if (foundInAccounts.motDePasse && foundInAccounts.motDePasse === cleanPassword) {
           onLoginSuccess('candidat', cleanEmail, foundInAccounts);
           onClose();
@@ -122,48 +149,24 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       const rawCur = localStorage.getItem('usmba_doctorat_candidat');
       if (rawCur) {
         const cur: Candidat = JSON.parse(rawCur);
-        if (
-          cur.email &&
-          cur.email.toLowerCase().trim() === cleanEmail &&
-          cur.motDePasse &&
-          cur.motDePasse === cleanPassword
-        ) {
-          onLoginSuccess('candidat', cleanEmail, cur);
-          onClose();
-          return;
+        if (cur.email && cur.email.toLowerCase().trim() === cleanEmail) {
+          if (cur.desactive) {
+            setError(fr.auth.accountDeactivated);
+            return;
+          }
+          if (cur.motDePasse && cur.motDePasse === cleanPassword) {
+            onLoginSuccess('candidat', cleanEmail, cur);
+            onClose();
+            return;
+          }
         }
       }
     } catch {
       // safe fallback
     }
 
-    // Échec de vérification
+    // Échec de vérification : erreur unique
     setError(fr.auth.invalidCredentials);
-  };
-
-  const handleQuickDemo = (role: UserRole) => {
-    // Les boutons « Entrer en démo » continuent de fonctionner sans saisie
-    if (role === 'candidat') {
-      setEmail('yassine.elfassi@etu.usmba.ac.ma');
-      setPassword('demo1234');
-      onLoginSuccess('candidat', 'yassine.elfassi@etu.usmba.ac.ma');
-      onClose();
-    } else if (role === 'enseignant') {
-      setEmail('k.elamrani@usmba.ac.ma');
-      setPassword('demo1234');
-      onLoginSuccess('enseignant', 'k.elamrani@usmba.ac.ma');
-      onClose();
-    } else if (role === 'directeur_ced') {
-      setEmail('ced@usmba.ac.ma');
-      setPassword('demo1234');
-      onLoginSuccess('directeur_ced', 'ced@usmba.ac.ma');
-      onClose();
-    } else {
-      setEmail('doctorant@demo.ma');
-      setPassword('demo1234');
-      onLoginSuccess('doctorant', 'doctorant@demo.ma');
-      onClose();
-    }
   };
 
   return (
@@ -242,54 +245,52 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
           <button
             type="submit"
-            className="w-full min-h-[44px] py-2.5 rounded-xl text-xs font-bold bg-emerald-700 hover:bg-emerald-800 text-white transition active:scale-95 shadow-xs"
+            disabled={!email.trim() || !password.trim()}
+            className={`w-full min-h-[44px] py-2.5 rounded-xl text-xs font-bold transition shadow-xs ${
+              !email.trim() || !password.trim()
+                ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                : 'bg-emerald-700 hover:bg-emerald-800 text-white active:scale-95 cursor-pointer'
+            }`}
           >
             {fr.auth.btnSubmitLogin}
           </button>
+          {(!email.trim() || !password.trim()) && (
+            <p className="text-[11px] text-slate-500 text-center pt-0.5">
+              {fr.auth.loginDisabledReason}
+            </p>
+          )}
         </form>
 
-        {/* Boutons rapides « Entrer en démo » (4 rôles) */}
-        <div className="px-4 pb-3 pt-1 border-t border-slate-100 bg-slate-50/70">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-2 text-center">
-            {fr.auth.enterDemoLabel}
-          </span>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-            <button
-              type="button"
-              onClick={() => handleQuickDemo('candidat')}
-              className="py-2 px-1 text-[11px] font-semibold rounded-lg bg-white border border-slate-200 text-slate-700 hover:border-emerald-600 hover:text-emerald-700 transition flex flex-col items-center gap-0.5 active:scale-95 shadow-xs"
-            >
-              <UserCheck size={14} className="text-emerald-600" />
-              <span>{fr.auth.btnDemoCandidat}</span>
-            </button>
+        {/* Lien discret « Comptes de démo » (replié par défaut) */}
+        <div className="px-4 pb-3 pt-2 border-t border-slate-100 bg-slate-50/70 text-center">
+          <button
+            type="button"
+            onClick={() => setShowDemoAccounts((prev) => !prev)}
+            className="text-[11px] font-semibold text-slate-500 hover:text-slate-800 underline underline-offset-2 transition cursor-pointer inline-flex items-center gap-1"
+          >
+            <span>{fr.auth.demoAccountsToggle}</span>
+            {showDemoAccounts ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+          </button>
 
-            <button
-              type="button"
-              onClick={() => handleQuickDemo('enseignant')}
-              className="py-2 px-1 text-[11px] font-semibold rounded-lg bg-white border border-slate-200 text-slate-700 hover:border-blue-600 hover:text-blue-700 transition flex flex-col items-center gap-0.5 active:scale-95 shadow-xs"
-            >
-              <BookOpenCheck size={14} className="text-blue-600" />
-              <span>{fr.auth.btnDemoEnseignant}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleQuickDemo('directeur_ced')}
-              className="py-2 px-1 text-[11px] font-semibold rounded-lg bg-white border border-slate-200 text-slate-700 hover:border-amber-600 hover:text-amber-700 transition flex flex-col items-center gap-0.5 active:scale-95 shadow-xs"
-            >
-              <ShieldCheck size={14} className="text-amber-600" />
-              <span>{fr.auth.btnDemoDirecteur}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleQuickDemo('doctorant')}
-              className="py-2 px-1 text-[11px] font-semibold rounded-lg bg-white border border-slate-200 text-slate-700 hover:border-purple-600 hover:text-purple-700 transition flex flex-col items-center gap-0.5 active:scale-95 shadow-xs"
-            >
-              <GraduationCap size={14} className="text-purple-600" />
-              <span>{fr.auth.btnDemoDoctorant}</span>
-            </button>
-          </div>
+          {showDemoAccounts && (
+            <div className="mt-2 space-y-1.5 animate-in fade-in duration-150">
+              {(['yassine@demo.ma', 'prof@demo.ma', 'ced@demo.ma'] as const).map((demoEmail) => (
+                <button
+                  key={demoEmail}
+                  type="button"
+                  onClick={() => {
+                    setEmail(demoEmail);
+                    setPassword('demo1234');
+                    setError(null);
+                  }}
+                  className="w-full text-left py-2 px-3 rounded-lg text-xs font-mono bg-white hover:bg-emerald-50 hover:text-emerald-800 hover:border-emerald-300 border border-slate-200 text-slate-700 transition cursor-pointer active:scale-98 shadow-2xs flex items-center justify-between"
+                >
+                  <span>{demoEmail}</span>
+                  <span className="text-[10px] text-slate-400 font-sans">demo1234</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Liens bas de modale : Vote comité SANS compte + Création compte candidat */}

@@ -22,6 +22,7 @@ import {
   ShieldAlert,
   Award,
   X,
+  UserCog,
 } from 'lucide-react';
 import { UserRole, Candidat, Enseignant, Sujet, Piece, Creneau, Notification, type Dossier as DossierData, Rapport, Vote } from './types';
 import { storageService } from './services/storage';
@@ -42,6 +43,7 @@ import { VoteComite } from './components/VoteComite';
 import { CedReinscriptions } from './components/CedReinscriptions';
 import { CedSeances } from './components/CedSeances';
 import { VerifPV } from './components/VerifPV';
+import { Guichet } from './components/Guichet';
 
 export type AppTabType =
   | TabType
@@ -50,7 +52,8 @@ export type AppTabType =
   | 'suivi'
   | 'reinscriptions'
   | 'seances'
-  | 'vote_comite';
+  | 'vote_comite'
+  | 'guichet';
 
 function genererCodeComite(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -210,6 +213,8 @@ export default function App() {
       setTab('sujets');
     } else if (userRole === 'doctorant') {
       setTab('rapport');
+    } else if (userRole === 'agent') {
+      setTab('guichet');
     } else {
       setTab('seances');
     }
@@ -291,12 +296,38 @@ export default function App() {
       return;
     }
 
+    if (targetTab === 'guichet' && role !== 'agent') {
+      setRestrictionMsg(fr.auth.accessRestricted);
+      setIsLoginOpen(true);
+      return;
+    }
+
     setTab(targetTab);
   };
 
   const handleResetData = () => {
+    const confirmation = window.confirm(fr.nav.resetConfirmPrompt);
+    if (!confirmation) return;
+
+    try {
+      localStorage.clear();
+    } catch {
+      // safe fallback
+    }
+
     storageService.resetToDefaults();
+    try {
+      localStorage.setItem('usmba_rapports', JSON.stringify(INITIAL_RAPPORTS));
+    } catch {
+      // safe fallback
+    }
+
     refreshState();
+    window.dispatchEvent(new CustomEvent('usmba_creneaux_updated'));
+    window.dispatchEvent(new CustomEvent('usmba_pvs_updated'));
+    window.dispatchEvent(new CustomEvent('usmba_pieces_updated'));
+    window.dispatchEvent(new CustomEvent('usmba_dossier_updated'));
+    window.dispatchEvent(new CustomEvent('storage'));
     setShowToast(true);
     setTimeout(() => setShowToast(false), 3000);
   };
@@ -627,6 +658,8 @@ export default function App() {
       ? activeEnseignant.nom
       : role === 'doctorant'
       ? DEMO_DOCTORANT_NADIA.nom
+      : role === 'agent'
+      ? 'Karima Tazi'
       : fr.app.cedName
     : undefined;
 
@@ -750,8 +783,8 @@ export default function App() {
                     </button>
                   </>
                 )}
-                {/* Onglets Doctorant */}
-                {isLoggedIn && role === 'doctorant' && (
+                {/* Onglets Doctorant (masqué) */}
+                {false && isLoggedIn && role === 'doctorant' && (
                   <>
                     <button
                       onClick={() => handleTabChange('rapport')}
@@ -817,6 +850,21 @@ export default function App() {
                   </>
                 )}
 
+                {/* Onglet Agent Guichet (masqué) */}
+                {false && isLoggedIn && role === 'agent' && (
+                  <button
+                    onClick={() => handleTabChange('guichet')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                      tab === 'guichet'
+                        ? 'bg-emerald-800 text-amber-300'
+                        : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
+                    }`}
+                  >
+                    <UserCog size={14} />
+                    <span>{fr.nav.guichet}</span>
+                  </button>
+                )}
+
                 {/* Visiteur non connecté */}
                 {!isLoggedIn && (
                   <button
@@ -833,13 +881,58 @@ export default function App() {
 
                 {/* Se connecter ou Mon compte */}
                 {!isLoggedIn ? (
-                  <button
-                    onClick={() => setIsLoginOpen(true)}
-                    className="px-3 py-1.5 rounded-lg text-xs font-semibold transition text-emerald-100 hover:text-white hover:bg-emerald-900/60 flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <LogIn size={14} />
-                    <span>{fr.auth.login}</span>
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setIsLoginOpen(true)}
+                      className="px-3 py-1.5 rounded-lg text-xs font-semibold transition text-emerald-100 hover:text-white hover:bg-emerald-900/60 flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <LogIn size={14} />
+                      <span>{fr.auth.login}</span>
+                    </button>
+                    <div className="relative">
+                      <button
+                        onClick={() => setAccountMenuOpen(!accountMenuOpen)}
+                        className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                          accountMenuOpen
+                            ? 'bg-emerald-800 text-amber-300'
+                            : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
+                        }`}
+                        title={fr.auth.accountMenu}
+                      >
+                        <User size={14} className="text-emerald-300" />
+                        <span>{fr.nav.court.compte}</span>
+                        <ChevronDown size={13} className="text-emerald-400" />
+                      </button>
+
+                      {accountMenuOpen && (
+                        <div
+                          className="absolute right-0 top-full mt-1.5 w-56 bg-white text-slate-800 rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 text-xs"
+                          onClick={() => setAccountMenuOpen(false)}
+                        >
+                          <div className="px-3 py-2 border-b border-slate-100">
+                            <p className="font-bold text-slate-900">Visiteur démo</p>
+                            <span className="text-[10px] font-semibold text-slate-500">Non connecté</span>
+                          </div>
+
+                          <button
+                            onClick={() => setIsLoginOpen(true)}
+                            className="w-full text-left px-3 py-2 text-emerald-700 hover:bg-emerald-50 flex items-center gap-2 font-semibold cursor-pointer"
+                          >
+                            <LogIn size={13} />
+                            <span>{fr.auth.login}</span>
+                          </button>
+
+                          <button
+                            onClick={handleResetData}
+                            className="w-full text-left px-3 py-2 text-slate-600 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+                          >
+                            <RotateCcw size={13} />
+                            <span>{fr.nav.resetData}</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 ) : (
                   <div className="relative">
                     <button
@@ -867,10 +960,18 @@ export default function App() {
                               ? fr.auth.roleCandidatBadge
                               : role === 'enseignant'
                               ? fr.auth.roleEnseignantBadge
-                              : role === 'doctorant'
-                              ? fr.auth.roleDoctorantBadge
                               : fr.auth.roleCedBadge}
                           </span>
+                          {role === 'enseignant' && (
+                            <div className="mt-1.5 pt-1.5 border-t border-slate-100">
+                              <span className="text-[9px] uppercase font-bold text-slate-400 block tracking-wider">
+                                {fr.auth.profileStructureLabel}
+                              </span>
+                              <span className="text-[11px] font-medium text-slate-700 break-words block">
+                                {activeEnseignant.structure}
+                              </span>
+                            </div>
+                          )}
                         </div>
 
                         <button
@@ -1278,7 +1379,7 @@ export default function App() {
 
           {/* Onglet Entretiens (Candidat) */}
           {tab === 'entretiens' && role === 'candidat' && (
-            <Entretiens />
+            <Entretiens candidat={candidat} onNavigate={handleTabChange} />
           )}
 
           {/* Onglet Mes créneaux (Enseignant) */}
@@ -1312,6 +1413,11 @@ export default function App() {
           {/* Onglet Vote Comité sans compte */}
           {tab === 'vote_comite' && (
             <VoteComite onClose={() => setTab('sujets')} />
+          )}
+
+          {/* Onglet Guichet (Agent Guichet) */}
+          {tab === 'guichet' && role === 'agent' && (
+            <Guichet />
           )}
         </>
       )}
@@ -1362,11 +1468,25 @@ export default function App() {
                     {fr.auth.login}
                   </span>
                 </button>
+                <button
+                  onClick={() => setMobileMenuOpen(true)}
+                  type="button"
+                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
+                    mobileMenuOpen ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <div className="relative">
+                    <User size={18} />
+                  </div>
+                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
+                    {fr.nav.court.compte}
+                  </span>
+                </button>
               </>
             )}
 
-            {/* DOCTORANT : barre du bas = Rapport, Suivi, Compte */}
-            {isLoggedIn && role === 'doctorant' && (
+            {/* DOCTORANT : barre du bas = Rapport, Suivi, Compte (masqué) */}
+            {false && isLoggedIn && role === 'doctorant' && (
               <>
                 <button
                   onClick={() => handleTabChange('rapport')}
@@ -1588,6 +1708,25 @@ export default function App() {
               </>
             )}
 
+            {/* AGENT GUICHET : barre du bas = Guichet, Compte (masqué) */}
+            {false && isLoggedIn && role === 'agent' && (
+              <button
+                onClick={() => handleTabChange('guichet')}
+                type="button"
+                className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
+                  tab === 'guichet' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <div className="relative">
+                  <UserCog size={18} />
+                </div>
+                <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
+                  {fr.nav.court.guichet}
+                </span>
+                {tab === 'guichet' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
+              </button>
+            )}
+
             {/* Connecté : Mon compte */}
             {isLoggedIn && (
               <button
@@ -1624,16 +1763,28 @@ export default function App() {
                     <User size={16} />
                   </div>
                   <div>
-                    <p className="font-bold text-xs text-slate-900">{currentUserName || fr.auth.accountMenu}</p>
+                    <p className="font-bold text-xs text-slate-900">
+                      {isLoggedIn ? (currentUserName || fr.auth.accountMenu) : 'Visiteur démo'}
+                    </p>
                     <span className="text-[10px] font-bold uppercase text-emerald-700">
-                      {role === 'candidat'
-                        ? fr.auth.roleCandidatBadge
-                        : role === 'enseignant'
-                        ? fr.auth.roleEnseignantBadge
-                        : role === 'doctorant'
-                        ? fr.auth.roleDoctorantBadge
-                        : fr.auth.roleCedBadge}
+                      {isLoggedIn
+                        ? role === 'candidat'
+                          ? fr.auth.roleCandidatBadge
+                          : role === 'enseignant'
+                          ? fr.auth.roleEnseignantBadge
+                          : fr.auth.roleCedBadge
+                        : 'Non connecté'}
                     </span>
+                    {isLoggedIn && role === 'enseignant' && (
+                      <div className="mt-1 pt-1 border-t border-slate-100">
+                        <span className="text-[9px] uppercase font-bold text-slate-400 block tracking-wider">
+                          {fr.auth.profileStructureLabel}
+                        </span>
+                        <span className="text-[11px] font-medium text-slate-700 break-words block">
+                          {activeEnseignant.structure}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
                 <button
@@ -1644,6 +1795,20 @@ export default function App() {
                   <X size={18} />
                 </button>
               </div>
+
+              {!isLoggedIn && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    setIsLoginOpen(true);
+                  }}
+                  className="w-full text-left py-2.5 px-3 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 flex items-center gap-2.5 text-xs font-semibold cursor-pointer"
+                >
+                  <LogIn size={15} className="text-emerald-700" />
+                  <span>{fr.auth.login}</span>
+                </button>
+              )}
 
               <button
                 type="button"
@@ -1657,17 +1822,19 @@ export default function App() {
                 <span>{fr.nav.resetData}</span>
               </button>
 
-              <button
-                type="button"
-                onClick={() => {
-                  setMobileMenuOpen(false);
-                  handleLogout();
-                }}
-                className="w-full text-left py-2.5 px-3 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 flex items-center gap-2.5 text-xs font-semibold cursor-pointer"
-              >
-                <LogOut size={15} className="text-rose-600" />
-                <span>{fr.auth.logout}</span>
-              </button>
+              {isLoggedIn && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    handleLogout();
+                  }}
+                  className="w-full text-left py-2.5 px-3 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 flex items-center gap-2.5 text-xs font-semibold cursor-pointer"
+                >
+                  <LogOut size={15} className="text-rose-600" />
+                  <span>{fr.auth.logout}</span>
+                </button>
+              )}
 
               <button
                 type="button"

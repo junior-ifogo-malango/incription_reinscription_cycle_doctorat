@@ -14,9 +14,10 @@ export const INITIAL_ENSEIGNANTS: Enseignant[] = [
   {
     id: 'ens-1',
     nom: 'Pr. Karim El Amrani',
-    email: 'k.elamrani@usmba.ac.ma',
+    email: 'prof@demo.ma',
     etablissement: 'Faculté des Sciences Dhar El Mehraz (FSDM)',
-    structure: 'Laboratoire LISAC (Systèmes Intelligents & Télécoms)',
+    structure: 'LISAC - FSDM Fès',
+    role: 'enseignant',
   },
   {
     id: 'ens-2',
@@ -196,9 +197,7 @@ export const INITIAL_SUJETS: Sujet[] = [
 export const INITIAL_PIECES_YASSINE: Piece[] = [
   {
     type: 'CIN',
-    statut: 'prouvee',
-    source: 'camera',
-    fichier: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="180" viewBox="0 0 300 180"><rect width="300" height="180" rx="10" fill="%23f8fafc" stroke="%23cbd5e1" stroke-width="2"/><rect x="20" y="25" width="80" height="100" rx="6" fill="%23cbd5e1"/><text x="120" y="55" font-family="sans-serif" font-size="13" font-weight="bold" fill="%230f172a">ROYAUME DU MAROC</text><text x="120" y="80" font-family="sans-serif" font-size="12" fill="%23334155">CIN: CD789123</text><text x="120" y="105" font-family="sans-serif" font-size="12" fill="%23334155">Nom: EL FASSI</text><text x="120" y="130" font-family="sans-serif" font-size="12" fill="%23334155">Pr&eacute;nom: Yassine</text></svg>',
+    statut: 'declaree',
   },
   {
     type: 'DIPLOME',
@@ -244,8 +243,9 @@ export const DEMO_CANDIDAT_YASSINE: Candidat = {
   nom: 'Yassine El Fassi',
   cne: 'N138249871',
   cin: 'CD789123',
-  email: 'yassine.elfassi@demo.ma',
+  email: 'yassine@demo.ma',
   motDePasse: 'demo1234',
+  role: 'candidat',
   tel: '0661234567',
   panier: ['suj-07', 'suj-13'],
   candidatures: ['suj-01', 'suj-04'],
@@ -266,9 +266,7 @@ export const INITIAL_PIECES: Piece[] = [
     id: 'piece-1',
     candidatId: 'cand-001',
     type: 'cin',
-    statut: 'prouvee',
-    fichier: 'cin_recto_verso_cd789123.pdf',
-    source: 'camera',
+    statut: 'declaree',
     dateMaj: '2026-10-20',
   },
   {
@@ -334,6 +332,13 @@ export const CANDIDAT_OMAR: Candidat = {
   compteCree: true,
 };
 
+export const DEMO_AGENT_KARIMA = {
+  id: 'agent-001',
+  nom: 'Karima Tazi',
+  email: 'karima.tazi@usmba.ac.ma',
+  role: 'agent' as const,
+};
+
 export const CANDIDAT_SALMA: Candidat = {
   id: 'cand-salma',
   nom: 'Salma Alami',
@@ -345,6 +350,24 @@ export const CANDIDAT_SALMA: Candidat = {
   candidatures: ['suj-04'],
   candidaturesStatuts: { 'suj-04': 'retenue' },
   compteCree: true,
+  dossier: {
+    casParticulier: false,
+    guichet: true,
+    guichetStatut: 'a_contacter',
+    journalGuichet: [
+      {
+        date: '2026-10-24T09:00:00Z',
+        agent: 'Candidat (Salma Alami)',
+        action: 'Demande du candidat',
+      },
+    ],
+  },
+  pieces: [
+    { type: 'CIN', statut: 'declaree' },
+    { type: 'DIPLOME', statut: 'absente' },
+    { type: 'RELEVES', statut: 'absente' },
+    { type: 'CV', statut: 'absente' },
+  ],
 };
 
 export const CANDIDAT_KHADIJA: Candidat = {
@@ -498,7 +521,7 @@ export const APOGEE_FICTIF_DB: Record<string, ApogeeFictifEntry> = {
 export const DEMO_DOCTORANT_NADIA: Doctorant = {
   id: 'doc-nadia',
   nom: 'Nadia Alaoui',
-  email: 'doctorant@demo.ma',
+  email: 'nadia.alaoui@usmba.ac.ma',
   tel: '0612345678',
   annee: 2,
   encadrantId: 'ens-1',

@@ -1,11 +1,89 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Camera, Upload, FileText, CheckCircle2, AlertCircle, X, Eye, RotateCcw, Award, ShieldCheck } from 'lucide-react';
+import { Camera, Upload, FileText, CheckCircle2, AlertCircle, X, Eye, RotateCcw, Award, ShieldCheck, UserCheck } from 'lucide-react';
 import { Piece, PieceType, Candidat, MotifCasParticulier, PV } from '../types';
-import { ApogeeFictif } from '../data/mockData';
+import { ApogeeFictif, MOCK_CANDIDATS } from '../data/mockData';
 import { StatusBadge } from './StatusBadge';
 import { CameraCapture } from './CameraCapture';
 import { fr } from '../i18n/fr';
 import { lireCIN, OcrResultatCIN } from '../utils/ocrSimule';
+
+function findCandidateById(id?: string): Candidat | null {
+  if (!id) return null;
+  try {
+    const rawOverrides = localStorage.getItem('usmba_candidats_overrides');
+    if (rawOverrides) {
+      const overrides: Record<string, Candidat> = JSON.parse(rawOverrides);
+      if (overrides[id]) return overrides[id];
+    }
+  } catch {}
+  try {
+    const rawCur = localStorage.getItem('usmba_doctorat_candidat');
+    if (rawCur) {
+      const cur: Candidat = JSON.parse(rawCur);
+      if (cur.id === id) return cur;
+    }
+  } catch {}
+  try {
+    const rawAccounts = localStorage.getItem('usmba_registered_accounts');
+    if (rawAccounts) {
+      const accounts: Candidat[] = JSON.parse(rawAccounts);
+      const found = accounts.find((a) => a.id === id);
+      if (found) return found;
+    }
+  } catch {}
+  const mock = MOCK_CANDIDATS.find((c) => c.id === id);
+  if (mock) return mock;
+  return null;
+}
+
+function persistCandidate(cand: Candidat): void {
+  try {
+    const rawOverrides = localStorage.getItem('usmba_candidats_overrides');
+    const overrides: Record<string, Candidat> = rawOverrides ? JSON.parse(rawOverrides) : {};
+    overrides[cand.id] = cand;
+    localStorage.setItem('usmba_candidats_overrides', JSON.stringify(overrides));
+
+    const rawCur = localStorage.getItem('usmba_doctorat_candidat');
+    if (rawCur) {
+      const cur: Candidat = JSON.parse(rawCur);
+      if (cur.id === cand.id) {
+        localStorage.setItem('usmba_doctorat_candidat', JSON.stringify(cand));
+      }
+    }
+
+    const rawAccounts = localStorage.getItem('usmba_registered_accounts');
+    if (rawAccounts) {
+      const accounts: Candidat[] = JSON.parse(rawAccounts);
+      const idx = accounts.findIndex((a) => a.id === cand.id);
+      if (idx !== -1) {
+        accounts[idx] = cand;
+        localStorage.setItem('usmba_registered_accounts', JSON.stringify(accounts));
+      }
+    }
+  } catch {}
+}
+
+function resolveCandidate(candidatId?: string, fallback?: Candidat | null): Candidat {
+  if (candidatId) {
+    const found = findCandidateById(candidatId);
+    if (found) return found;
+  }
+  try {
+    const raw = localStorage.getItem('usmba_doctorat_candidat');
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return fallback || {
+    id: 'visiteur-001',
+    nom: '',
+    cne: '',
+    cin: '',
+    email: '',
+    tel: '',
+    panier: [],
+    candidatures: [],
+    compteCree: false,
+  };
+}
 
 const ORDERED_TYPES: PieceType[] = ['CIN', 'DIPLOME', 'RELEVES', 'CV'];
 
@@ -38,10 +116,7 @@ const compressImageDataUrl = (dataUrl: string): Promise<string> => {
 const YASSINE_INITIAL_PIECES: Piece[] = [
   {
     type: 'CIN',
-    statut: 'prouvee',
-    source: 'camera',
-    fichier:
-      'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="180" viewBox="0 0 300 180"><rect width="300" height="180" rx="10" fill="%23f8fafc" stroke="%23cbd5e1" stroke-width="2"/><rect x="20" y="25" width="80" height="100" rx="6" fill="%23cbd5e1"/><text x="120" y="55" font-family="sans-serif" font-size="13" font-weight="bold" fill="%230f172a">ROYAUME DU MAROC</text><text x="120" y="80" font-family="sans-serif" font-size="12" fill="%23334155">CIN: CD789123</text><text x="120" y="105" font-family="sans-serif" font-size="12" fill="%23334155">Nom: EL FASSI</text><text x="120" y="130" font-family="sans-serif" font-size="12" fill="%23334155">Pr&eacute;nom: Yassine</text></svg>',
+    statut: 'declaree',
   },
   {
     type: 'DIPLOME',
@@ -66,7 +141,7 @@ const DEFAULT_PIECES: Piece[] = [
   { type: 'CV', statut: 'absente' },
 ];
 
-export const Dossier: React.FC = () => {
+export const Dossier: React.FC<{ candidatId?: string }> = ({ candidatId }) => {
   const [candidat, setCandidat] = useState<Candidat | null>(null);
   const [pieces, setPieces] = useState<Piece[]>([]);
   const [activeCameraPiece, setActiveCameraPiece] = useState<PieceType | null>(null);
@@ -96,13 +171,22 @@ export const Dossier: React.FC = () => {
 
   const fileInputRefs = useRef<{ [key: string]: HTMLInputElement | null }>({});
 
-  // Charger le candidat et ses données depuis le localStorage
+  // Charger le candidat et ses données depuis le localStorage ou via candidatId
   useEffect(() => {
     const loadData = () => {
       try {
-        const raw = localStorage.getItem('usmba_doctorat_candidat');
-        if (raw) {
-          const parsed: Candidat = JSON.parse(raw);
+        let parsed: Candidat | null = null;
+        if (candidatId) {
+          parsed = findCandidateById(candidatId);
+        }
+        if (!parsed) {
+          const raw = localStorage.getItem('usmba_doctorat_candidat');
+          if (raw) {
+            parsed = JSON.parse(raw);
+          }
+        }
+
+        if (parsed) {
           setCandidat(parsed);
           if (parsed.cne) {
             setApogeeCne(parsed.cne);
@@ -120,12 +204,14 @@ export const Dossier: React.FC = () => {
           // Si parsed.pieces existe
           if (parsed.pieces && Array.isArray(parsed.pieces) && parsed.pieces.length > 0) {
             const normalized = ORDERED_TYPES.map((t) => {
-              const found = parsed.pieces!.find(
+              const found = parsed!.pieces!.find(
                 (p) => p.type.toUpperCase() === t.toUpperCase()
               );
               return found ? { ...found, type: t } : { type: t, statut: 'absente' as const };
             });
             setPieces(normalized);
+          } else if (candidatId) {
+            setPieces(DEFAULT_PIECES);
           }
         } else {
           // Fallback depuis usmba_doctorat_pieces
@@ -173,7 +259,7 @@ export const Dossier: React.FC = () => {
       window.removeEventListener('usmba_pieces_updated', loadData);
       window.removeEventListener('storage', loadData);
     };
-  }, []);
+  }, [candidatId]);
 
   // PVs actifs publiés et non remplacés
   const activePublishedPvs = pvs.filter((pv) => Boolean(pv.publieLe) && !pv.remplaceePar);
@@ -186,29 +272,25 @@ export const Dossier: React.FC = () => {
     );
 
   // 2. peutProuver = le candidat a au moins une candidature de statut 'retenue' (libellé « Validée »),
-  // OU un PV non remplacé, publié, contient un Resultat ADMIS pour lui.
+  // OU un PV non remplacé, publié, contient un Resultat ADMIS pour lui,
+  // OU l'agent est en train de traiter le dossier au guichet.
   const hasRetenueCandidature = Boolean(
     candidat?.candidaturesStatuts &&
     Object.values(candidat.candidaturesStatuts).some((s) => s === 'retenue')
   );
   const isAdmisPv = candidatResultat?.resultat === 'ADMIS';
-  const peutProuver = hasRetenueCandidature || isAdmisPv;
+  const isAgentMode = Boolean(candidatId);
+  const peutProuver = hasRetenueCandidature || isAdmisPv || isAgentMode;
 
   const savePieces = (updatedPieces: Piece[]): boolean => {
     try {
-      const raw = localStorage.getItem('usmba_doctorat_candidat');
-      const curCandidat: Candidat = raw
-        ? JSON.parse(raw)
-        : (candidat || {
-            id: 'visiteur-001',
-            nom: '',
-            panier: [],
-            candidatures: [],
-            compteCree: false,
-          });
+      const curCandidat = resolveCandidate(candidatId, candidat);
       curCandidat.pieces = updatedPieces;
-      localStorage.setItem('usmba_doctorat_candidat', JSON.stringify(curCandidat));
-      localStorage.setItem('usmba_doctorat_pieces', JSON.stringify(updatedPieces));
+      persistCandidate(curCandidat);
+
+      if (!candidatId || candidatId === curCandidat.id) {
+        localStorage.setItem('usmba_doctorat_pieces', JSON.stringify(updatedPieces));
+      }
 
       setPieces(updatedPieces);
       setCandidat(curCandidat);
@@ -279,13 +361,13 @@ export const Dossier: React.FC = () => {
     const cleanCin = ocrEditCin.trim().toUpperCase();
 
     try {
-      const raw = localStorage.getItem('usmba_doctorat_candidat');
-      const curCandidat: Candidat = raw ? JSON.parse(raw) : (candidat || {});
+      const curCandidat = resolveCandidate(candidatId, candidat);
       curCandidat.nom = cleanNom;
       curCandidat.cin = cleanCin;
-      localStorage.setItem('usmba_doctorat_candidat', JSON.stringify(curCandidat));
+      persistCandidate(curCandidat);
       setCandidat(curCandidat);
       setCinInput(cleanCin);
+      window.dispatchEvent(new CustomEvent('usmba_pieces_updated'));
     } catch {
       // safe fallback
     }
@@ -431,16 +513,16 @@ export const Dossier: React.FC = () => {
       return;
     }
     try {
-      const raw = localStorage.getItem('usmba_doctorat_candidat');
-      const curCandidat: Candidat = raw ? JSON.parse(raw) : (candidat || {});
+      const curCandidat = resolveCandidate(candidatId, candidat);
       curCandidat.cin = cleanCin || undefined;
-      localStorage.setItem('usmba_doctorat_candidat', JSON.stringify(curCandidat));
+      persistCandidate(curCandidat);
       setCandidat(curCandidat);
       setCinMessage({
         type: 'success',
         text: fr.dossier.cinSaved,
       });
       setTimeout(() => setCinMessage(null), 2500);
+      window.dispatchEvent(new CustomEvent('usmba_pieces_updated'));
     } catch {
       // safe fallback
     }
@@ -453,19 +535,24 @@ export const Dossier: React.FC = () => {
   const handleSaveCasParticulier = () => {
     if (!isCasParticulierValid) return;
     try {
-      const raw = localStorage.getItem('usmba_doctorat_candidat');
-      const curCandidat: Candidat = raw ? JSON.parse(raw) : (candidat || {});
+      const curCandidat = resolveCandidate(candidatId, candidat);
       curCandidat.dossier = {
         casParticulier,
         motif: casParticulier && motif ? (motif as MotifCasParticulier) : undefined,
         motifAutre: casParticulier && motif === 'AUTRE' ? motifAutre.trim() : undefined,
         guichet: Boolean(curCandidat.dossier?.guichet ?? guichet),
+        guichetStatut: curCandidat.dossier?.guichetStatut,
+        journalGuichet: curCandidat.dossier?.journalGuichet,
+        saisiPar: curCandidat.dossier?.saisiPar,
+        saisiLe: curCandidat.dossier?.saisiLe,
+        consentementGuichet: curCandidat.dossier?.consentementGuichet,
       };
-      localStorage.setItem('usmba_doctorat_candidat', JSON.stringify(curCandidat));
+      persistCandidate(curCandidat);
       setCandidat(curCandidat);
       setSaveCasSuccess(true);
       setTimeout(() => setSaveCasSuccess(false), 2500);
       setFeedbackMessage(null);
+      window.dispatchEvent(new CustomEvent('usmba_pieces_updated'));
     } catch (err: any) {
       const isQuota =
         err?.name === 'QuotaExceededError' ||
@@ -485,16 +572,29 @@ export const Dossier: React.FC = () => {
 
   const handleToggleGuichet = (newGuichet: boolean) => {
     try {
-      const raw = localStorage.getItem('usmba_doctorat_candidat');
-      const curCandidat: Candidat = raw ? JSON.parse(raw) : (candidat || {});
+      const curCandidat = resolveCandidate(candidatId, candidat);
       if (!curCandidat.dossier) {
         curCandidat.dossier = { casParticulier: false, guichet: false };
       }
       curCandidat.dossier.guichet = newGuichet;
-      localStorage.setItem('usmba_doctorat_candidat', JSON.stringify(curCandidat));
+      if (newGuichet) {
+        curCandidat.dossier.guichetStatut = 'a_contacter';
+        const nowIso = new Date().toISOString();
+        const curJournal = curCandidat.dossier.journalGuichet || [];
+        curCandidat.dossier.journalGuichet = [
+          ...curJournal,
+          {
+            date: nowIso,
+            agent: curCandidat.nom || 'Candidat',
+            action: 'Demande du candidat',
+          },
+        ];
+      }
+      persistCandidate(curCandidat);
       setCandidat(curCandidat);
       setGuichet(newGuichet);
       setFeedbackMessage(null);
+      window.dispatchEvent(new CustomEvent('usmba_pieces_updated'));
     } catch (err: any) {
       const isQuota =
         err?.name === 'QuotaExceededError' ||
@@ -537,6 +637,18 @@ export const Dossier: React.FC = () => {
 
   return (
     <div className="space-y-4 max-w-2xl mx-auto">
+      {/* Bandeau si saisi au guichet par un agent */}
+      {candidat?.dossier?.saisiPar && (
+        <div className="bg-teal-50 border border-teal-200 text-teal-950 rounded-2xl p-3.5 text-xs font-semibold flex items-center gap-2.5 shadow-xs">
+          <UserCheck size={18} className="text-teal-700 shrink-0" />
+          <span>
+            {fr.dossier.saisiAuGuichetBandeau
+              .replace('{agent}', candidat.dossier.saisiPar)
+              .replace('{date}', candidat.dossier.saisiLe || '')}
+          </span>
+        </div>
+      )}
+
       {/* 1. Ligne en haut si peutProuver : bandeau dynamique */}
       {peutProuver && piecesProuvees < 4 && (
         <div className="bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-2xl px-4 py-3 text-xs font-semibold flex items-center gap-2 shadow-xs">
@@ -662,21 +774,29 @@ export const Dossier: React.FC = () => {
                       <span>{fr.dossier.preuveAFournir}</span>
                     </span>
                   )}
-                  {/* Niveau de confiance sur chaque pièce prouvée */}
-                  {isProven && (
+                  {/* Statut de la pièce : Vérifiée (Apogée) ou Preuve fournie (avec mention Non contrôlée) */}
+                  {isProven ? (
                     piece.source === 'apogee' ? (
-                      <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full shadow-2xs">
-                        <ShieldCheck size={12} className="text-emerald-700 shrink-0" />
-                        <span>{fr.dossier.confianceApogee}</span>
+                      <span className="inline-flex items-center gap-1.5 font-medium rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs px-2 py-0.5">
+                        <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />
+                        <span>{fr.dossier.verifieeApogee}</span>
                       </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1 text-[11px] font-bold text-blue-800 bg-blue-50 border border-blue-200 px-2.5 py-0.5 rounded-full shadow-2xs">
-                        <AlertCircle size={12} className="text-blue-600 shrink-0" />
-                        <span>{fr.dossier.confianceAutre}</span>
-                      </span>
+                      <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                        <span className="inline-flex items-center gap-1.5 font-medium rounded-full bg-blue-50 text-blue-800 border border-blue-200 text-xs px-2 py-0.5">
+                          <CheckCircle2 size={13} className="text-blue-600 shrink-0" />
+                          <span>{fr.dossier.preuveFournie}</span>
+                        </span>
+                        {(piece.source === 'camera' || piece.source === 'televersement' || !piece.source) && (
+                          <span className="text-xs text-slate-500 font-normal">
+                            {fr.dossier.nonControlee}
+                          </span>
+                        )}
+                      </div>
                     )
+                  ) : (
+                    <StatusBadge type="piece" statut={piece.statut} size="sm" />
                   )}
-                  <StatusBadge type="piece" statut={piece.statut} size="sm" />
                 </div>
               </div>
 
