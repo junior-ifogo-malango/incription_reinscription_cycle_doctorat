@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import Chart from 'chart.js/auto';
 import { Check, Clock, Lock, ArrowRight, Info, X, ExternalLink, Sparkles, AlertTriangle } from 'lucide-react';
 import { fr } from '../i18n/fr';
 import { Candidat, Creneau, PV, Piece, ProgressionEtapeInfo, dossierComplet } from '../types';
@@ -54,6 +55,9 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
   const [hoveredStep, setHoveredStep] = useState<number | null>(null);
   const [dateActuelle, setDateActuelle] = useState<string>(() => aujourdhui());
   const containerRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const chartInstanceRef = useRef<Chart | null>(null);
+  const [chartError, setChartError] = useState(false);
 
   // Synchronisation des données locales
   const loadData = () => {
@@ -273,11 +277,39 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
   // Gestion des actions associées
   const handleAction = (stepIndex: number) => {
     switch (stepIndex) {
-      case 0: // Candidature
-        onNavigate?.('sujets');
+      case 0: // Étape 1 : Dossier complet (cle: 'dossier')
+        {
+          const check = dossierComplet(candidat);
+          let targetId = '';
+          if (check.manques.includes('Cursus Apogée')) {
+            targetId = 'carte-piece-diplome';
+          } else if (check.manques.includes('CIN')) {
+            targetId = 'carte-piece-cin';
+          } else if (check.manques.includes('CV')) {
+            targetId = 'carte-piece-cv';
+          }
+          const el = targetId
+            ? (document.getElementById(targetId) ||
+               (targetId === 'carte-piece-diplome' ? document.getElementById('carte-piece-cursus') : null))
+            : null;
+          if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          } else {
+            onNavigate?.('dossier');
+          }
+        }
         break;
-      case 1: // Dossier complet
-        onNavigate?.('dossier');
+      case 1: // Étape 2 : Envoyée (cle: 'candidature')
+        {
+          const el =
+            document.getElementById('action-envoyer-candidature') ||
+            document.getElementById('bandeau-elements-fournis');
+          if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          } else {
+            onNavigate?.('sujets');
+          }
+        }
         break;
       case 2: // Validée
         onNavigate?.('sujets');
@@ -311,40 +343,134 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
     setActiveTooltip((prev) => (prev === index ? null : index));
   };
 
-  // Calcul géométrique de l'anneau SVG : 6 segments de 60° avec un écart de 8°
-  const cx = 80;
-  const cy = 80;
-  const r = 58;
-  const segments = etapes.map((etape, i) => {
-    const startDeg = -90 + i * 60 + 4;
-    const endDeg = -90 + (i + 1) * 60 - 4;
-    const startRad = (startDeg * Math.PI) / 180;
-    const endRad = (endDeg * Math.PI) / 180;
+  // Initialisation et cycle de vie du Chart.js Doughnut (useRef + useEffect)
+  useEffect(() => {
+    if (!hasCandidatures || !canvasRef.current) return;
 
-    const x1 = cx + r * Math.cos(startRad);
-    const y1 = cy + r * Math.sin(startRad);
-    const x2 = cx + r * Math.cos(endRad);
-    const y2 = cy + r * Math.sin(endRad);
-
-    const pathData = `M ${x1} ${y1} A ${r} ${r} 0 0 1 ${x2} ${y2}`;
-
-    let strokeColor = '#cbd5e1'; // slate-300 (future / non applicable - jamais rouge)
-    if (etape.statut === 'faite') {
-      strokeColor = '#059669'; // emerald-600 (fait : toujours vert)
-    } else if (etape.statut === 'en_cours') {
-      strokeColor = etape.enRetard ? '#dc2626' : '#d97706'; // rouge si en retard, amber-600 sinon
+    // Destruction avant chaque mise à jour
+    if (chartInstanceRef.current) {
+      chartInstanceRef.current.destroy();
+      chartInstanceRef.current = null;
     }
 
-    return {
-      index: i,
-      pathData,
-      strokeColor,
-      etape,
-    };
-  });
+    try {
+      const ctx = canvasRef.current.getContext('2d');
+      if (!ctx) return;
 
-  const displayedTooltipIndex = hoveredStep !== null ? hoveredStep : activeTooltip;
-  const activeEtape = displayedTooltipIndex !== null ? etapes[displayedTooltipIndex] : null;
+      // Couleurs par état : fait = vert, en cours = ambre, futur = gris
+      const backgroundColors = etapes.map((e) => {
+        if (e.statut === 'faite') return '#059669'; // vert
+        if (e.statut === 'en_cours') return e.enRetard ? '#dc2626' : '#d97706'; // ambre
+        return '#cbd5e1'; // gris (futur / non applicable)
+      });
+
+      // Plugin local (aucun plugin externe) dessinant "N/6" et "ÉTAPES" au centre
+      const centerTextPlugin = {
+        id: 'centerTextPlugin',
+        beforeDraw(chart: Chart) {
+          const { ctx, chartArea } = chart;
+          if (!chartArea) return;
+          const { left, top, width, height } = chartArea;
+          const centerX = left + width / 2;
+          const centerY = top + height / 2;
+
+          ctx.save();
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+
+          // "N/6"
+          ctx.font = 'bold 24px system-ui, -apple-system, sans-serif';
+          ctx.fillStyle = '#0f172a';
+          ctx.fillText(`${doneCount}/6`, centerX, centerY - 6);
+
+          // "ÉTAPES"
+          ctx.font = 'bold 10px system-ui, -apple-system, sans-serif';
+          ctx.fillStyle = '#64748b';
+          ctx.fillText((fr.progression.stepCount || 'étapes').toUpperCase(), centerX, centerY + 14);
+
+          ctx.restore();
+        },
+      };
+
+      const newChart = new Chart<'doughnut'>(ctx, {
+        type: 'doughnut',
+        data: {
+          labels: etapes.map((e) => e.nom),
+          datasets: [
+            {
+              data: [1, 1, 1, 1, 1, 1], // 6 segments égaux
+              backgroundColor: backgroundColors,
+              borderColor: '#ffffff',
+              borderWidth: 3,
+              hoverOffset: 4,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          cutout: '70%', // cutout 70%
+          animation: {
+            duration: 350, // animation courte
+          },
+          events: ['mousemove', 'mouseout', 'click', 'touchstart', 'touchmove'],
+          interaction: {
+            mode: 'nearest',
+            intersect: true,
+          },
+          plugins: {
+            legend: {
+              display: false, // légende désactivée
+            },
+            tooltip: {
+              enabled: true,
+              displayColors: false,
+              callbacks: {
+                title: () => '',
+                label(tooltipItem) {
+                  const idx = tooltipItem.dataIndex;
+                  const etape = etapes[idx];
+                  if (!etape) return '';
+                  const etat = etape.estNonApplicable
+                    ? fr.progression.statuts.nonApplicable
+                    : etape.statut === 'faite'
+                    ? fr.progression.statuts.faite
+                    : etape.statut === 'en_cours'
+                    ? (etape.enRetard
+                        ? fr.progression.enRetardDepuis.replace('{jours}', String(etape.joursRetard || 1))
+                        : fr.progression.statuts.enCours)
+                    : fr.progression.statuts.future;
+                  const echeance = etape.echeance ? ` (${formatJJMM(etape.echeance)})` : '';
+                  // Format exact demandé : "Étape : état (échéance)"
+                  return `${etape.nom} : ${etat}${echeance}`;
+                },
+              },
+            },
+          },
+        },
+        plugins: [centerTextPlugin],
+      });
+
+      chartInstanceRef.current = newChart;
+      setChartError(false);
+    } catch (err) {
+      console.error('Erreur initialisation Chart.js:', err);
+      setChartError(true);
+    }
+
+    // Destruction au démontage
+    return () => {
+      if (chartInstanceRef.current) {
+        chartInstanceRef.current.destroy();
+        chartInstanceRef.current = null;
+      }
+    };
+  }, [
+    hasCandidatures,
+    doneCount,
+    dateActuelle,
+    JSON.stringify(etapes.map((e) => ({ s: e.statut, r: e.enRetard, j: e.joursRetard }))),
+  ]);
 
   return (
     <div
@@ -370,146 +496,21 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
         </div>
       </div>
 
-      {/* Cercle de progression SVG (≈160px) OU carte initiale si aucune candidature */}
-      {hasCandidatures ? (
+      {/* Cercle de progression Chart.js Doughnut (cutout 70%) OU carte initiale si aucune candidature */}
+      {hasCandidatures && !chartError ? (
         <div className="flex flex-col items-center justify-center py-2 relative">
           <div className="relative w-[160px] h-[160px] min-w-[160px] min-h-[160px] flex items-center justify-center shrink-0 mx-auto">
-            <svg
-              width="160"
-              height="160"
-              viewBox="0 0 160 160"
-              className="w-[160px] h-[160px] shrink-0 block"
-              aria-label={`${fr.progression.progressionGlobale} : ${doneCount} sur 6`}
-            >
-              {segments.map((seg) => {
-                const isSelected = activeTooltip === seg.index;
-                const isHovered = hoveredStep === seg.index;
-                const isEnCours = seg.etape.statut === 'en_cours';
-
-                return (
-                  <g
-                    key={seg.index}
-                    className="cursor-pointer transition-transform focus:outline-none"
-                    tabIndex={0}
-                    role="button"
-                    aria-label={`${seg.etape.numero}. ${seg.etape.nom} : ${
-                      seg.etape.estNonApplicable
-                        ? fr.progression.statuts.nonApplicable
-                        : seg.etape.statut === 'faite'
-                        ? fr.progression.statuts.faite
-                        : seg.etape.statut === 'en_cours'
-                        ? fr.progression.statuts.enCours
-                        : fr.progression.statuts.future
-                    }`}
-                    onClick={() => handleStepToggle(seg.index)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        handleStepToggle(seg.index);
-                      }
-                    }}
-                    onMouseEnter={() => setHoveredStep(seg.index)}
-                    onMouseLeave={() => setHoveredStep(null)}
-                  >
-                    <path
-                      d={seg.pathData}
-                      fill="none"
-                      stroke={seg.strokeColor}
-                      strokeWidth={isSelected || isHovered ? 13 : isEnCours ? 11.5 : 9.5}
-                      strokeLinecap="round"
-                      className="transition-all duration-200"
-                    />
-                  </g>
-                );
-              })}
-
-              {/* Centre de l'anneau SVG : N/6 + mention toujours visible */}
-              <text
-                x="80"
-                y="74"
-                textAnchor="middle"
-                dominantBaseline="central"
-                className="text-3xl font-black fill-slate-900 tracking-tight select-none font-sans"
-              >
-                {doneCount}/6
-              </text>
-              <text
-                x="80"
-                y="94"
-                textAnchor="middle"
-                dominantBaseline="central"
-                className="text-[10px] font-bold fill-slate-500 uppercase tracking-wider select-none font-sans"
-              >
-                {fr.progression.stepCount}
-              </text>
-            </svg>
+            <canvas
+              ref={canvasRef}
+              role="img"
+              aria-label={`Progression : ${doneCount} étapes sur 6`}
+              width={160}
+              height={160}
+              className="w-[160px] h-[160px] block cursor-pointer"
+            />
           </div>
-
-          {/* Infobulle contextuelle de segment actif ou survolé */}
-          {activeEtape && (
-            <div className="mt-3 w-full max-w-sm mx-auto bg-slate-900 text-white rounded-xl p-3 text-xs shadow-lg animate-in fade-in zoom-in-95 duration-150 relative">
-              <div className="flex items-start justify-between gap-2">
-                <div className={`flex items-center gap-1.5 font-bold ${activeEtape.enRetard ? 'text-rose-400' : 'text-amber-300'}`}>
-                  {activeEtape.enRetard ? (
-                    <AlertTriangle size={14} className="shrink-0 text-rose-400" />
-                  ) : (
-                    <Info size={14} className="shrink-0" />
-                  )}
-                  <span>
-                    Étape {activeEtape.numero} : {activeEtape.nom}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveTooltip(null);
-                    setHoveredStep(null);
-                  }}
-                  className="text-slate-400 hover:text-white p-0.5 cursor-pointer"
-                  aria-label={fr.progression.tooltipClose}
-                >
-                  <X size={14} />
-                </button>
-              </div>
-
-              {activeEtape.enRetard && (
-                <div className="mt-1.5 px-2.5 py-1 bg-rose-950/80 border border-rose-500/40 rounded-lg text-xs text-rose-200 flex items-center gap-1.5">
-                  <AlertTriangle size={12} className="shrink-0 text-rose-400" />
-                  <span className="font-bold">
-                    {fr.progression.enRetardDepuis.replace('{jours}', String(activeEtape.joursRetard || 1))}
-                  </span>
-                </div>
-              )}
-
-              <p className="mt-1.5 text-slate-200 leading-relaxed">{activeEtape.infobulle}</p>
-              {activeEtape.statut === 'en_cours' && activeEtape.actionTexte && (
-                <button
-                  type="button"
-                  onClick={() => handleAction(activeEtape.numero - 1)}
-                  className={`mt-2.5 w-full py-1.5 px-3 rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
-                    activeEtape.enRetard
-                      ? 'bg-rose-600 hover:bg-rose-500 text-white'
-                      : 'bg-amber-500 hover:bg-amber-400 text-slate-950'
-                  }`}
-                >
-                  <span>{activeEtape.actionTexte}</span>
-                  <ArrowRight size={13} />
-                </button>
-              )}
-              {activeEtape.statut === 'faite' && (
-                <button
-                  type="button"
-                  onClick={() => handleAction(activeEtape.numero - 1)}
-                  className="mt-2.5 w-full py-1.5 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-emerald-300 font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                >
-                  <span>{fr.progression.actionConsulter}</span>
-                  <ExternalLink size={13} />
-                </button>
-              )}
-            </div>
-          )}
         </div>
-      ) : (
+      ) : !hasCandidatures ? (
         /* Petite carte si aucune candidature déposée */
         <div className="bg-amber-50/70 border border-amber-200/80 rounded-xl p-4 text-center space-y-2.5 my-1">
           <div className="w-9 h-9 mx-auto rounded-full bg-amber-100 text-amber-800 flex items-center justify-center">
@@ -532,7 +533,7 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
             </button>
           </div>
         </div>
-      )}
+      ) : null}
 
       {/* Liste verticale des 6 étapes sous le cercle */}
       <div className="space-y-2 pt-2 border-t border-slate-100">

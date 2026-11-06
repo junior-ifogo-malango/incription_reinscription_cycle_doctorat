@@ -8,6 +8,7 @@ import { CameraCapture } from './CameraCapture';
 import { fr } from '../i18n/fr';
 import { lireCIN, OcrResultatCIN } from '../utils/ocrSimule';
 import { logEvent } from '../utils/journal';
+import { ProgressionCandidat } from './ProgressionCandidat';
 
 function findCandidateById(id?: string): Candidat | null {
   if (!id) return null;
@@ -143,7 +144,12 @@ const DEFAULT_PIECES: Piece[] = [
   { type: 'CV', statut: 'absente' },
 ];
 
-export const Dossier: React.FC<{ candidatId?: string }> = ({ candidatId }) => {
+interface DossierProps {
+  candidatId?: string;
+  onNavigate?: (tab: any) => void;
+}
+
+export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
   const [candidat, setCandidat] = useState<Candidat | null>(null);
   const [pieces, setPieces] = useState<Piece[]>([]);
   const [activeCameraPiece, setActiveCameraPiece] = useState<PieceType | null>(null);
@@ -765,10 +771,11 @@ export const Dossier: React.FC<{ candidatId?: string }> = ({ candidatId }) => {
   };
 
   // Compteurs : 1) Pièces déclarées ('declaree' ou 'prouvee') ; 2) Pièces prouvées ('prouvee')
-  const piecesDeclarees = pieces.filter(
-    (p) => p.statut === 'declaree' || p.statut === 'prouvee'
+  const safePieces = Array.isArray(pieces) ? pieces : [];
+  const piecesDeclarees = safePieces.filter(
+    (p) => p && (p.statut === 'declaree' || p.statut === 'prouvee')
   ).length;
-  const piecesProuvees = pieces.filter((p) => p.statut === 'prouvee').length;
+  const piecesProuvees = safePieces.filter((p) => p && p.statut === 'prouvee').length;
 
   const percentDeclarees = Math.round((piecesDeclarees / 4) * 100);
   const percentProuvees = Math.round((piecesProuvees / 4) * 100);
@@ -777,7 +784,8 @@ export const Dossier: React.FC<{ candidatId?: string }> = ({ candidatId }) => {
     const cur = resolveCandidate(candidatId, candidat);
     return dossierComplet({
       ...cur,
-      pieces,
+      cursus: cur?.cursus,
+      pieces: Array.isArray(pieces) ? pieces : (cur?.pieces || []),
     });
   }, [candidatId, candidat, pieces]);
 
@@ -799,6 +807,15 @@ export const Dossier: React.FC<{ candidatId?: string }> = ({ candidatId }) => {
 
   return (
     <div className="space-y-4 max-w-2xl mx-auto">
+      {/* 0. Progression du candidat en haut de Mon dossier, au-dessus du bandeau "N/3 éléments fournis" */}
+      {!isDirecteur && (
+        <ProgressionCandidat
+          candidatId={candidat?.id || candidatId}
+          candidat={candidat || undefined}
+          onNavigate={onNavigate}
+        />
+      )}
+
       {/* Bandeau si saisi au guichet par un agent */}
       {candidat?.dossier?.saisiPar && (
         <div className="bg-teal-50 border border-teal-200 text-teal-950 rounded-2xl p-3.5 text-xs font-semibold flex items-center gap-2.5 shadow-xs">
@@ -896,7 +913,7 @@ export const Dossier: React.FC<{ candidatId?: string }> = ({ candidatId }) => {
       )}
 
       {/* 3. Bandeau "Dossier : N/3 éléments fournis" + manquants en texte */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3">
+      <div id="bandeau-elements-fournis" className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3">
         <div className="flex items-center justify-between text-xs flex-wrap gap-2">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-extrabold text-slate-900">
@@ -926,7 +943,7 @@ export const Dossier: React.FC<{ candidatId?: string }> = ({ candidatId }) => {
 
         {/* Bouton Envoyer ma candidature si candidature en brouillon */}
         {!isDirecteur && hasBrouillon && (
-          <div className="pt-2 border-t border-slate-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
+          <div id="action-envoyer-candidature" className="pt-2 border-t border-slate-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
             <div>
               <p className="text-xs font-bold text-slate-800">
                 Prêt à envoyer votre candidature ?
@@ -1010,8 +1027,8 @@ export const Dossier: React.FC<{ candidatId?: string }> = ({ candidatId }) => {
       <div className="space-y-3">
         {ORDERED_TYPES.map((type) => {
           const piece =
-            pieces.find(
-              (p) => p.type === type || p.type.toUpperCase() === type.toUpperCase()
+            safePieces.find(
+              (p) => p && (p.type === type || p.type?.toUpperCase() === type.toUpperCase())
             ) || { type, statut: 'absente' as const };
 
           const isImage = isImageFile(piece.fichier);
@@ -1023,12 +1040,30 @@ export const Dossier: React.FC<{ candidatId?: string }> = ({ candidatId }) => {
           // Règle 3 : Les boutons de preuve (CIN, CV) s'affichent dès qu'une candidature est en 'brouillon'
           const canProuveThisPiece = !isDirecteur && ((isCin || isCv) ? (hasCandidatureActive || peutProuver) : peutProuver);
 
+          const pieceMatchesAnomalie = Boolean(
+            (activeAnomalie && (
+              (activeAnomalie.piece === 'CIN' && isCin) ||
+              (activeAnomalie.piece === 'CV' && isCv) ||
+              (activeAnomalie.piece === 'CURSUS' && isDiplome)
+            )) || piece.statut === 'illisible'
+          );
+
+          const cardId = isDiplome
+            ? 'carte-piece-diplome'
+            : isCin
+            ? 'carte-piece-cin'
+            : isCv
+            ? 'carte-piece-cv'
+            : 'carte-piece-releves';
+
           return (
             <div
               key={type}
+              id={cardId}
+              data-carte={isDiplome ? 'cursus' : undefined}
               className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3"
             >
-              {/* Ligne 1 : Nom de la pièce + Badge(s) */}
+              {/* Ligne 1 : Nom de la pièce + Badge unique */}
               <div className="flex items-start justify-between gap-3">
                 <div className="space-y-0.5">
                   <h3 className="text-xs font-bold text-slate-900 leading-snug">
@@ -1041,35 +1076,43 @@ export const Dossier: React.FC<{ candidatId?: string }> = ({ candidatId }) => {
                   )}
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap justify-end">
-                  {/* Si canProuveThisPiece et pièce déclarée : badge « Preuve à fournir » */}
-                  {!isDirecteur && canProuveThisPiece && (piece.statut === 'declaree' || piece.statut === 'absente') && (
-                    <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
-                      <AlertCircle size={12} className="shrink-0" />
+                  {/* Un seul badge par carte avec ordre strict de priorité */}
+                  {isProven && piece.source === 'apogee' ? (
+                    // 1. Vérifiée (Apogée)
+                    <span className="inline-flex items-center gap-1.5 font-medium rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs px-2.5 py-0.5">
+                      <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />
+                      <span>{fr.dossier.verifieeApogee}</span>
+                    </span>
+                  ) : isProven ? (
+                    // 2. Preuve fournie - non contrôlée
+                    <span className="inline-flex items-center gap-1.5 font-medium rounded-full bg-blue-50 text-blue-800 border border-blue-200 text-xs px-2.5 py-0.5">
+                      <CheckCircle2 size={13} className="text-blue-600 shrink-0" />
+                      <span>{fr.dossier.preuveFournieNonControlee}</span>
+                    </span>
+                  ) : pieceMatchesAnomalie ? (
+                    // 3. À corriger (si anomalie)
+                    <span className="inline-flex items-center gap-1.5 font-bold rounded-full bg-rose-50 text-rose-800 border border-rose-300 text-xs px-2.5 py-0.5">
+                      <AlertTriangle size={13} className="text-rose-600 shrink-0" />
+                      <span>{fr.dossier.aCorriger}</span>
+                    </span>
+                  ) : canProuveThisPiece && (piece.statut === 'declaree' || piece.statut === 'absente') ? (
+                    // 4. Preuve à fournir
+                    <span className="inline-flex items-center gap-1.5 font-bold rounded-full bg-amber-50 text-amber-800 border border-amber-300 text-xs px-2.5 py-0.5">
+                      <AlertCircle size={13} className="text-amber-600 shrink-0" />
                       <span>{fr.dossier.preuveAFournir}</span>
                     </span>
-                  )}
-                  {/* Statut de la pièce : Vérifiée (Apogée) ou Preuve fournie (avec mention Non contrôlée) */}
-                  {isProven ? (
-                    piece.source === 'apogee' ? (
-                      <span className="inline-flex items-center gap-1.5 font-medium rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs px-2 py-0.5">
-                        <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />
-                        <span>{fr.dossier.verifieeApogee}</span>
-                      </span>
-                    ) : (
-                      <div className="flex items-center gap-1.5 flex-wrap justify-end">
-                        <span className="inline-flex items-center gap-1.5 font-medium rounded-full bg-blue-50 text-blue-800 border border-blue-200 text-xs px-2 py-0.5">
-                          <CheckCircle2 size={13} className="text-blue-600 shrink-0" />
-                          <span>{fr.dossier.preuveFournie}</span>
-                        </span>
-                        {(piece.source === 'camera' || piece.source === 'televersement' || !piece.source) && (
-                          <span className="text-xs text-slate-500 font-normal">
-                            {fr.dossier.nonControlee}
-                          </span>
-                        )}
-                      </div>
-                    )
+                  ) : piece.statut === 'declaree' ? (
+                    // Déclarée (seulement si preuve non requise, jamais simultanément avec preuve à fournir)
+                    <span className="inline-flex items-center gap-1.5 font-medium rounded-full bg-slate-100 text-slate-700 border border-slate-200 text-xs px-2.5 py-0.5">
+                      <FileText size={13} className="text-slate-500 shrink-0" />
+                      <span>{fr.statutsPiece.declaree.label}</span>
+                    </span>
                   ) : (
-                    <StatusBadge type="piece" statut={piece.statut} size="sm" />
+                    // Absente
+                    <span className="inline-flex items-center gap-1.5 font-medium rounded-full bg-slate-100 text-slate-500 border border-slate-200 text-xs px-2.5 py-0.5">
+                      <X size={13} className="text-slate-400 shrink-0" />
+                      <span>{fr.statutsPiece.absente.label}</span>
+                    </span>
                   )}
                 </div>
               </div>
@@ -1120,11 +1163,13 @@ export const Dossier: React.FC<{ candidatId?: string }> = ({ candidatId }) => {
                 </div>
               )}
 
-              {/* Saisie CIN facultative sur la carte CIN */}
+              {/* Saisie CIN sur la carte CIN */}
               {isCin && (
                 <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3 space-y-2">
                   <label className="block text-[11px] font-bold text-slate-700">
-                    {fr.dossier.cinFieldLabel}
+                    {(hasBrouillon || hasACorriger)
+                      ? fr.dossier.cinFieldLabelObligatoire
+                      : fr.dossier.cinFieldLabel}
                   </label>
                   <div className="flex items-center gap-2">
                     <input

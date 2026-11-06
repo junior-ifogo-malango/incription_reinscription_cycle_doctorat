@@ -1543,7 +1543,7 @@ export default function App() {
 
           {/* Onglet « Mon dossier » (candidat) */}
           {tab === 'dossier' && role === 'candidat' && isLoggedIn && (
-            <Dossier />
+            <Dossier onNavigate={(targetTab) => setTab(targetTab)} />
           )}
 
           {/* Onglet Rapport (Doctorant) */}
