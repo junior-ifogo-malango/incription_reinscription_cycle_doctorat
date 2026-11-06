@@ -1,4 +1,30 @@
-export type UserRole = 'candidat' | 'enseignant' | 'directeur_ced' | 'doctorant' | 'agent';
+export type UserRole = 'candidat' | 'enseignant' | 'directeur_ced' | 'doctorant' | 'agent' | 'admin';
+
+export type CompteStatut = 'actif' | 'en_attente' | 'refuse';
+
+export interface Compte {
+  id: string;
+  nom: string;
+  email: string;
+  motDePasse?: string;
+  role: UserRole;
+  structure: string;
+  etablissement?: string;
+  statut: CompteStatut;
+  motifRefus?: string;
+  dateCreation?: string;
+}
+
+export interface EvenementJournal {
+  id: string;
+  date: string; /* ISO */
+  acteurId: string;
+  acteurNom: string;
+  role: UserRole;
+  action: string;
+  cible: string;
+  detail?: string;
+}
 
 export type GuichetStatut = 'a_contacter' | 'contacte' | 'venu' | 'saisi';
 
@@ -54,7 +80,14 @@ export interface Piece {
 
 export type MotifCasParticulier = 'ATTESTATION_SANS_DIPLOME' | 'DIPLOME_ETRANGER' | 'INGENIEUR_SANS_LICENCE' | 'AUTRE';
 
-export type CandidatureStatut = 'deposee' | 'retenue';
+export type CandidatureStatut = 'brouillon' | 'deposee' | 'retenue' | 'a_corriger';
+
+export interface AnomalieCandidature {
+  piece: 'CURSUS' | 'CIN' | 'CV';
+  nature: 'illisible' | 'absente' | 'incoherente';
+  motif: string;
+  le: string;
+}
 
 export interface Candidature {
   id?: string;
@@ -62,6 +95,9 @@ export interface Candidature {
   candidatId?: string;
   statut: CandidatureStatut;
   attesteLe?: string;
+  envoyeLe?: string;
+  renvoyeLe?: string;
+  anomalie?: AnomalieCandidature;
 }
 
 export interface Candidat {
@@ -73,8 +109,14 @@ export interface Candidat {
   tel: string;
   motDePasse?: string;
   panier: string[]; // Panier illimité
-  candidatures: string[]; // Max 3 candidatures déposées
-  candidaturesStatuts?: Record<string, CandidatureStatut>; // Statut par sujet : 'deposee' | 'retenue'
+  candidatures: string[]; // Max 3 candidatures
+  candidaturesStatuts?: Record<string, CandidatureStatut>; // Statut par sujet : 'brouillon' | 'deposee' | 'retenue' | 'a_corriger'
+  candidaturesAnomalies?: Record<string, AnomalieCandidature>;
+  candidaturesEnvoyeLe?: Record<string, string>;
+  candidaturesRenvoyeLe?: Record<string, string>;
+  envoyeLe?: string;
+  renvoyeLe?: string;
+  anomalie?: AnomalieCandidature;
   compteCree: boolean;
   role?: UserRole;
   desactive?: boolean;
@@ -99,7 +141,16 @@ export interface Candidat {
   verificationEssaisRestants?: number;
   verificationBloqueJusqua?: number; // timestamp en millisecondes
   attesteLe?: string;
+  cursus?: {
+    diplome?: string;
+    etablissement?: string;
+    anneeObtention?: number;
+    mention?: string;
+    [key: string]: any;
+  };
 }
+
+export type NotificationType = 'info' | 'action';
 
 export interface Notification {
   id: string;
@@ -108,6 +159,64 @@ export interface Notification {
   date: string; /* ISO */
   lue: boolean;
   canal?: 'email' | 'sms';
+  type?: NotificationType; /* Traité comme 'info' si absent */
+  actionLabel?: string;
+  actionTab?: string;
+}
+
+export interface DossierCompletResult {
+  complet: boolean;
+  manques: string[];
+}
+
+/**
+ * Règle d'exhaustivité du dossier candidat :
+ * complet si (cursus présent OU casParticulier avec motif) ET CIN et CV au statut 'prouvee'.
+ * manques = liste lisible ("Cursus Apogée", "CIN", "CV").
+ * Ne plante jamais si candidat, pieces ou cursus undefined.
+ */
+export function dossierComplet(candidat?: Candidat | null): DossierCompletResult {
+  const manques: string[] = [];
+
+  if (!candidat) {
+    return { complet: false, manques: ['Cursus Apogée', 'CIN', 'CV'] };
+  }
+
+  // 1. Cursus : présent (candidat.cursus ou diplôme vérifié Apogée) OU casParticulier avec motif
+  const hasCasParticulier = Boolean(
+    candidat.dossier?.casParticulier &&
+    Boolean(candidat.dossier?.motif || candidat.dossier?.motifAutre)
+  );
+
+  const hasCursus = Boolean(
+    candidat.cursus ||
+    (Array.isArray(candidat.pieces) &&
+      candidat.pieces.some(
+        (p) => p && p.type && p.type.toUpperCase() === 'DIPLOME' && p.source === 'apogee' && p.statut === 'prouvee'
+      ))
+  );
+
+  if (!hasCursus && !hasCasParticulier) {
+    manques.push('Cursus Apogée');
+  }
+
+  // 2. CIN : statut 'prouvee'
+  const pieces = Array.isArray(candidat.pieces) ? candidat.pieces : [];
+  const cinPiece = pieces.find((p) => p && p.type && p.type.toUpperCase() === 'CIN');
+  if (!cinPiece || cinPiece.statut !== 'prouvee') {
+    manques.push('CIN');
+  }
+
+  // 3. CV : statut 'prouvee'
+  const cvPiece = pieces.find((p) => p && p.type && p.type.toUpperCase() === 'CV');
+  if (!cvPiece || cvPiece.statut !== 'prouvee') {
+    manques.push('CV');
+  }
+
+  return {
+    complet: manques.length === 0,
+    manques,
+  };
 }
 
 export interface Dossier {
@@ -175,6 +284,9 @@ export interface PV {
   remplaceePar?: string; /* id de la version suivante */
   rouvertLe?: string; /* ISO */
   motifReouverture?: string;
+  scanDeposeLe?: string;
+  scanStatut?: 'en_attente' | 'valide' | 'refuse';
+  scanMotifRefus?: string;
 }
 
 /* Module R : Réinscription */
@@ -227,12 +339,19 @@ export interface Doctorant {
 
 export type ProgressionEtapeStatut = 'faite' | 'en_cours' | 'future';
 
+export type EcheanceEtapeCle = 'candidature' | 'dossier' | 'validee' | 'validation' | 'entretien' | 'resultat';
+
+export type EcheancesMap = Partial<Record<EcheanceEtapeCle, string>>;
+
 export interface ProgressionEtapeInfo {
   numero: number;
-  cle: 'candidature' | 'validee' | 'entretien' | 'resultat' | 'preuves' | 'inscription';
+  cle: 'candidature' | 'dossier' | 'validee' | 'entretien' | 'resultat' | 'inscription';
   nom: string;
   statut: ProgressionEtapeStatut;
   estNonApplicable?: boolean;
   infobulle: string;
   actionTexte?: string;
+  echeance?: string;
+  enRetard?: boolean;
+  joursRetard?: number;
 }

@@ -5,6 +5,7 @@ import { fr } from '../i18n/fr';
 import { StatusBadge } from './StatusBadge';
 import { storageService } from '../services/storage';
 import { ProgressionCandidat } from './ProgressionCandidat';
+import { logEvent } from '../utils/journal';
 
 const STORAGE_KEY_CRENEAUX = 'usmba_doctorat_creneaux';
 const STORAGE_KEY_CANDIDAT = 'usmba_doctorat_candidat';
@@ -213,6 +214,7 @@ export const Entretiens: React.FC<EntretiensProps> = ({
     });
 
     saveCreneaux(updated);
+    logEvent({ id: candidat.id, nom: candidat.nom, role: 'candidat' }, fr.journalActions.creneauReserve, `${targetSlot.date} à ${targetSlot.heure}`);
   };
 
   // Confirmer son créneau en 1 clic
@@ -240,6 +242,7 @@ export const Entretiens: React.FC<EntretiensProps> = ({
     });
 
     saveCreneaux(updated);
+    logEvent({ id: candidat.id, nom: candidat.nom, role: 'candidat' }, fr.journalActions.creneauConfirme, `${monCreneau.date} à ${monCreneau.heure}`);
   };
 
   // Changer de créneau : remet le créneau précédent à 'libre'

@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { X, LogIn, ChevronDown, ChevronUp, AlertCircle, KeyRound } from 'lucide-react';
 import { UserRole, Candidat } from '../types';
 import { fr } from '../i18n/fr';
-import { DEMO_CANDIDAT_YASSINE, INITIAL_ENSEIGNANTS, MOCK_CANDIDATS } from '../data/mockData';
+import { DEMO_CANDIDAT_YASSINE, INITIAL_ENSEIGNANTS, MOCK_CANDIDATS, getComptes } from '../data/mockData';
+import { logEvent } from '../utils/journal';
 
 interface LoginModalProps {
   isOpen: boolean;
@@ -57,6 +58,29 @@ export const LoginModal: React.FC<LoginModalProps> = ({
     // Détection du compte et lecture dynamique de son rôle (compte.role)
     const isDemoPassword = cleanPassword === 'demo1234';
 
+    // 0. Vérification des comptes gérés (admin, comptes en attente ou validés)
+    const comptes = getComptes();
+    const compteTrouve = comptes.find((c) => c.email && c.email.toLowerCase().trim() === cleanEmail);
+    if (compteTrouve) {
+      const matchPass = compteTrouve.motDePasse ? compteTrouve.motDePasse === cleanPassword : isDemoPassword;
+      if (!matchPass) {
+        setError(fr.auth.invalidCredentials);
+        return;
+      }
+      if (compteTrouve.statut === 'en_attente' || compteTrouve.statut === 'refuse') {
+        setError(fr.auth.accountPendingValidation);
+        return;
+      }
+      logEvent(
+        { id: compteTrouve.id, nom: compteTrouve.nom, role: compteTrouve.role },
+        fr.journalActions.connexion,
+        cleanEmail
+      );
+      onLoginSuccess(compteTrouve.role, cleanEmail);
+      onClose();
+      return;
+    }
+
     // 1. Compte Yassine (Candidat)
     if (
       (cleanEmail === 'yassine@demo.ma' ||
@@ -68,6 +92,11 @@ export const LoginModal: React.FC<LoginModalProps> = ({
         setError(fr.auth.accountDeactivated);
         return;
       }
+      logEvent(
+        { id: DEMO_CANDIDAT_YASSINE.id, nom: DEMO_CANDIDAT_YASSINE.nom, role: 'candidat' },
+        fr.journalActions.connexion,
+        cleanEmail
+      );
       onLoginSuccess('candidat', cleanEmail, DEMO_CANDIDAT_YASSINE);
       onClose();
       return;
@@ -79,6 +108,11 @@ export const LoginModal: React.FC<LoginModalProps> = ({
         cleanEmail === 'k.elamrani@usmba.ac.ma') &&
       isDemoPassword
     ) {
+      logEvent(
+        { id: 'ens-1', nom: 'Pr. Karim El Amrani', role: 'enseignant' },
+        fr.journalActions.connexion,
+        cleanEmail
+      );
       onLoginSuccess('enseignant', cleanEmail);
       onClose();
       return;
@@ -90,6 +124,11 @@ export const LoginModal: React.FC<LoginModalProps> = ({
         cleanEmail === 'ced@usmba.ac.ma') &&
       isDemoPassword
     ) {
+      logEvent(
+        { id: 'dir-ced', nom: 'Directeur CED', role: 'directeur_ced' },
+        fr.journalActions.connexion,
+        cleanEmail
+      );
       onLoginSuccess('directeur_ced', cleanEmail);
       onClose();
       return;

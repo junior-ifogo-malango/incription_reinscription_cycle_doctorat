@@ -164,35 +164,21 @@ export const Notifications: React.FC<NotificationsProps> = ({
                     <p className="text-xs text-slate-700 leading-snug font-medium">
                       {notif.texte}
                     </p>
-                    {isEntretiensNotif ? (
+                    {notif.type === 'action' && (
                       <button
                         type="button"
                         onClick={() => {
                           setIsOpen(false);
-                          if (onNavigateToEntretiens) {
+                          if (notif.actionTab === 'entretiens' && onNavigateToEntretiens) {
                             onNavigateToEntretiens();
                           } else {
-                            window.dispatchEvent(
-                              new CustomEvent('usmba_navigate_tab', { detail: 'entretiens' })
-                            );
+                            onNavigateToDossier();
                           }
                         }}
-                        className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 hover:text-emerald-800 hover:underline cursor-pointer"
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-700 hover:bg-emerald-800 text-white shadow-xs cursor-pointer active:scale-98 transition-colors mt-1"
                       >
-                        <span>{fr.notifications.btnAllerEntretiens}</span>
-                        <span>→</span>
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsOpen(false);
-                          onNavigateToDossier();
-                        }}
-                        className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 hover:text-emerald-800 hover:underline cursor-pointer"
-                      >
-                        <span>{fr.notifications.btnAllerDossier}</span>
-                        <span>→</span>
+                        <span>{notif.actionLabel || fr.notifications.btnCompleterDossier}</span>
+                        <span aria-hidden="true">→</span>
                       </button>
                     )}
                   </div>

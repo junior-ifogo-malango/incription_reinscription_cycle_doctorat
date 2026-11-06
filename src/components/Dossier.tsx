@@ -1,11 +1,13 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Camera, Upload, FileText, CheckCircle2, AlertCircle, X, Eye, RotateCcw, Award, ShieldCheck, UserCheck } from 'lucide-react';
-import { Piece, PieceType, Candidat, MotifCasParticulier, PV } from '../types';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { Camera, Upload, FileText, CheckCircle2, AlertCircle, X, Eye, RotateCcw, Award, ShieldCheck, UserCheck, AlertTriangle, ArrowRight } from 'lucide-react';
+import { Piece, PieceType, Candidat, MotifCasParticulier, PV, dossierComplet, AnomalieCandidature, CandidatureStatut, Notification } from '../types';
 import { ApogeeFictif, MOCK_CANDIDATS } from '../data/mockData';
+import { storageService } from '../services/storage';
 import { StatusBadge } from './StatusBadge';
 import { CameraCapture } from './CameraCapture';
 import { fr } from '../i18n/fr';
 import { lireCIN, OcrResultatCIN } from '../utils/ocrSimule';
+import { logEvent } from '../utils/journal';
 
 function findCandidateById(id?: string): Candidat | null {
   if (!id) return null;
@@ -282,6 +284,146 @@ export const Dossier: React.FC<{ candidatId?: string }> = ({ candidatId }) => {
   const isAgentMode = Boolean(candidatId);
   const peutProuver = hasRetenueCandidature || isAdmisPv || isAgentMode;
 
+  // Règle : boutons CIN/CV dès qu'une candidature est 'brouillon', 'deposee', 'a_corriger' ou 'retenue'
+  const hasCandidatureActive = Boolean(
+    (candidat?.candidatures && candidat.candidatures.length > 0) ||
+    (candidat?.candidaturesStatuts &&
+      Object.values(candidat.candidaturesStatuts).some(
+        (s) => s === 'brouillon' || s === 'deposee' || s === 'a_corriger' || s === 'retenue'
+      ))
+  );
+
+  const candidatures = candidat?.candidatures || [];
+  const statuts = candidat?.candidaturesStatuts || {};
+  const hasBrouillon = candidatures.some((id) => statuts[id] === 'brouillon');
+  const hasACorriger = candidatures.some((id) => statuts[id] === 'a_corriger');
+
+  // Anomalie active éventuelle
+  const activeAnomalie: AnomalieCandidature | undefined =
+    candidat?.anomalie ||
+    (candidat?.candidaturesAnomalies && Object.values(candidat.candidaturesAnomalies)[0]);
+
+  const [transmissionSuccess, setTransmissionSuccess] = useState<string | null>(null);
+
+  const isDirecteur = Boolean(
+    storageService.getRole() === 'enseignant' ||
+    (typeof localStorage !== 'undefined' && localStorage.getItem('usmba_doctorat_role') === 'enseignant')
+  );
+
+  const handleEnvoyerCandidature = () => {
+    const cur = resolveCandidate(candidatId, candidat);
+    const check = dossierComplet(cur);
+    if (!check.complet) return;
+
+    const nowIso = new Date().toISOString();
+    const updatedStatuts: Record<string, CandidatureStatut> = {
+      ...(cur.candidaturesStatuts || {}),
+    };
+    const updatedEnvoyeLe: Record<string, string> = {
+      ...(cur.candidaturesEnvoyeLe || {}),
+    };
+
+    (cur.candidatures || []).forEach((id) => {
+      if (updatedStatuts[id] === 'brouillon' || !updatedStatuts[id]) {
+        updatedStatuts[id] = 'deposee';
+        updatedEnvoyeLe[id] = nowIso;
+      }
+    });
+
+    cur.candidaturesStatuts = updatedStatuts;
+    cur.candidaturesEnvoyeLe = updatedEnvoyeLe;
+    cur.envoyeLe = nowIso;
+    persistCandidate(cur);
+    setCandidat({ ...cur });
+
+    try {
+      const rawSujets = localStorage.getItem('usmba_doctorat_sujets');
+      const allSujets = rawSujets ? JSON.parse(rawSujets) : [];
+      const teacherIds = new Set<string>();
+      (cur.candidatures || []).forEach((sId) => {
+        const s = allSujets.find((x: any) => x.id === sId);
+        if (s?.enseignantId) teacherIds.add(s.enseignantId);
+      });
+      if (teacherIds.size === 0) teacherIds.add('ens-1');
+
+      const rawNotifs = localStorage.getItem('usmba_notifications');
+      const notifs: Notification[] = rawNotifs ? JSON.parse(rawNotifs) : [];
+      teacherIds.forEach((tId) => {
+        notifs.unshift({
+          id: `notif-depot-${Date.now()}-${tId}`,
+          destinataireId: tId,
+          texte: `Nouvelle candidature envoyée par ${cur.nom || 'un candidat'} (dossier complet).`,
+          date: nowIso,
+          lue: false,
+          type: 'info',
+        });
+      });
+      localStorage.setItem('usmba_notifications', JSON.stringify(notifs));
+      window.dispatchEvent(new CustomEvent('usmba_notifications_updated'));
+    } catch {}
+
+    logEvent(
+      { id: cur.id, nom: cur.nom, role: 'candidat' },
+      fr.journalActions.candidatureEnvoyee,
+      `${(cur.candidatures || []).length} sujet(s)`
+    );
+
+    setTransmissionSuccess(fr.dossier.candidatureEnvoyeeSucces);
+    setTimeout(() => setTransmissionSuccess(null), 5000);
+  };
+
+  const handleRenvoyerCandidature = () => {
+    const cur = resolveCandidate(candidatId, candidat);
+    const check = dossierComplet(cur);
+    if (!check.complet) return;
+
+    const nowIso = new Date().toISOString();
+    const updatedStatuts: Record<string, CandidatureStatut> = {
+      ...(cur.candidaturesStatuts || {}),
+    };
+    const updatedRenvoyeLe: Record<string, string> = {
+      ...(cur.candidaturesRenvoyeLe || {}),
+    };
+
+    (cur.candidatures || []).forEach((id) => {
+      if (updatedStatuts[id] === 'a_corriger') {
+        updatedStatuts[id] = 'deposee';
+        updatedRenvoyeLe[id] = nowIso;
+      }
+    });
+
+    cur.candidaturesStatuts = updatedStatuts;
+    cur.candidaturesRenvoyeLe = updatedRenvoyeLe;
+    cur.renvoyeLe = nowIso;
+    cur.anomalie = undefined;
+    persistCandidate(cur);
+    setCandidat({ ...cur });
+
+    try {
+      const rawNotifs = localStorage.getItem('usmba_notifications');
+      const notifs: Notification[] = rawNotifs ? JSON.parse(rawNotifs) : [];
+      notifs.unshift({
+        id: `notif-renvoi-${Date.now()}`,
+        destinataireId: 'ens-1',
+        texte: `Candidature corrigée et renvoyée par ${cur.nom || 'le candidat'}.`,
+        date: nowIso,
+        lue: false,
+        type: 'info',
+      });
+      localStorage.setItem('usmba_notifications', JSON.stringify(notifs));
+      window.dispatchEvent(new CustomEvent('usmba_notifications_updated'));
+    } catch {}
+
+    logEvent(
+      { id: cur.id, nom: cur.nom, role: 'candidat' },
+      fr.journalActions.candidatureRenvoyee,
+      `${(cur.candidatures || []).length} sujet(s)`
+    );
+
+    setTransmissionSuccess(fr.dossier.candidatureRenvoyeeSucces);
+    setTimeout(() => setTransmissionSuccess(null), 5000);
+  };
+
   const savePieces = (updatedPieces: Piece[]): boolean => {
     try {
       const curCandidat = resolveCandidate(candidatId, candidat);
@@ -490,6 +632,16 @@ export const Dossier: React.FC<{ candidatId?: string }> = ({ candidatId }) => {
         type: 'success',
         text: `${fr.dossier.diplomeFound} ${intitule}`,
       });
+      try {
+        const curCandidat = resolveCandidate(candidatId, candidat);
+        curCandidat.cursus = {
+          diplome: intitule,
+          etablissement: 'Université Sidi Mohamed Ben Abdellah (USMBA)',
+          anneeObtention: 2026,
+        };
+        persistCandidate(curCandidat);
+        setCandidat(curCandidat);
+      } catch {}
       handleUpdatePiece('DIPLOME', {
         statut: 'prouvee',
         source: 'apogee',
@@ -621,6 +773,16 @@ export const Dossier: React.FC<{ candidatId?: string }> = ({ candidatId }) => {
   const percentDeclarees = Math.round((piecesDeclarees / 4) * 100);
   const percentProuvees = Math.round((piecesProuvees / 4) * 100);
 
+  const checkDossier = useMemo(() => {
+    const cur = resolveCandidate(candidatId, candidat);
+    return dossierComplet({
+      ...cur,
+      pieces,
+    });
+  }, [candidatId, candidat, pieces]);
+
+  const elementsFournisCount = Math.max(0, 3 - checkDossier.manques.length);
+
   const getPieceName = (type: PieceType): string => {
     const key = type.toUpperCase() as keyof typeof fr.dossier.pieces;
     return fr.dossier.pieces[key] || type;
@@ -712,6 +874,115 @@ export const Dossier: React.FC<{ candidatId?: string }> = ({ candidatId }) => {
         </div>
       </div>
 
+      {/* Message de succès transmission */}
+      {transmissionSuccess && (
+        <div className="bg-emerald-50 border border-emerald-300 text-emerald-900 rounded-2xl p-3.5 text-xs font-semibold flex items-center gap-2 shadow-xs">
+          <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+          <span>{transmissionSuccess}</span>
+        </div>
+      )}
+
+      {/* 5. Candidat à corriger : bandeau "À corriger : [élément], [motif]" */}
+      {!isDirecteur && hasACorriger && activeAnomalie && (
+        <div className="bg-rose-50 border border-rose-300 text-rose-950 rounded-2xl p-4 text-xs space-y-1.5 shadow-xs">
+          <div className="flex items-center gap-2 font-bold text-rose-900 text-sm">
+            <AlertTriangle size={18} className="text-rose-600 shrink-0" />
+            <span>À corriger : {activeAnomalie.piece}, {activeAnomalie.motif}</span>
+          </div>
+          <p className="text-[11px] text-rose-800">
+            Nature : <span className="font-semibold uppercase">{activeAnomalie.nature}</span>. Veuillez fournir à nouveau la pièce pour pouvoir renvoyer votre candidature.
+          </p>
+        </div>
+      )}
+
+      {/* 3. Bandeau "Dossier : N/3 éléments fournis" + manquants en texte */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3">
+        <div className="flex items-center justify-between text-xs flex-wrap gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-extrabold text-slate-900">
+              Dossier : {elementsFournisCount}/3 éléments fournis
+            </span>
+            {elementsFournisCount === 3 ? (
+              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                <CheckCircle2 size={13} className="text-emerald-600" />
+                <span>Complet</span>
+              </span>
+            ) : (
+              <span className="text-[11px] font-semibold text-rose-700">
+                Manquants : {checkDossier.manques.join(', ')}
+              </span>
+            )}
+          </div>
+          <span className="text-[11px] text-slate-400 font-mono">
+            {Math.round((elementsFournisCount / 3) * 100)}%
+          </span>
+        </div>
+        <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+          <div
+            className="bg-emerald-600 h-2 rounded-full transition-all duration-300"
+            style={{ width: `${Math.round((elementsFournisCount / 3) * 100)}%` }}
+          />
+        </div>
+
+        {/* Bouton Envoyer ma candidature si candidature en brouillon */}
+        {!isDirecteur && hasBrouillon && (
+          <div className="pt-2 border-t border-slate-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
+            <div>
+              <p className="text-xs font-bold text-slate-800">
+                Prêt à envoyer votre candidature ?
+              </p>
+              {!checkDossier.complet && (
+                <p className="text-[11px] font-semibold text-rose-700">
+                  Dossier incomplet : {checkDossier.manques.join(', ')}
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              disabled={!checkDossier.complet}
+              onClick={handleEnvoyerCandidature}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs shrink-0 ${
+                checkDossier.complet
+                  ? 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer active:scale-98'
+                  : 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
+              }`}
+            >
+              <span>{fr.dossier.btnEnvoyerCandidature}</span>
+              <ArrowRight size={14} />
+            </button>
+          </div>
+        )}
+
+        {/* 5. Bouton Renvoyer ma candidature si candidature à corriger */}
+        {!isDirecteur && hasACorriger && (
+          <div className="pt-2 border-t border-slate-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
+            <div>
+              <p className="text-xs font-bold text-slate-800">
+                Renvoyer votre candidature après correction
+              </p>
+              {!checkDossier.complet && (
+                <p className="text-[11px] font-semibold text-rose-700">
+                  Dossier incomplet : {checkDossier.manques.join(', ')}
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              disabled={!checkDossier.complet}
+              onClick={handleRenvoyerCandidature}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs shrink-0 ${
+                checkDossier.complet
+                  ? 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer active:scale-98'
+                  : 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
+              }`}
+            >
+              <span>{fr.dossier.btnRenvoyerCandidature}</span>
+              <RotateCcw size={14} />
+            </button>
+          </div>
+        )}
+      </div>
+
       {/* Message d'alerte / feedback */}
       {feedbackMessage && (
         <div
@@ -747,7 +1018,10 @@ export const Dossier: React.FC<{ candidatId?: string }> = ({ candidatId }) => {
           const isPdf = piece.fichier && piece.fichier.includes('pdf');
           const isDiplome = type === 'DIPLOME' || type === 'diplome';
           const isCin = type === 'CIN' || type === 'cin';
+          const isCv = type === 'CV' || type === 'cv';
           const isProven = piece.statut === 'prouvee';
+          // Règle 3 : Les boutons de preuve (CIN, CV) s'affichent dès qu'une candidature est en 'brouillon'
+          const canProuveThisPiece = !isDirecteur && ((isCin || isCv) ? (hasCandidatureActive || peutProuver) : peutProuver);
 
           return (
             <div
@@ -767,8 +1041,8 @@ export const Dossier: React.FC<{ candidatId?: string }> = ({ candidatId }) => {
                   )}
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap justify-end">
-                  {/* Si peutProuver et pièce déclarée : badge « Preuve à fournir » */}
-                  {peutProuver && piece.statut === 'declaree' && (
+                  {/* Si canProuveThisPiece et pièce déclarée : badge « Preuve à fournir » */}
+                  {!isDirecteur && canProuveThisPiece && (piece.statut === 'declaree' || piece.statut === 'absente') && (
                     <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
                       <AlertCircle size={12} className="shrink-0" />
                       <span>{fr.dossier.preuveAFournir}</span>
@@ -801,21 +1075,23 @@ export const Dossier: React.FC<{ candidatId?: string }> = ({ candidatId }) => {
               </div>
 
               {/* RÈGLE NON PEUT PROUVER : case à cocher « Je déclare avoir cette pièce » + phrase explicative */}
-              {!peutProuver && !isProven && (
+              {!canProuveThisPiece && !isProven && (
                 <div className="pt-2 border-t border-slate-100 space-y-1.5">
-                  <label className="flex items-center gap-2.5 text-xs text-slate-700 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={piece.statut === 'declaree'}
-                      onChange={(e) => {
-                        const newStatut = e.target.checked ? 'declaree' : 'absente';
-                        handleUpdatePiece(type, { statut: newStatut });
-                      }}
-                      className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 cursor-pointer"
-                    />
-                    <span className="font-medium">{fr.dossier.declarePiece}</span>
-                  </label>
-                  <p className="text-xs text-slate-500 pl-6.5">
+                  {!isDirecteur && (
+                    <label className="flex items-center gap-2.5 text-xs text-slate-700 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={piece.statut === 'declaree'}
+                        onChange={(e) => {
+                          const newStatut = e.target.checked ? 'declaree' : 'absente';
+                          handleUpdatePiece(type, { statut: newStatut });
+                        }}
+                        className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 cursor-pointer"
+                      />
+                      <span className="font-medium">{fr.dossier.declarePiece}</span>
+                    </label>
+                  )}
+                  <p className="text-xs text-slate-500 pl-1">
                     {candidatResultat?.resultat === 'LISTE_COMPLEMENTAIRE'
                       ? fr.dossier.explicationListeAttente
                       : candidatResultat?.resultat === 'REFUSE'
@@ -826,7 +1102,7 @@ export const Dossier: React.FC<{ candidatId?: string }> = ({ candidatId }) => {
               )}
 
               {/* RÈGLE PEUT PROUVER ET PIÈCE ABSENTE : case à cocher pour déclarer */}
-              {peutProuver && piece.statut === 'absente' && (
+              {!isDirecteur && canProuveThisPiece && piece.statut === 'absente' && (
                 <div className="pt-2 border-t border-slate-100">
                   <label className="flex items-center gap-2.5 text-xs text-slate-700 cursor-pointer select-none">
                     <input
@@ -1067,63 +1343,78 @@ export const Dossier: React.FC<{ candidatId?: string }> = ({ candidatId }) => {
 
               {/* Champ CNE existant (avec consentement) sur la carte DIPLOME */}
               {isDiplome && (
-                <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3 space-y-2.5">
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      value={apogeeCne}
-                      onChange={(e) => {
-                        setApogeeCne(e.target.value);
-                        setApogeeMessage(null);
-                      }}
-                      placeholder={fr.dossier.cnePlaceholder}
-                      className="flex-1 min-h-[36px] px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-600 font-mono uppercase"
-                    />
-                    <button
-                      type="button"
-                      onClick={handleVerifyApogee}
-                      disabled={!apogeeCne.trim() || !apogeeConsent}
-                      className={`min-h-[36px] px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
-                        apogeeCne.trim() && apogeeConsent
-                          ? 'bg-emerald-700 hover:bg-emerald-800 text-white'
-                          : 'bg-slate-200 text-slate-400 cursor-not-allowed'
-                      }`}
-                    >
-                      {fr.dossier.verify}
-                    </button>
+                isDirecteur ? (
+                  <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3 space-y-1">
+                    <span className="font-bold text-slate-800 block text-[11px] uppercase tracking-wide">
+                      Cursus Apogée (Lecture seule)
+                    </span>
+                    <p className="text-slate-600 text-xs">
+                      {candidat?.cne ? `CNE : ${candidat.cne}` : 'CNE non renseigné'}
+                      {candidat?.cursus?.diplome ? ` — ${candidat.cursus.diplome}` : piece.fichier ? ` — ${piece.fichier}` : ''}
+                    </p>
+                    <p className="text-[11px] text-slate-500 italic">
+                      Consultation par le directeur de thèse en lecture seule.
+                    </p>
                   </div>
+                ) : (
+                  <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3 space-y-2.5">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={apogeeCne}
+                        onChange={(e) => {
+                          setApogeeCne(e.target.value);
+                          setApogeeMessage(null);
+                        }}
+                        placeholder={fr.dossier.cnePlaceholder}
+                        className="flex-1 min-h-[36px] px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-600 font-mono uppercase"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleVerifyApogee}
+                        disabled={!apogeeCne.trim() || !apogeeConsent}
+                        className={`min-h-[36px] px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
+                          apogeeCne.trim() && apogeeConsent
+                            ? 'bg-emerald-700 hover:bg-emerald-800 text-white'
+                            : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                        }`}
+                      >
+                        {fr.dossier.verify}
+                      </button>
+                    </div>
 
-                  <label className="flex items-center gap-2 text-[11px] text-slate-700 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={apogeeConsent}
-                      onChange={(e) => {
-                        setApogeeConsent(e.target.checked);
-                        setApogeeMessage(null);
-                      }}
-                      className="w-3.5 h-3.5 rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
-                    />
-                    <span>{fr.dossier.apogeeConsent}</span>
-                  </label>
+                    <label className="flex items-center gap-2 text-[11px] text-slate-700 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={apogeeConsent}
+                        onChange={(e) => {
+                          setApogeeConsent(e.target.checked);
+                          setApogeeMessage(null);
+                        }}
+                        className="w-3.5 h-3.5 rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                      />
+                      <span>{fr.dossier.apogeeConsent}</span>
+                    </label>
 
-                  {(!apogeeConsent || !apogeeCne.trim()) && (
-                    <p className="text-sm text-slate-500">
-                      {!apogeeConsent
-                        ? fr.dossier.consentRequiredReason
-                        : fr.dossier.cneRequiredReason}
-                    </p>
-                  )}
+                    {(!apogeeConsent || !apogeeCne.trim()) && (
+                      <p className="text-sm text-slate-500">
+                        {!apogeeConsent
+                          ? fr.dossier.consentRequiredReason
+                          : fr.dossier.cneRequiredReason}
+                      </p>
+                    )}
 
-                  {apogeeMessage && (
-                    <p
-                      className={`text-[11px] font-medium ${
-                        apogeeMessage.type === 'success' ? 'text-emerald-700' : 'text-rose-600'
-                      }`}
-                    >
-                      {apogeeMessage.text}
-                    </p>
-                  )}
-                </div>
+                    {apogeeMessage && (
+                      <p
+                        className={`text-[11px] font-medium ${
+                          apogeeMessage.type === 'success' ? 'text-emerald-700' : 'text-rose-600'
+                        }`}
+                      >
+                        {apogeeMessage.text}
+                      </p>
+                    )}
+                  </div>
+                )
               )}
 
               {/* Pièce 'prouvee' (CIN, diplôme Apogée, etc.) : aperçu + boutons Voir et Remplacer */}
@@ -1183,28 +1474,30 @@ export const Dossier: React.FC<{ candidatId?: string }> = ({ candidatId }) => {
                         <span>{fr.dossier.btnVoirPiece}</span>
                       </button>
 
-                      <button
-                        type="button"
-                        onClick={() => {
-                          handleUpdatePiece(type, { statut: 'declaree' });
-                          if (isCin) {
-                            setShowOcrPanel(false);
-                            setOcrResult(null);
-                            setOcrLoading(false);
-                          }
-                        }}
-                        className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-rose-200 text-rose-700 hover:bg-rose-50 transition-colors cursor-pointer flex items-center gap-1 active:scale-98"
-                      >
-                        <RotateCcw size={13} className="text-rose-600" />
-                        <span>{fr.dossier.btnRemplacerPiece}</span>
-                      </button>
+                      {!isDirecteur && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleUpdatePiece(type, { statut: 'declaree' });
+                            if (isCin) {
+                              setShowOcrPanel(false);
+                              setOcrResult(null);
+                              setOcrLoading(false);
+                            }
+                          }}
+                          className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-rose-200 text-rose-700 hover:bg-rose-50 transition-colors cursor-pointer flex items-center gap-1 active:scale-98"
+                        >
+                          <RotateCcw size={13} className="text-rose-600" />
+                          <span>{fr.dossier.btnRemplacerPiece}</span>
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
               )}
 
-              {/* RÈGLE PEUT PROUVER : boutons visibles pour chaque pièce au statut 'declaree' */}
-              {peutProuver && piece.statut === 'declaree' && (!isCin || (!showOcrPanel && !ocrLoading)) && (
+              {/* RÈGLE PEUT PROUVER : boutons visibles pour chaque pièce non prouvée */}
+              {!isDirecteur && canProuveThisPiece && !isProven && (!isCin || (!showOcrPanel && !ocrLoading)) && (
                 <div className="space-y-1.5 pt-2 border-t border-slate-100">
                   <div className="flex items-center gap-2">
                     <button

@@ -24,8 +24,10 @@ import {
   GraduationCap,
   KeyRound,
   Clock,
+  XCircle,
+  Eye,
 } from 'lucide-react';
-import { Sujet, Candidat, Enseignant, UserRole, Notification } from '../types';
+import { Sujet, Candidat, Enseignant, UserRole, Notification, dossierComplet } from '../types';
 import { fr } from '../i18n/fr';
 import { storageService } from '../services/storage';
 import { StatusBadge } from './StatusBadge';
@@ -33,6 +35,8 @@ import { AdvancedSearchModal, AdvancedFilterCriteria } from './AdvancedSearchMod
 import { normalizeText } from './Autocomplete';
 import { normaliserTel } from '../utils/messages';
 import { MOCK_CANDIDATS } from '../data/mockData';
+import { logEvent } from '../utils/journal';
+import { Dossier } from './Dossier';
 
 const getDisciplineConfig = (discipline: string) => {
   const norm = discipline
@@ -165,6 +169,258 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
       ? candidat.candidatures
       : candidat.panier.slice(0, 3)
   );
+
+  // État spécifique pour le directeur de thèse
+  const [teacherSubView, setTeacherSubView] = useState<'candidatures' | 'catalogue'>('candidatures');
+  const [selectedCandidatForDossier, setSelectedCandidatForDossier] = useState<Candidat | null>(null);
+  const [actionFeedback, setActionFeedback] = useState<string | null>(null);
+
+  // État modal de signalement d'anomalie
+  const [anomalieModalTarget, setAnomalieModalTarget] = useState<{
+    candidat: Candidat;
+    sujet: Sujet;
+  } | null>(null);
+  const [anomaliePiece, setAnomaliePiece] = useState<'CURSUS' | 'CIN' | 'CV'>('CIN');
+  const [anomalieNature, setAnomalieNature] = useState<'illisible' | 'absente' | 'incoherente'>('illisible');
+  const [anomalieMotif, setAnomalieMotif] = useState<string>('');
+  const [anomalieError, setAnomalieError] = useState<string | null>(null);
+
+  const activeTeacher = useMemo(() => {
+    return (
+      enseignants.find((e) => e.role === 'enseignant' || e.id === 'ens-1') ||
+      enseignants[0] || {
+        id: 'ens-1',
+        nom: 'Pr. Karim El Amrani',
+        email: 'prof@demo.ma',
+        structure: 'LISAC - FSDM Fès',
+      }
+    );
+  }, [enseignants]);
+
+  // Candidatures reçues pour l'enseignant actif (le directeur ne voit PAS les brouillons)
+  const teacherCandidatures = useMemo(() => {
+    const list: {
+      key: string;
+      candidat: Candidat;
+      sujet: Sujet;
+      date: string;
+      statut: any;
+      isCurrentCandidat: boolean;
+    }[] = [];
+
+    const teacherSujetIds = sujets
+      .filter((s) => s.enseignantId === activeTeacher.id)
+      .map((s) => s.id);
+
+    // Candidat actif
+    if (candidat.compteCree && candidat.candidatures && candidat.candidatures.length > 0) {
+      candidat.candidatures.forEach((sId) => {
+        if (teacherSujetIds.includes(sId)) {
+          const s = sujets.find((x) => x.id === sId);
+          if (s) {
+            let st = candidat.candidaturesStatuts?.[s.id] || 'deposee';
+            try {
+              const rawSim = localStorage.getItem('usmba_simulated_statuts');
+              if (rawSim) {
+                const parsed = JSON.parse(rawSim);
+                if (parsed[`${candidat.id}-${s.id}`]) {
+                  st = parsed[`${candidat.id}-${s.id}`];
+                }
+              }
+            } catch {}
+
+            // Règle 2 : le directeur ne voit pas les candidatures en 'brouillon'
+            if (st === 'brouillon') {
+              return;
+            }
+
+            list.push({
+              key: `${candidat.id}-${s.id}`,
+              candidat,
+              sujet: s,
+              date: candidat.attesteLe
+                ? new Date(candidat.attesteLe).toLocaleDateString('fr-FR')
+                : '28/10/2026',
+              statut: st,
+              isCurrentCandidat: true,
+            });
+          }
+        }
+      });
+    }
+
+    // Autres candidats de démonstration
+    MOCK_CANDIDATS.forEach((otherCand) => {
+      if (otherCand.id !== candidat.id && otherCand.candidatures) {
+        otherCand.candidatures.forEach((sId) => {
+          if (teacherSujetIds.includes(sId)) {
+            const s = sujets.find((x) => x.id === sId);
+            if (s) {
+              let st = otherCand.candidaturesStatuts?.[s.id] || 'deposee';
+              try {
+                const rawSim = localStorage.getItem('usmba_simulated_statuts');
+                if (rawSim) {
+                  const parsed = JSON.parse(rawSim);
+                  if (parsed[`${otherCand.id}-${s.id}`]) {
+                    st = parsed[`${otherCand.id}-${s.id}`];
+                  }
+                }
+              } catch {}
+
+              // Règle 2 : le directeur ne voit pas les candidatures en 'brouillon'
+              if (st === 'brouillon') {
+                return;
+              }
+
+              list.push({
+                key: `${otherCand.id}-${s.id}`,
+                candidat: otherCand,
+                sujet: s,
+                date: '26/10/2026',
+                statut: st,
+                isCurrentCandidat: false,
+              });
+            }
+          }
+        });
+      }
+    });
+
+    return list;
+  }, [candidat, sujets, activeTeacher]);
+
+  const handleValidateByTeacher = (cand: Candidat, sujet: Sujet, currentStatut?: string) => {
+    // Règle 4 : "Valider" actif seulement pour 'deposee'
+    if (currentStatut && currentStatut !== 'deposee') return;
+
+    const check = dossierComplet(cand);
+    if (!check.complet) return;
+
+    if (cand.id === candidat.id) {
+      const updated: Candidat = {
+        ...candidat,
+        candidaturesStatuts: {
+          ...(candidat.candidaturesStatuts || {}),
+          [sujet.id]: 'retenue',
+        },
+      };
+      onUpdateCandidat(updated);
+      storageService.setCandidat(updated);
+    }
+
+    try {
+      const rawSim = localStorage.getItem('usmba_simulated_statuts');
+      const parsed = rawSim ? JSON.parse(rawSim) : {};
+      parsed[`${cand.id}-${sujet.id}`] = 'retenue';
+      localStorage.setItem('usmba_simulated_statuts', JSON.stringify(parsed));
+    } catch {}
+
+    logEvent(
+      { id: activeTeacher.id, nom: activeTeacher.nom, role: 'enseignant' },
+      fr.journalActions.candidatureValidee,
+      `${cand.nom} (${sujet.titre})`
+    );
+
+    setActionFeedback(`Candidature de ${cand.nom} validée avec succès.`);
+    setTimeout(() => setActionFeedback(null), 4000);
+  };
+
+  // Règle 4 : Signalement d'anomalie
+  const handleSignalerAnomalieSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!anomalieModalTarget) return;
+
+    if (anomalieMotif.trim().length < 5) {
+      setAnomalieError(fr.sujetsModule.modalAnomalieMotifError);
+      return;
+    }
+
+    const { candidat: targetCand, sujet: targetSujet } = anomalieModalTarget;
+    const nowIso = new Date().toISOString();
+    const anomalieObj = {
+      piece: anomaliePiece,
+      nature: anomalieNature,
+      motif: anomalieMotif.trim(),
+      le: nowIso,
+    };
+
+    // Mettre à jour la pièce concernée à 'illisible' ou 'absente'
+    const newPieceStatut = anomalieNature === 'illisible' ? 'illisible' : 'absente';
+    const currentPieces = Array.isArray(targetCand.pieces) ? [...targetCand.pieces] : [];
+    const updatedPieces = currentPieces.map((p) => {
+      if (anomaliePiece === 'CIN' && p.type.toUpperCase() === 'CIN') {
+        return { ...p, statut: newPieceStatut as any };
+      }
+      if (anomaliePiece === 'CV' && p.type.toUpperCase() === 'CV') {
+        return { ...p, statut: newPieceStatut as any };
+      }
+      if (anomaliePiece === 'CURSUS' && p.type.toUpperCase() === 'DIPLOME') {
+        return { ...p, statut: 'absente' as const };
+      }
+      return p;
+    });
+
+    const updatedCand: Candidat = {
+      ...targetCand,
+      pieces: updatedPieces,
+      ...(anomaliePiece === 'CURSUS' ? { cursus: undefined } : {}),
+      candidaturesStatuts: {
+        ...(targetCand.candidaturesStatuts || {}),
+        [targetSujet.id]: 'a_corriger',
+      },
+      candidaturesAnomalies: {
+        ...(targetCand.candidaturesAnomalies || {}),
+        [targetSujet.id]: anomalieObj,
+      },
+      anomalie: anomalieObj,
+    };
+
+    if (targetCand.id === candidat.id) {
+      onUpdateCandidat(updatedCand);
+      storageService.setCandidat(updatedCand);
+      try {
+        localStorage.setItem('usmba_doctorat_pieces', JSON.stringify(updatedPieces));
+      } catch {}
+    }
+
+    try {
+      const rawSim = localStorage.getItem('usmba_simulated_statuts');
+      const parsed = rawSim ? JSON.parse(rawSim) : {};
+      parsed[`${targetCand.id}-${targetSujet.id}`] = 'a_corriger';
+      localStorage.setItem('usmba_simulated_statuts', JSON.stringify(parsed));
+    } catch {}
+
+    // Notification 'action' au candidat avec bouton "Compléter mon dossier"
+    try {
+      const rawNotifs = localStorage.getItem('usmba_notifications');
+      const notifs: Notification[] = rawNotifs ? JSON.parse(rawNotifs) : [];
+      const notif: Notification = {
+        id: `notif-anomalie-${Date.now()}`,
+        destinataireId: targetCand.id,
+        texte: `Anomalie signalée sur votre dossier (${anomaliePiece} : ${anomalieNature}) - Motif : ${anomalieMotif.trim()}`,
+        date: nowIso,
+        lue: false,
+        type: 'action',
+        actionLabel: fr.notifications.btnCompleterDossier,
+        actionTab: 'dossier',
+      };
+      notifs.unshift(notif);
+      localStorage.setItem('usmba_notifications', JSON.stringify(notifs));
+      window.dispatchEvent(new CustomEvent('usmba_notifications_updated'));
+    } catch {}
+
+    logEvent(
+      { id: activeTeacher.id, nom: activeTeacher.nom, role: 'enseignant' },
+      fr.journalActions.anomalieSignalee,
+      `${targetCand.nom} (${targetSujet.titre}) : ${anomaliePiece} - ${anomalieNature} - ${anomalieMotif.trim()}`
+    );
+
+    setActionFeedback(fr.sujetsModule.anomalieSignaleeToast);
+    setTimeout(() => setActionFeedback(null), 4000);
+    setAnomalieModalTarget(null);
+    setAnomalieMotif('');
+    setAnomalieError(null);
+  };
 
   const getEnseignant = (id: string) => enseignants.find((e) => e.id === id);
 
@@ -626,21 +882,35 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
     }
   }, [candidat.candidatures, candidat.panier, onUpdateCandidat]);
 
-  // Validation finale des candidatures avec enregistrement de attesteLe
+  // Validation finale des candidatures avec enregistrement en brouillon (Règle 2)
   const handleValidateCandidatures = () => {
     // Retirer les sujets candidatés du panier
     const remainingPanier = candidat.panier.filter((id) => !tempSelection.includes(id));
     const nowIso = new Date().toISOString();
+    const statuts: Record<string, any> = {
+      ...(candidat.candidaturesStatuts || {}),
+    };
+    tempSelection.forEach((id) => {
+      statuts[id] = 'brouillon';
+    });
     const updated: Candidat = {
       ...candidat,
       panier: remainingPanier,
       panierInteret: remainingPanier,
       candidatures: tempSelection,
       interets: tempSelection,
+      candidaturesStatuts: statuts,
       attesteLe: nowIso,
     };
     onUpdateCandidat(updated);
     storageService.setCandidat(updated);
+    logEvent(
+      { id: candidat.id, nom: candidat.nom, role: 'candidat' },
+      fr.journalActions.candidatureDeposee,
+      `${tempSelection.length} sujet(s)`
+    );
+
+    // Règle 4 : Supprime la notification automatique au dépôt
     setView('confirmation');
   };
 
@@ -653,65 +923,64 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
     cartItems.length >= 3 ? tempSelection.length === 3 : tempSelection.length === cartItems.length;
 
   /* ========================================================================= */
-  /* VUE 4 : CONFIRMATION DES CANDIDATURES DÉPOSÉES                            */
+  /* VUE 4 : CONFIRMATION DES CANDIDATURES DÉPOSÉES EN BROUILLON               */
   /* ========================================================================= */
   if (view === 'confirmation') {
     return (
       <div className="space-y-4">
-        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-center space-y-1.5">
-          <CheckCircle2 size={32} className="text-emerald-600 mx-auto" />
-          <h2 className="text-sm font-bold text-slate-900">{fr.sujetsModule.confirmationTitle}</h2>
-          <p className="text-xs text-slate-600">{fr.sujetsModule.confirmationSub}</p>
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-5 text-center space-y-1.5">
+          <CheckCircle2 size={36} className="text-emerald-600 mx-auto" />
+          <h2 className="text-base font-bold text-slate-900">
+            {fr.sujetsModule.confirmationBrouillonTitle}
+          </h2>
+          <p className="text-xs text-slate-600 font-medium">
+            {fr.sujetsModule.confirmationBrouillonSub}
+          </p>
         </div>
 
-        {/* Encadré Étape suivante : déclare tes pièces dans Mon dossier */}
-        <div className="bg-amber-50 border border-amber-300 rounded-xl p-3.5 sm:p-4 text-amber-950 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
-              <FileText size={18} />
-            </div>
-            <p className="text-xs sm:text-sm font-bold text-amber-950">
-              {fr.sujetsModule.postSubmissionAlert}
-            </p>
-          </div>
+        {/* Boutons d'action : "Compléter mon dossier" et "Plus tard" */}
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-1">
           <button
             type="button"
             onClick={() => {
               setView('catalog');
               onNavigateTab?.('dossier');
             }}
-            className="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-amber-600 hover:bg-amber-700 active:scale-98 text-white transition-all shadow-xs flex items-center gap-1.5 cursor-pointer shrink-0 self-end sm:self-auto"
+            className="w-full sm:w-auto px-5 py-2.5 rounded-xl text-xs font-bold bg-emerald-700 hover:bg-emerald-800 active:scale-98 text-white transition-all shadow-xs flex items-center justify-center gap-2 cursor-pointer"
           >
-            <span>{fr.sujetsModule.btnGoToDossier}</span>
+            <FileText size={16} />
+            <span>{fr.sujetsModule.btnCompleterMonDossier}</span>
             <ArrowRight size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setView('catalog');
+              onNavigateTab?.('sujets');
+            }}
+            className="w-full sm:w-auto px-5 py-2.5 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 transition-all cursor-pointer text-center"
+          >
+            <span>{fr.sujetsModule.btnPlusTard}</span>
           </button>
         </div>
 
-        <div className="space-y-2">
+        <div className="space-y-2 pt-2">
           {candidateItems.map((sujet) => (
             <div key={sujet.id} className="bg-white border border-slate-200 rounded-xl p-3 shadow-xs space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-slate-100 text-slate-700">
                   {sujet.discipline}
                 </span>
-                <StatusBadge type="candidature" size="sm" />
+                <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
+                  <FileText size={12} className="text-slate-500" />
+                  <span>{fr.sujetsModule.candidatureBrouillonBadge}</span>
+                </span>
               </div>
               <h4 className="text-xs font-bold text-slate-900">{sujet.titre}</h4>
               <p className="text-[11px] text-slate-500">{sujet.structure}</p>
             </div>
           ))}
         </div>
-
-        <button
-          type="button"
-          onClick={() => {
-            setView('catalog');
-            onNavigateTab?.('sujets');
-          }}
-          className="w-full min-h-[46px] py-2.5 rounded-xl text-xs font-bold bg-slate-900 text-white hover:bg-slate-800 transition cursor-pointer"
-        >
-          {fr.sujetsModule.btnBackToCatalog}
-        </button>
       </div>
     );
   }
@@ -1188,6 +1457,288 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
 
   return (
     <div>
+      {role === 'enseignant' && (
+        <div className="mb-4 space-y-3">
+          <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
+            <button
+              type="button"
+              onClick={() => setTeacherSubView('candidatures')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer ${
+                teacherSubView === 'candidatures'
+                  ? 'bg-emerald-700 text-white shadow-xs'
+                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              <FileCheck2 size={16} />
+              <span>{fr.sujetsModule.tabMesCandidaturesRecues}</span>
+              <span
+                className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
+                  teacherSubView === 'candidatures'
+                    ? 'bg-emerald-800 text-amber-300'
+                    : 'bg-slate-200 text-slate-700'
+                }`}
+              >
+                {teacherCandidatures.length}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setTeacherSubView('catalogue')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer ${
+                teacherSubView === 'catalogue'
+                  ? 'bg-emerald-700 text-white shadow-xs'
+                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              <Search size={16} />
+              <span>{fr.sujetsModule.tabCatalogueSujets}</span>
+            </button>
+          </div>
+
+          {teacherSubView === 'candidatures' && (
+            <div className="space-y-3">
+              <div className="bg-slate-900 text-white rounded-xl p-3.5 flex items-center justify-between">
+                <div>
+                  <h2 className="text-xs font-bold uppercase text-amber-300">
+                    {fr.sujetsModule.teacherCandidaturesTitle}
+                  </h2>
+                  <p className="text-[11px] text-slate-300">
+                    {activeTeacher.nom} ({activeTeacher.structure}) — {fr.sujetsModule.teacherCandidaturesSubtitle}
+                  </p>
+                </div>
+                <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-slate-800 text-emerald-400">
+                  {teacherCandidatures.length}
+                </span>
+              </div>
+
+              {actionFeedback && (
+                <div className="bg-emerald-50 border border-emerald-300 text-emerald-900 rounded-xl p-3 text-xs flex items-center gap-2">
+                  <CheckCircle2 size={16} className="text-emerald-700 shrink-0" />
+                  <span>{actionFeedback}</span>
+                </div>
+              )}
+
+              {teacherCandidatures.length === 0 ? (
+                <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-xs text-slate-500">
+                  {fr.sujetsModule.teacherCandidaturesEmpty}
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {teacherCandidatures.map((item) => {
+                    const check = dossierComplet(item.candidat);
+                    const cinPiece = (item.candidat.pieces || []).find(
+                      (p) => p.type.toUpperCase() === 'CIN'
+                    );
+                    const cvPiece = (item.candidat.pieces || []).find(
+                      (p) => p.type.toUpperCase() === 'CV'
+                    );
+                    const cinOk = cinPiece?.statut === 'prouvee';
+                    const cvOk = cvPiece?.statut === 'prouvee';
+                    const cursusOk = Boolean(
+                      item.candidat.cursus ||
+                        (item.candidat.dossier?.casParticulier && item.candidat.dossier?.motif)
+                    );
+
+                    return (
+                      <div
+                        key={item.key}
+                        className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs space-y-3"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <h3 className="text-sm font-bold text-slate-900">
+                              {item.candidat.nom || 'Candidat'}
+                            </h3>
+                            <p className="text-xs text-slate-600 font-medium mt-0.5">
+                              {item.sujet.titre}
+                            </p>
+                            <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-1">
+                              <span>CNE : {item.candidat.cne || 'Non renseigné'}</span>
+                              <span>•</span>
+                              <span>Date : {item.date}</span>
+                            </div>
+                          </div>
+
+                          {item.statut === 'retenue' ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 shrink-0">
+                              <CheckCircle2 size={13} className="text-emerald-700 shrink-0" />
+                              <span>{fr.sujetsModule.btnCandidatureValidee}</span>
+                            </span>
+                          ) : item.statut === 'a_corriger' ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full bg-amber-100 text-amber-900 border border-amber-300 shrink-0">
+                              <AlertTriangle size={13} className="text-amber-700 shrink-0" />
+                              <span>{fr.sujetsModule.candidatureACorrigerBadge}</span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-sky-50 text-sky-800 border border-sky-200 shrink-0">
+                              <Clock size={12} className="text-sky-600 shrink-0" />
+                              <span>{fr.sujetsModule.candidatureDeposeeBadge}</span>
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Signalement d'anomalie actif */}
+                        {item.statut === 'a_corriger' &&
+                          (item.candidat.candidaturesAnomalies?.[item.sujet.id] || item.candidat.anomalie) && (
+                            <div className="bg-amber-50/80 border border-amber-200 rounded-lg p-2.5 text-xs text-amber-900 flex items-start gap-2">
+                              <AlertTriangle size={15} className="text-amber-600 shrink-0 mt-0.5" />
+                              <div>
+                                <span className="font-bold">Anomalie : </span>
+                                <span>
+                                  {(item.candidat.candidaturesAnomalies?.[item.sujet.id] || item.candidat.anomalie)?.piece} (
+                                  {(item.candidat.candidaturesAnomalies?.[item.sujet.id] || item.candidat.anomalie)?.nature}) —{' '}
+                                  {(item.candidat.candidaturesAnomalies?.[item.sujet.id] || item.candidat.anomalie)?.motif}
+                                </span>
+                              </div>
+                            </div>
+                          )}
+
+                        {/* Liste de contrôle (coche ou croix + texte) pour cursus, CIN, CV */}
+                        <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-2">
+                          <p className="text-[11px] font-bold uppercase text-slate-500 tracking-wider">
+                            {fr.sujetsModule.checklistTitle}
+                          </p>
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                            {/* Cursus */}
+                            <div className="flex items-center gap-2 text-xs">
+                              {cursusOk ? (
+                                <>
+                                  <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+                                  <span className="text-emerald-900 font-medium">
+                                    {fr.sujetsModule.checklistCursusOk}
+                                  </span>
+                                </>
+                              ) : (
+                                <>
+                                  <XCircle size={16} className="text-rose-600 shrink-0" />
+                                  <span className="text-rose-900 font-medium">
+                                    {fr.sujetsModule.checklistCursusKo}
+                                  </span>
+                                </>
+                              )}
+                            </div>
+
+                            {/* CIN */}
+                            <div className="flex items-center gap-2 text-xs">
+                              {cinOk ? (
+                                <>
+                                  <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+                                  <span className="text-emerald-900 font-medium">
+                                    {fr.sujetsModule.checklistCinOk}
+                                  </span>
+                                </>
+                              ) : (
+                                <>
+                                  <XCircle size={16} className="text-rose-600 shrink-0" />
+                                  <span className="text-rose-900 font-medium">
+                                    {fr.sujetsModule.checklistCinKo}
+                                  </span>
+                                </>
+                              )}
+                            </div>
+
+                            {/* CV */}
+                            <div className="flex items-center gap-2 text-xs">
+                              {cvOk ? (
+                                <>
+                                  <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+                                  <span className="text-emerald-900 font-medium">
+                                    {fr.sujetsModule.checklistCvOk}
+                                  </span>
+                                </>
+                              ) : (
+                                <>
+                                  <XCircle size={16} className="text-rose-600 shrink-0" />
+                                  <span className="text-rose-900 font-medium">
+                                    {fr.sujetsModule.checklistCvKo}
+                                  </span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Actions : Bouton Valider + Bouton Signaler une anomalie + Consulter le dossier */}
+                        <div className="flex items-center justify-between gap-2 flex-wrap pt-1 border-t border-slate-100">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {item.statut !== 'retenue' && (
+                              <>
+                                {item.statut === 'deposee' ? (
+                                  check.complet ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleValidateByTeacher(item.candidat, item.sujet, item.statut)}
+                                      className="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-700 hover:bg-emerald-800 text-white transition-all cursor-pointer shadow-xs active:scale-98"
+                                    >
+                                      {fr.sujetsModule.btnValiderCandidature}
+                                    </button>
+                                  ) : (
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <button
+                                        type="button"
+                                        disabled
+                                        className="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed"
+                                      >
+                                        {fr.sujetsModule.btnValiderCandidature}
+                                      </button>
+                                      <span className="text-[11px] font-semibold text-rose-700">
+                                        {fr.sujetsModule.dossierIncompletRaison.replace(
+                                          '{manques}',
+                                          check.manques.join(', ')
+                                        )}
+                                      </span>
+                                    </div>
+                                  )
+                                ) : (
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <button
+                                      type="button"
+                                      disabled
+                                      className="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed"
+                                    >
+                                      {fr.sujetsModule.btnValiderCandidature}
+                                    </button>
+                                    <span className="text-[11px] font-medium text-amber-800 italic">
+                                      En attente de correction par le candidat
+                                    </span>
+                                  </div>
+                                )}
+
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setAnomalieModalTarget({ candidat: item.candidat, sujet: item.sujet });
+                                    setAnomalieMotif('');
+                                    setAnomalieError(null);
+                                  }}
+                                  className="px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white transition-all cursor-pointer shadow-xs active:scale-98 flex items-center gap-1.5"
+                                >
+                                  <AlertTriangle size={13} />
+                                  <span>{fr.sujetsModule.btnSignalerAnomalie}</span>
+                                </button>
+                              </>
+                            )}
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => setSelectedCandidatForDossier(item.candidat)}
+                            className="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 transition cursor-pointer flex items-center gap-1.5"
+                          >
+                            <Eye size={14} />
+                            <span>{fr.sujetsModule.btnConsulterDossier}</span>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {isCandidateOrVisitor && (
         <div className="mt-6 mb-4 relative overflow-hidden bg-white rounded-2xl border border-slate-200/80 shadow-xs text-center py-6 px-4 md:py-8">
           {/* Motif géométrique discret style zellige (étoile à 8 branches) */}
@@ -1559,6 +2110,152 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
         </div>
       )}
       </div>
+
+      {selectedCandidatForDossier && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto p-4 sm:p-6 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200">
+              <div>
+                <h3 className="text-base font-bold text-slate-900">
+                  Dossier de {selectedCandidatForDossier.nom}
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Consultation en lecture seule pour le directeur de thèse
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedCandidatForDossier(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <Dossier candidatId={selectedCandidatForDossier.id} />
+          </div>
+        </div>
+      )}
+
+      {anomalieModalTarget && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-5 sm:p-6 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="text-amber-600 shrink-0" size={20} />
+                <h3 className="text-base font-bold text-slate-900">
+                  {fr.sujetsModule.modalAnomalieTitle}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setAnomalieModalTarget(null);
+                  setAnomalieError(null);
+                }}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="text-xs text-slate-600 bg-slate-50 rounded-lg p-3 space-y-1">
+              <div>
+                <span className="font-semibold text-slate-700">Candidat : </span>
+                <span>{anomalieModalTarget.candidat.nom}</span>
+              </div>
+              <div>
+                <span className="font-semibold text-slate-700">Sujet : </span>
+                <span className="line-clamp-1">{anomalieModalTarget.sujet.titre}</span>
+              </div>
+            </div>
+
+            <form onSubmit={handleSignalerAnomalieSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  {fr.sujetsModule.modalAnomalieElementLabel}
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  {(['CURSUS', 'CIN', 'CV'] as const).map((el) => (
+                    <button
+                      key={el}
+                      type="button"
+                      onClick={() => setAnomaliePiece(el)}
+                      className={`px-3 py-2 rounded-lg text-xs font-semibold border transition text-center cursor-pointer ${
+                        anomaliePiece === el
+                          ? 'border-amber-600 bg-amber-50 text-amber-900 font-bold ring-1 ring-amber-600'
+                          : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                      }`}
+                    >
+                      {el === 'CURSUS' ? 'Cursus' : el}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  {fr.sujetsModule.modalAnomalieNatureLabel}
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  {(['illisible', 'absente', 'incoherente'] as const).map((nat) => (
+                    <button
+                      key={nat}
+                      type="button"
+                      onClick={() => setAnomalieNature(nat)}
+                      className={`px-3 py-2 rounded-lg text-xs font-semibold border transition capitalize text-center cursor-pointer ${
+                        anomalieNature === nat
+                          ? 'border-amber-600 bg-amber-50 text-amber-900 font-bold ring-1 ring-amber-600'
+                          : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                      }`}
+                    >
+                      {nat === 'illisible' ? 'Illisible' : nat === 'absente' ? 'Absente' : 'Incohérente'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  {fr.sujetsModule.modalAnomalieMotifLabel}
+                </label>
+                <textarea
+                  value={anomalieMotif}
+                  onChange={(e) => {
+                    setAnomalieMotif(e.target.value);
+                    if (anomalieError) setAnomalieError(null);
+                  }}
+                  rows={3}
+                  placeholder={fr.sujetsModule.modalAnomalieMotifPlaceholder}
+                  className="w-full text-xs p-2.5 rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 resize-none"
+                />
+                {anomalieError && (
+                  <p className="text-[11px] font-semibold text-rose-600 mt-1">{anomalieError}</p>
+                )}
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAnomalieModalTarget(null);
+                    setAnomalieError(null);
+                  }}
+                  className="px-3.5 py-1.5 rounded-lg text-xs font-medium text-slate-600 hover:bg-slate-100 transition cursor-pointer"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-lg text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white transition shadow-xs cursor-pointer flex items-center gap-1.5"
+                >
+                  <AlertTriangle size={14} />
+                  <span>{fr.sujetsModule.modalAnomalieBtnValider}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

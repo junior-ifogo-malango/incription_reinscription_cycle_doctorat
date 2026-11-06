@@ -23,10 +23,11 @@ import {
   Award,
   X,
   UserCog,
+  Users,
 } from 'lucide-react';
-import { UserRole, Candidat, Enseignant, Sujet, Piece, Creneau, Notification, type Dossier as DossierData, Rapport, Vote } from './types';
+import { UserRole, Candidat, Enseignant, Sujet, Piece, Creneau, Notification, type Dossier as DossierData, Rapport, Vote, CandidatureStatut } from './types';
 import { storageService } from './services/storage';
-import { INITIAL_RAPPORTS, DEMO_DOCTORANT_NADIA } from './data/mockData';
+import { INITIAL_RAPPORTS, DEMO_DOCTORANT_NADIA, aujourdhui } from './data/mockData';
 import { fr } from './i18n/fr';
 import { LoginModal } from './components/LoginModal';
 import { TabType } from './components/MobileNav';
@@ -44,6 +45,7 @@ import { CedReinscriptions } from './components/CedReinscriptions';
 import { CedSeances } from './components/CedSeances';
 import { VerifPV } from './components/VerifPV';
 import { Guichet } from './components/Guichet';
+import { Admin } from './components/Admin';
 
 export type AppTabType =
   | TabType
@@ -53,7 +55,9 @@ export type AppTabType =
   | 'reinscriptions'
   | 'seances'
   | 'vote_comite'
-  | 'guichet';
+  | 'guichet'
+  | 'admin_comptes'
+  | 'admin_journal';
 
 function genererCodeComite(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -132,6 +136,40 @@ export default function App() {
   const [simulatedStatuts, setSimulatedStatuts] = useState<Record<string, 'deposee' | 'retenue'>>({});
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [demoDateInput, setDemoDateInput] = useState<string>(() => {
+    try {
+      return localStorage.getItem('usmba_demo_date') || '';
+    } catch {
+      return '';
+    }
+  });
+
+  const handleDemoDateChange = (newDate: string) => {
+    setDemoDateInput(newDate);
+    try {
+      if (newDate) {
+        localStorage.setItem('usmba_demo_date', newDate);
+      } else {
+        localStorage.removeItem('usmba_demo_date');
+      }
+      window.dispatchEvent(new CustomEvent('usmba_demo_date_updated', { detail: newDate }));
+      window.dispatchEvent(new CustomEvent('storage'));
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleResetDemoDate = () => {
+    setDemoDateInput('');
+    try {
+      localStorage.removeItem('usmba_demo_date');
+      window.dispatchEvent(new CustomEvent('usmba_demo_date_updated', { detail: '' }));
+      window.dispatchEvent(new CustomEvent('storage'));
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const [verifCode, setVerifCode] = useState<string | null>(() => {
     if (typeof window !== 'undefined' && window.location.hash.startsWith('#verif/')) {
       return decodeURIComponent(window.location.hash.replace(/^#verif\/?/, '').trim());
@@ -209,6 +247,8 @@ export default function App() {
         setCandidat(demo);
       }
       setTab('sujets');
+    } else if (userRole === 'admin') {
+      setTab('admin_comptes');
     } else if (userRole === 'enseignant') {
       setTab('sujets');
     } else if (userRole === 'doctorant') {
@@ -248,6 +288,21 @@ export default function App() {
       }
     } catch {
       // safe fallback
+    }
+
+    // Protection stricte Admin : navigation exclusive entre ses 2 onglets, aucun accès aux autres écrans
+    if (role === 'admin') {
+      if (targetTab === 'admin_comptes' || targetTab === 'admin_journal') {
+        setTab(targetTab);
+      }
+      return;
+    }
+
+    // Protection des onglets admin pour les non-admins
+    if (targetTab === 'admin_comptes' || targetTab === 'admin_journal') {
+      setRestrictionMsg(fr.auth.accessRestricted);
+      setIsLoginOpen(true);
+      return;
     }
 
     // Pages ouvertes aux visiteurs
@@ -322,7 +377,9 @@ export default function App() {
       // safe fallback
     }
 
+    setDemoDateInput('');
     refreshState();
+    window.dispatchEvent(new CustomEvent('usmba_demo_date_updated', { detail: '' }));
     window.dispatchEvent(new CustomEvent('usmba_creneaux_updated'));
     window.dispatchEvent(new CustomEvent('usmba_pvs_updated'));
     window.dispatchEvent(new CustomEvent('usmba_pieces_updated'));
@@ -371,7 +428,7 @@ export default function App() {
       cne: string;
       sujetTitre: string;
       date: string;
-      statut: 'deposee' | 'retenue';
+      statut: 'deposee' | 'retenue' | 'a_corriger';
       piecesDeclarees: number;
       piecesProuvees: number;
       motifCasParticulier?: string;
@@ -403,6 +460,10 @@ export default function App() {
         if (teacherSubjectIds.includes(id)) {
           const s = sujets.find((x) => x.id === id);
           if (s) {
+            const st = candidat.candidaturesStatuts?.[id] || 'deposee';
+            if (st === 'brouillon') {
+              return;
+            }
             list.push({
               key: `${candidat.id}-${id}`,
               candidatId: candidat.id,
@@ -411,7 +472,7 @@ export default function App() {
               cne: candidat.cne || 'CNE',
               sujetTitre: s.titre,
               date: '28/10/2026',
-              statut: candidat.candidaturesStatuts?.[id] || 'deposee',
+              statut: st,
               piecesDeclarees: activePiecesDeclarees,
               piecesProuvees: activePiecesProuvees,
               motifCasParticulier: motifLabel,
@@ -462,11 +523,11 @@ export default function App() {
   const handleToggleRetenir = (item: {
     key: string;
     sujetId: string;
-    statut: 'deposee' | 'retenue';
+    statut: CandidatureStatut;
     isCurrentCandidat: boolean;
     candidatId?: string;
   }) => {
-    const newStatut: 'deposee' | 'retenue' = item.statut === 'deposee' ? 'retenue' : 'deposee';
+    const newStatut: CandidatureStatut = item.statut === 'deposee' ? 'retenue' : 'deposee';
 
     if (newStatut === 'retenue') {
       // Au clic sur « Convoquer » : crée une Notification pour le candidat
@@ -660,6 +721,8 @@ export default function App() {
       ? DEMO_DOCTORANT_NADIA.nom
       : role === 'agent'
       ? 'Karima Tazi'
+      : role === 'admin'
+      ? 'Service Scolarité'
       : fr.app.cedName
     : undefined;
 
@@ -865,6 +928,34 @@ export default function App() {
                   </button>
                 )}
 
+                {/* Onglets Scolarité (Admin) */}
+                {isLoggedIn && role === 'admin' && (
+                  <>
+                    <button
+                      onClick={() => handleTabChange('admin_comptes')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                        tab === 'admin_comptes'
+                          ? 'bg-purple-800 text-purple-200'
+                          : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
+                      }`}
+                    >
+                      <Users size={14} />
+                      <span>{fr.nav.adminComptes}</span>
+                    </button>
+                    <button
+                      onClick={() => handleTabChange('admin_journal')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                        tab === 'admin_journal'
+                          ? 'bg-purple-800 text-purple-200'
+                          : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
+                      }`}
+                    >
+                      <FileText size={14} />
+                      <span>{fr.nav.adminJournal}</span>
+                    </button>
+                  </>
+                )}
+
                 {/* Visiteur non connecté */}
                 {!isLoggedIn && (
                   <button
@@ -906,16 +997,46 @@ export default function App() {
 
                       {accountMenuOpen && (
                         <div
-                          className="absolute right-0 top-full mt-1.5 w-56 bg-white text-slate-800 rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 text-xs"
-                          onClick={() => setAccountMenuOpen(false)}
+                          className="absolute right-0 top-full mt-1.5 w-60 bg-white text-slate-800 rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 text-xs"
                         >
                           <div className="px-3 py-2 border-b border-slate-100">
                             <p className="font-bold text-slate-900">Visiteur démo</p>
                             <span className="text-[10px] font-semibold text-slate-500">Non connecté</span>
                           </div>
 
+                          <div
+                            className="px-3 py-2 border-b border-slate-100 bg-slate-50/70 space-y-1.5"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <div className="flex items-center justify-between">
+                              <label htmlFor="demo-date-visitor" className="text-[11px] font-semibold text-slate-700 flex items-center gap-1.5">
+                                <Calendar size={12} className="text-slate-500" />
+                                <span>{fr.demoDate.label}</span>
+                              </label>
+                              {Boolean(demoDateInput) && (
+                                <button
+                                  type="button"
+                                  onClick={handleResetDemoDate}
+                                  className="text-[10px] text-emerald-700 hover:text-emerald-800 font-semibold underline cursor-pointer"
+                                >
+                                  {fr.demoDate.reset}
+                                </button>
+                              )}
+                            </div>
+                            <input
+                              id="demo-date-visitor"
+                              type="date"
+                              value={demoDateInput || aujourdhui()}
+                              onChange={(e) => handleDemoDateChange(e.target.value)}
+                              className="w-full px-2 py-1 bg-white border border-slate-300 rounded text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
+                            />
+                          </div>
+
                           <button
-                            onClick={() => setIsLoginOpen(true)}
+                            onClick={() => {
+                              setAccountMenuOpen(false);
+                              setIsLoginOpen(true);
+                            }}
                             className="w-full text-left px-3 py-2 text-emerald-700 hover:bg-emerald-50 flex items-center gap-2 font-semibold cursor-pointer"
                           >
                             <LogIn size={13} />
@@ -923,7 +1044,10 @@ export default function App() {
                           </button>
 
                           <button
-                            onClick={handleResetData}
+                            onClick={() => {
+                              setAccountMenuOpen(false);
+                              handleResetData();
+                            }}
                             className="w-full text-left px-3 py-2 text-slate-600 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
                           >
                             <RotateCcw size={13} />
@@ -950,8 +1074,7 @@ export default function App() {
 
                     {accountMenuOpen && (
                       <div
-                        className="absolute right-0 top-full mt-1.5 w-48 bg-white text-slate-800 rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 text-xs"
-                        onClick={() => setAccountMenuOpen(false)}
+                        className="absolute right-0 top-full mt-1.5 w-60 bg-white text-slate-800 rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 text-xs"
                       >
                         <div className="px-3 py-2 border-b border-slate-100">
                           <p className="font-bold text-slate-900 truncate">{currentUserName || fr.auth.accountMenu}</p>
@@ -960,6 +1083,8 @@ export default function App() {
                               ? fr.auth.roleCandidatBadge
                               : role === 'enseignant'
                               ? fr.auth.roleEnseignantBadge
+                              : role === 'admin'
+                              ? fr.auth.roleAdminBadge
                               : fr.auth.roleCedBadge}
                           </span>
                           {role === 'enseignant' && (
@@ -974,8 +1099,39 @@ export default function App() {
                           )}
                         </div>
 
+                        <div
+                          className="px-3 py-2 border-b border-slate-100 bg-slate-50/70 space-y-1.5"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <div className="flex items-center justify-between">
+                            <label htmlFor="demo-date-logged" className="text-[11px] font-semibold text-slate-700 flex items-center gap-1.5">
+                              <Calendar size={12} className="text-slate-500" />
+                              <span>{fr.demoDate.label}</span>
+                            </label>
+                            {Boolean(demoDateInput) && (
+                              <button
+                                type="button"
+                                onClick={handleResetDemoDate}
+                                className="text-[10px] text-emerald-700 hover:text-emerald-800 font-semibold underline cursor-pointer"
+                              >
+                                {fr.demoDate.reset}
+                              </button>
+                            )}
+                          </div>
+                          <input
+                            id="demo-date-logged"
+                            type="date"
+                            value={demoDateInput || aujourdhui()}
+                            onChange={(e) => handleDemoDateChange(e.target.value)}
+                            className="w-full px-2 py-1 bg-white border border-slate-300 rounded text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
+                          />
+                        </div>
+
                         <button
-                          onClick={handleResetData}
+                          onClick={() => {
+                            setAccountMenuOpen(false);
+                            handleResetData();
+                          }}
                           className="w-full text-left px-3 py-2 text-slate-600 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
                         >
                           <RotateCcw size={13} />
@@ -983,7 +1139,10 @@ export default function App() {
                         </button>
 
                         <button
-                          onClick={handleLogout}
+                          onClick={() => {
+                            setAccountMenuOpen(false);
+                            handleLogout();
+                          }}
                           className="w-full text-left px-3 py-2 text-rose-600 hover:bg-rose-50 flex items-center gap-2 font-medium cursor-pointer"
                         >
                           <LogOut size={13} />
@@ -1003,28 +1162,43 @@ export default function App() {
                 />
               )}
 
-              {/* Icône panier avec badge */}
-              <button
-                onClick={() => handleTabChange('panier')}
-                aria-label={fr.nav.panier}
-                title={fr.nav.panier}
-                className={`relative p-2 rounded-xl transition cursor-pointer flex items-center justify-center ${
-                  tab === 'panier'
-                    ? 'bg-emerald-800 text-amber-300 ring-1 ring-amber-300/40'
-                    : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
-                }`}
-              >
-                <ShoppingBag size={20} />
-                <span
-                  className={`absolute -top-1 -right-1 text-[10px] min-w-[18px] h-[18px] px-1 rounded-full flex items-center justify-center shadow-xs transition-colors ${
-                    (candidat.panier?.length || 0) > 0
-                      ? 'bg-amber-400 text-slate-950 font-black'
-                      : 'bg-emerald-800 text-emerald-300 font-bold'
+              {/* Icône panier avec badge (candidats et visiteurs uniquement) */}
+              {role !== 'admin' && (
+                <button
+                  onClick={() => handleTabChange('panier')}
+                  aria-label={fr.nav.panier}
+                  title={fr.nav.panier}
+                  className={`relative p-2 rounded-xl transition cursor-pointer flex items-center justify-center ${
+                    tab === 'panier'
+                      ? 'bg-emerald-800 text-amber-300 ring-1 ring-amber-300/40'
+                      : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
                   }`}
                 >
-                  {candidat.panier?.length || 0}
-                </span>
-              </button>
+                  <ShoppingBag size={20} />
+                  <span
+                    className={`absolute -top-1 -right-1 text-[10px] min-w-[18px] h-[18px] px-1 rounded-full flex items-center justify-center shadow-xs transition-colors ${
+                      (candidat.panier?.length || 0) > 0
+                        ? 'bg-amber-400 text-slate-950 font-black'
+                        : 'bg-emerald-800 text-emerald-300 font-bold'
+                    }`}
+                  >
+                    {candidat.panier?.length || 0}
+                  </span>
+                </button>
+              )}
+
+              {/* Bouton de déconnexion rapide mobile pour Admin */}
+              {isLoggedIn && role === 'admin' && (
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="md:hidden px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-purple-900/80 hover:bg-purple-900 text-purple-200 border border-purple-500/40 flex items-center gap-1 cursor-pointer"
+                  title={fr.auth.logout}
+                >
+                  <LogOut size={13} />
+                  <span>{fr.auth.logout}</span>
+                </button>
+              )}
             </div>
           </div>
         </header>
@@ -1075,6 +1249,11 @@ export default function App() {
                 window.location.hash = '';
                 setVerifCode(null);
               }}
+            />
+          ) : role === 'admin' && isLoggedIn ? (
+            <Admin
+              currentTab={tab === 'admin_journal' ? 'admin_journal' : 'admin_comptes'}
+              onSelectTab={(newTab) => setTab(newTab)}
             />
           ) : (
             <>
@@ -1727,8 +1906,40 @@ export default function App() {
               </button>
             )}
 
-            {/* Connecté : Mon compte */}
-            {isLoggedIn && (
+            {/* SCOLARITÉ (ADMIN) : exactement 2 onglets en bas sur mobile */}
+            {isLoggedIn && role === 'admin' && (
+              <>
+                <button
+                  onClick={() => handleTabChange('admin_comptes')}
+                  type="button"
+                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
+                    tab === 'admin_comptes' ? 'text-purple-700 font-bold' : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <Users size={18} />
+                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
+                    {fr.nav.court.adminComptes}
+                  </span>
+                  {tab === 'admin_comptes' && <span className="w-5 h-1 bg-purple-600 rounded-full mt-0.5 animate-pulse" />}
+                </button>
+                <button
+                  onClick={() => handleTabChange('admin_journal')}
+                  type="button"
+                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
+                    tab === 'admin_journal' ? 'text-purple-700 font-bold' : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <FileText size={18} />
+                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
+                    {fr.nav.court.adminJournal}
+                  </span>
+                  {tab === 'admin_journal' && <span className="w-5 h-1 bg-purple-600 rounded-full mt-0.5 animate-pulse" />}
+                </button>
+              </>
+            )}
+
+            {/* Connecté non-admin : Mon compte */}
+            {isLoggedIn && role !== 'admin' && (
               <button
                 onClick={() => setMobileMenuOpen(true)}
                 type="button"
@@ -1794,6 +2005,35 @@ export default function App() {
                 >
                   <X size={18} />
                 </button>
+              </div>
+
+              {/* Date de démo */}
+              <div
+                className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-1.5"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between">
+                  <label htmlFor="demo-date-mobile" className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                    <Calendar size={13} className="text-slate-500" />
+                    <span>{fr.demoDate.label}</span>
+                  </label>
+                  {Boolean(demoDateInput) && (
+                    <button
+                      type="button"
+                      onClick={handleResetDemoDate}
+                      className="text-[11px] text-emerald-700 hover:text-emerald-800 font-semibold underline cursor-pointer"
+                    >
+                      {fr.demoDate.reset}
+                    </button>
+                  )}
+                </div>
+                <input
+                  id="demo-date-mobile"
+                  type="date"
+                  value={demoDateInput || aujourdhui()}
+                  onChange={(e) => handleDemoDateChange(e.target.value)}
+                  className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
+                />
               </div>
 
               {!isLoggedIn && (

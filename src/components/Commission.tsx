@@ -18,6 +18,7 @@ import { Creneau, Resultat, ResultatType, PV, Candidat } from '../types';
 import { MOCK_CANDIDATS, INITIAL_CRENEAUX } from '../data/mockData';
 import { PVDocument } from './PVDocument';
 import { fr } from '../i18n/fr';
+import { logEvent } from '../utils/journal';
 
 interface CommissionProps {
   enseignantId: string;
@@ -260,6 +261,7 @@ export const Commission: React.FC<CommissionProps> = ({
       filtered.push(nouveauResultat);
       localStorage.setItem('usmba_doctorat_resultats', JSON.stringify(filtered));
       setResultats(filtered);
+      logEvent({ id: enseignantId, nom: enseignantNom, role: 'enseignant' }, fr.journalActions.candidatureValidee, `Candidat ${creneau.candidatId || ''} (${form.resultat})`);
 
       // Fermer le formulaire
       setOpenForms((prev) => ({ ...prev, [creneau.id]: false }));
@@ -353,6 +355,7 @@ export const Commission: React.FC<CommissionProps> = ({
         window.dispatchEvent(new CustomEvent('usmba_pvs_updated'));
         setActivePV(newPV);
       }
+      logEvent({ id: enseignantId, nom: enseignantNom, role: 'enseignant' }, fr.journalActions.pvGenere, `PV séance du ${date} (Code ${newCode})`);
     } catch {}
   };
 

@@ -1,8 +1,30 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Check, Clock, Lock, ArrowRight, Info, X, ExternalLink, Sparkles } from 'lucide-react';
+import { Check, Clock, Lock, ArrowRight, Info, X, ExternalLink, Sparkles, AlertTriangle } from 'lucide-react';
 import { fr } from '../i18n/fr';
-import { Candidat, Creneau, PV, Piece, ProgressionEtapeInfo } from '../types';
+import { Candidat, Creneau, PV, Piece, ProgressionEtapeInfo, dossierComplet } from '../types';
 import { storageService } from '../services/storage';
+import { ECHEANCES, aujourdhui } from '../data/mockData';
+
+function formatJJMM(dateStr?: string): string {
+  if (!dateStr) return '';
+  const parts = dateStr.split('-');
+  if (parts.length >= 3) {
+    return `${parts[2]}/${parts[1]}`;
+  }
+  return dateStr;
+}
+
+function getRetardInfo(echeanceStr?: string, dateRef?: string): { enRetard: boolean; jours: number } {
+  if (!echeanceStr) return { enRetard: false, jours: 0 };
+  const ref = dateRef || aujourdhui();
+  if (ref > echeanceStr) {
+    const dRef = new Date(ref + 'T00:00:00').getTime();
+    const dEch = new Date(echeanceStr + 'T00:00:00').getTime();
+    const diff = Math.max(1, Math.round((dRef - dEch) / (1000 * 60 * 60 * 24)));
+    return { enRetard: true, jours: diff };
+  }
+  return { enRetard: false, jours: 0 };
+}
 
 interface ProgressionCandidatProps {
   candidatId?: string;
@@ -30,10 +52,12 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
   const [pvs, setPvs] = useState<PV[]>([]);
   const [activeTooltip, setActiveTooltip] = useState<number | null>(null);
   const [hoveredStep, setHoveredStep] = useState<number | null>(null);
+  const [dateActuelle, setDateActuelle] = useState<string>(() => aujourdhui());
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Synchronisation des données locales
   const loadData = () => {
+    setDateActuelle(aujourdhui());
     try {
       const rawCand = localStorage.getItem('usmba_doctorat_candidat');
       if (rawCand) {
@@ -80,11 +104,13 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
     loadData();
     const handleSync = () => loadData();
     window.addEventListener('storage', handleSync);
+    window.addEventListener('usmba_demo_date_updated', handleSync);
     window.addEventListener('usmba_pvs_updated', handleSync);
     window.addEventListener('usmba_creneaux_updated', handleSync);
     window.addEventListener('usmba_dossier_updated', handleSync);
     return () => {
       window.removeEventListener('storage', handleSync);
+      window.removeEventListener('usmba_demo_date_updated', handleSync);
       window.removeEventListener('usmba_pvs_updated', handleSync);
       window.removeEventListener('usmba_creneaux_updated', handleSync);
       window.removeEventListener('usmba_dossier_updated', handleSync);
@@ -108,19 +134,28 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
   const currentCandidatId = candidat?.id || candidatId || '';
 
   // --- CALCUL DYNAMIQUE DES 6 ÉTAPES (aucun nouveau stockage) ---
-  // Étape 1 : Candidature (≥1 candidature déposée)
-  const step1Done = candidatures.length >= 1;
-
-  // Étape 2 : Validée (≥1 candidature retenue)
   const candidaturesStatuts = candidat?.candidaturesStatuts || {};
-  const step2Done = Object.values(candidaturesStatuts).some((st) => st === 'retenue');
 
-  // Étape 3 : Entretien (créneau au statut 'confirme')
-  const step3Done = Boolean(currentCandidatId) && creneaux.some(
+  // Étape 1 : Dossier complet (fait si dossierComplet)
+  const step1Done = dossierComplet(candidat).complet;
+
+  // Étape 2 : Envoyée (fait si statut ≠ 'brouillon')
+  const step2Done =
+    candidatures.length > 0 &&
+    candidatures.some((id) => {
+      const st = candidaturesStatuts[id];
+      return Boolean(st && st !== 'brouillon');
+    });
+
+  // Étape 3 : Validée (≥1 candidature retenue)
+  const step3Done = Object.values(candidaturesStatuts).some((st) => st === 'retenue');
+
+  // Étape 4 : Entretien (créneau au statut 'confirme')
+  const step4Done = Boolean(currentCandidatId) && creneaux.some(
     (c) => c.candidatId === currentCandidatId && c.statut === 'confirme'
   );
 
-  // Étape 4 : Résultat (un PV publié contenant son résultat)
+  // Étape 5 : Résultat (un PV publié contenant son résultat)
   const publishedPv = pvs.find(
     (pv) =>
       Boolean(pv.publieLe) &&
@@ -130,22 +165,8 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
   const monResultat = publishedPv?.resultats?.find(
     (r) => Boolean(currentCandidatId) && r.candidatId === currentCandidatId
   );
-  const step4Done = Boolean(monResultat);
+  const step5Done = Boolean(monResultat);
   const isRefuse = monResultat?.resultat === 'REFUSE';
-
-  // Étape 5 : Preuves (4 pièces au statut 'prouvee' ou cas particulier avec motif)
-  let pieces: Piece[] = candidat?.pieces || [];
-  if (!pieces || pieces.length === 0) {
-    try {
-      pieces = storageService.getPieces();
-    } catch {
-      pieces = [];
-    }
-  }
-  const has4PiecesProuvees = pieces.length >= 4 && pieces.every((p) => p.statut === 'prouvee');
-  const dossier = candidat?.dossier;
-  const hasCasParticulier = Boolean(dossier?.casParticulier && (dossier?.motif || dossier?.motifAutre));
-  const step5Done = has4PiecesProuvees || hasCasParticulier;
 
   // Étape 6 : Inscription (toujours grisée, 'future')
   const step6Done = false;
@@ -156,6 +177,14 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
   const etapes: ProgressionEtapeInfo[] = [
     {
       numero: 1,
+      cle: 'dossier',
+      nom: fr.progression.steps.dossier.nom,
+      statut: 'future',
+      infobulle: fr.progression.steps.dossier.future,
+      actionTexte: fr.progression.steps.dossier.action,
+    },
+    {
+      numero: 2,
       cle: 'candidature',
       nom: fr.progression.steps.candidature.nom,
       statut: 'future',
@@ -163,7 +192,7 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
       actionTexte: fr.progression.steps.candidature.action,
     },
     {
-      numero: 2,
+      numero: 3,
       cle: 'validee',
       nom: fr.progression.steps.validee.nom,
       statut: 'future',
@@ -171,7 +200,7 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
       actionTexte: fr.progression.steps.validee.action,
     },
     {
-      numero: 3,
+      numero: 4,
       cle: 'entretien',
       nom: fr.progression.steps.entretien.nom,
       statut: 'future',
@@ -179,20 +208,12 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
       actionTexte: fr.progression.steps.entretien.action,
     },
     {
-      numero: 4,
+      numero: 5,
       cle: 'resultat',
       nom: fr.progression.steps.resultat.nom,
       statut: 'future',
       infobulle: fr.progression.steps.resultat.future,
       actionTexte: fr.progression.steps.resultat.action,
-    },
-    {
-      numero: 5,
-      cle: 'preuves',
-      nom: fr.progression.steps.preuves.nom,
-      statut: 'future',
-      infobulle: fr.progression.steps.preuves.future,
-      actionTexte: fr.progression.steps.preuves.action,
     },
     {
       numero: 6,
@@ -205,15 +226,11 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
   ];
 
   if (isRefuse) {
-    // Si Résultat est « Refusé » : l'étape 4 est faite, les étapes 5 et 6 sont grisées « Non applicable »
-    for (let i = 0; i < 4; i++) {
+    // Si Résultat est « Refusé » : les étapes 1 à 5 sont faites, l'étape 6 est grisée « Non applicable »
+    for (let i = 0; i < 5; i++) {
       etapes[i].statut = 'faite';
       etapes[i].infobulle = fr.progression.steps[etapes[i].cle].terminee;
     }
-    etapes[4].statut = 'future';
-    etapes[4].estNonApplicable = true;
-    etapes[4].infobulle = fr.progression.nonApplicable;
-
     etapes[5].statut = 'future';
     etapes[5].estNonApplicable = true;
     etapes[5].infobulle = fr.progression.nonApplicable;
@@ -222,15 +239,30 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
     const firstNonDoneIndex = rawDones.findIndex((done) => !done);
 
     for (let i = 0; i < 6; i++) {
+      const echeance = ECHEANCES[etapes[i].cle];
+      etapes[i].echeance = echeance;
+
       if (firstNonDoneIndex === -1 || i < firstNonDoneIndex) {
         etapes[i].statut = 'faite';
         etapes[i].infobulle = fr.progression.steps[etapes[i].cle].terminee;
+        etapes[i].enRetard = false;
+        etapes[i].joursRetard = 0;
       } else if (i === firstNonDoneIndex) {
         etapes[i].statut = 'en_cours';
         etapes[i].infobulle = fr.progression.steps[etapes[i].cle].enCours;
+        if (echeance) {
+          const { enRetard, jours } = getRetardInfo(echeance, dateActuelle);
+          etapes[i].enRetard = enRetard;
+          etapes[i].joursRetard = jours;
+        } else {
+          etapes[i].enRetard = false;
+          etapes[i].joursRetard = 0;
+        }
       } else {
         etapes[i].statut = 'future';
         etapes[i].infobulle = fr.progression.steps[etapes[i].cle].future;
+        etapes[i].enRetard = false;
+        etapes[i].joursRetard = 0;
       }
     }
   }
@@ -244,10 +276,13 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
       case 0: // Candidature
         onNavigate?.('sujets');
         break;
-      case 1: // Validée
+      case 1: // Dossier complet
         onNavigate?.('dossier');
         break;
-      case 2: // Entretien
+      case 2: // Validée
+        onNavigate?.('sujets');
+        break;
+      case 3: // Entretien
         {
           const el = document.getElementById('creneaux-section');
           if (el) {
@@ -257,7 +292,7 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
           }
         }
         break;
-      case 3: // Résultat
+      case 4: // Résultat
         {
           const el = document.getElementById('mon-resultat');
           if (el) {
@@ -266,9 +301,6 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
             onNavigate?.('entretiens');
           }
         }
-        break;
-      case 4: // Preuves
-        onNavigate?.('dossier');
         break;
       case 5: // Inscription
         break;
@@ -296,11 +328,11 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
 
     const pathData = `M ${x1} ${y1} A ${r} ${r} 0 0 1 ${x2} ${y2}`;
 
-    let strokeColor = '#cbd5e1'; // slate-300 (future / non applicable)
+    let strokeColor = '#cbd5e1'; // slate-300 (future / non applicable - jamais rouge)
     if (etape.statut === 'faite') {
-      strokeColor = '#059669'; // emerald-600
+      strokeColor = '#059669'; // emerald-600 (fait : toujours vert)
     } else if (etape.statut === 'en_cours') {
-      strokeColor = '#d97706'; // amber-600
+      strokeColor = etape.enRetard ? '#dc2626' : '#d97706'; // rouge si en retard, amber-600 sinon
     }
 
     return {
@@ -417,8 +449,12 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
           {activeEtape && (
             <div className="mt-3 w-full max-w-sm mx-auto bg-slate-900 text-white rounded-xl p-3 text-xs shadow-lg animate-in fade-in zoom-in-95 duration-150 relative">
               <div className="flex items-start justify-between gap-2">
-                <div className="flex items-center gap-1.5 font-bold text-amber-300">
-                  <Info size={14} className="shrink-0" />
+                <div className={`flex items-center gap-1.5 font-bold ${activeEtape.enRetard ? 'text-rose-400' : 'text-amber-300'}`}>
+                  {activeEtape.enRetard ? (
+                    <AlertTriangle size={14} className="shrink-0 text-rose-400" />
+                  ) : (
+                    <Info size={14} className="shrink-0" />
+                  )}
                   <span>
                     Étape {activeEtape.numero} : {activeEtape.nom}
                   </span>
@@ -429,18 +465,32 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
                     setActiveTooltip(null);
                     setHoveredStep(null);
                   }}
-                  className="text-slate-400 hover:text-white p-0.5"
+                  className="text-slate-400 hover:text-white p-0.5 cursor-pointer"
                   aria-label={fr.progression.tooltipClose}
                 >
                   <X size={14} />
                 </button>
               </div>
+
+              {activeEtape.enRetard && (
+                <div className="mt-1.5 px-2.5 py-1 bg-rose-950/80 border border-rose-500/40 rounded-lg text-xs text-rose-200 flex items-center gap-1.5">
+                  <AlertTriangle size={12} className="shrink-0 text-rose-400" />
+                  <span className="font-bold">
+                    {fr.progression.enRetardDepuis.replace('{jours}', String(activeEtape.joursRetard || 1))}
+                  </span>
+                </div>
+              )}
+
               <p className="mt-1.5 text-slate-200 leading-relaxed">{activeEtape.infobulle}</p>
               {activeEtape.statut === 'en_cours' && activeEtape.actionTexte && (
                 <button
                   type="button"
                   onClick={() => handleAction(activeEtape.numero - 1)}
-                  className="mt-2.5 w-full py-1.5 px-3 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  className={`mt-2.5 w-full py-1.5 px-3 rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                    activeEtape.enRetard
+                      ? 'bg-rose-600 hover:bg-rose-500 text-white'
+                      : 'bg-amber-500 hover:bg-amber-400 text-slate-950'
+                  }`}
                 >
                   <span>{activeEtape.actionTexte}</span>
                   <ArrowRight size={13} />
@@ -509,12 +559,14 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
                     handleStepToggle(index);
                   }
                 }}
-                className={`w-full text-left rounded-xl border p-3 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-emerald-500/20 ${
+                className={`w-full text-left rounded-xl border p-3 transition-all cursor-pointer focus:outline-none focus:ring-2 ${
                   isFaite
-                    ? 'bg-emerald-50/50 border-emerald-200/80 hover:bg-emerald-50'
+                    ? 'bg-emerald-50/50 border-emerald-200/80 hover:bg-emerald-50 focus:ring-emerald-500/20'
+                    : isEnCours && etape.enRetard
+                    ? 'bg-rose-50/70 border-rose-300 ring-1 ring-rose-200 shadow-xs focus:ring-rose-500/20'
                     : isEnCours
-                    ? 'bg-amber-50/50 border-amber-300 ring-1 ring-amber-200 shadow-xs'
-                    : 'bg-slate-50/60 border-slate-200 text-slate-400'
+                    ? 'bg-amber-50/50 border-amber-300 ring-1 ring-amber-200 shadow-xs focus:ring-amber-500/20'
+                    : 'bg-slate-50/60 border-slate-200 text-slate-400 focus:ring-slate-400/20'
                 }`}
               >
                 <div className="flex items-center justify-between gap-3">
@@ -524,6 +576,8 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
                       className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 text-xs font-bold ${
                         isFaite
                           ? 'bg-emerald-600 text-white'
+                          : isEnCours && etape.enRetard
+                          ? 'bg-rose-600 text-white'
                           : isEnCours
                           ? 'bg-amber-500 text-white'
                           : 'bg-slate-200 text-slate-500'
@@ -531,6 +585,8 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
                     >
                       {isFaite ? (
                         <Check size={14} strokeWidth={2.5} />
+                      ) : isEnCours && etape.enRetard ? (
+                        <AlertTriangle size={14} strokeWidth={2.5} />
                       ) : isEnCours ? (
                         <Clock size={14} strokeWidth={2.5} />
                       ) : (
@@ -540,7 +596,13 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
                     <div className="min-w-0">
                       <p
                         className={`text-xs font-bold truncate ${
-                          isFaite ? 'text-slate-900' : isEnCours ? 'text-amber-950 font-extrabold' : 'text-slate-600'
+                          isFaite
+                            ? 'text-slate-900'
+                            : isEnCours && etape.enRetard
+                            ? 'text-rose-950 font-extrabold'
+                            : isEnCours
+                            ? 'text-amber-950 font-extrabold'
+                            : 'text-slate-600'
                         }`}
                       >
                         {etape.numero}. {etape.nom}
@@ -563,11 +625,23 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
                         <Check size={10} strokeWidth={2.5} />
                         <span>{fr.progression.statuts.faite}</span>
                       </span>
-                    ) : isEnCours ? (
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 flex items-center gap-1">
-                        <Clock size={10} strokeWidth={2.5} />
-                        <span>{fr.progression.statuts.enCours}</span>
+                    ) : isEnCours && etape.enRetard ? (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200 flex items-center gap-1">
+                        <AlertTriangle size={11} strokeWidth={2.5} className="text-rose-600" />
+                        <span>{fr.progression.enRetardDepuis.replace('{jours}', String(etape.joursRetard || 1))}</span>
                       </span>
+                    ) : isEnCours ? (
+                      <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 flex items-center gap-1">
+                          <Clock size={10} strokeWidth={2.5} />
+                          <span>{fr.progression.statuts.enCours}</span>
+                        </span>
+                        {etape.echeance && (
+                          <span className="text-[10px] font-semibold text-amber-900 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
+                            {fr.progression.avantLe.replace('{date}', formatJJMM(etape.echeance))}
+                          </span>
+                        )}
+                      </div>
                     ) : (
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 flex items-center gap-1">
                         <Lock size={10} strokeWidth={2.5} />
@@ -579,14 +653,18 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
 
                 {/* Bouton d'action pour l'étape en cours ou étape faite */}
                 {isEnCours && etape.actionTexte && (
-                  <div className="mt-3 pt-2.5 border-t border-amber-200/60 flex items-center justify-end">
+                  <div className={`mt-3 pt-2.5 border-t flex items-center justify-end ${
+                    etape.enRetard ? 'border-rose-200/70' : 'border-amber-200/60'
+                  }`}>
                     <button
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
                         handleAction(index);
                       }}
-                      className="py-1.5 px-3 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+                      className={`py-1.5 px-3 rounded-lg text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer ${
+                        etape.enRetard ? 'bg-rose-600 hover:bg-rose-700' : 'bg-amber-600 hover:bg-amber-700'
+                      }`}
                     >
                       <span>{etape.actionTexte}</span>
                       <ArrowRight size={13} />

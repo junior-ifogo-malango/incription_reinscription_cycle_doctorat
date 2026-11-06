@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Send, CheckCircle2, Clock, AlertCircle, FileText, Award, MessageCircle, Mail } from 'lucide-react';
+import { Send, CheckCircle2, Clock, AlertCircle, FileText, Award, MessageCircle, Mail, Upload, FileCheck, XCircle } from 'lucide-react';
 import { PV, Notification, Resultat } from '../types';
 import { fr } from '../i18n/fr';
+import { logEvent } from '../utils/journal';
 import {
   normaliserTel,
   lienWhatsApp,
@@ -58,6 +59,7 @@ export const publierResultatsPV = (pvId: string): { success: boolean; message?: 
 
     window.dispatchEvent(new CustomEvent('usmba_notifications_updated'));
     window.dispatchEvent(new CustomEvent('usmba_pvs_updated'));
+    logEvent({ id: 'dir-ced', nom: 'Structure CED', role: 'directeur_ced' }, fr.journalActions.resultatsPublies, `PV-${targetPv.date}-${(targetPv.code || '').slice(0, 4)}`);
 
     return { success: true };
   } catch (err) {
@@ -150,6 +152,41 @@ export const CedSeances: React.FC = () => {
     }
   };
 
+  const handleDeposerScan = (pvId: string) => {
+    try {
+      const raw = localStorage.getItem('usmba_doctorat_pvs');
+      let curPvs: PV[] = raw ? JSON.parse(raw) : [];
+      const idx = curPvs.findIndex((p) => p.id === pvId);
+      if (idx !== -1) {
+        curPvs[idx].statut = 'original_recu';
+        curPvs[idx].scanDeposeLe = new Date().toISOString();
+        curPvs[idx].scanStatut = 'valide';
+        localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(curPvs));
+        setPvs(curPvs.filter((p) => !p.remplaceePar));
+        window.dispatchEvent(new CustomEvent('usmba_pvs_updated'));
+        logEvent({ id: 'dir-ced', nom: 'Structure CED', role: 'directeur_ced' }, fr.journalActions.scanPvDepose, `PV-${curPvs[idx].date}-${(curPvs[idx].code || '').slice(0, 4)}`, 'Remise papier');
+        setMessage({ type: 'success', text: 'Scan du PV déposé avec succès (Remise papier)' });
+      }
+    } catch {}
+  };
+
+  const handleRefuserScan = (pvId: string, motif: string = 'Scan illisible ou signatures incomplètes') => {
+    try {
+      const raw = localStorage.getItem('usmba_doctorat_pvs');
+      let curPvs: PV[] = raw ? JSON.parse(raw) : [];
+      const idx = curPvs.findIndex((p) => p.id === pvId);
+      if (idx !== -1) {
+        curPvs[idx].scanStatut = 'refuse';
+        curPvs[idx].scanMotifRefus = motif;
+        localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(curPvs));
+        setPvs(curPvs.filter((p) => !p.remplaceePar));
+        window.dispatchEvent(new CustomEvent('usmba_pvs_updated'));
+        logEvent({ id: 'dir-ced', nom: 'Structure CED', role: 'directeur_ced' }, fr.journalActions.scanPvRefuse, `PV-${curPvs[idx].date}-${(curPvs[idx].code || '').slice(0, 4)}`, motif);
+        setMessage({ type: 'error', text: `Scan du PV refusé : ${motif}` });
+      }
+    } catch {}
+  };
+
   const formatDate = (isoString?: string) => {
     if (!isoString) return '';
     try {
@@ -230,7 +267,48 @@ export const CedSeances: React.FC = () => {
                     </p>
                   </div>
 
-                  <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {/* Scan PV (Remise papier) */}
+                    {pv.scanStatut === 'valide' ? (
+                      <div className="flex items-center gap-1.5">
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-sky-50 text-sky-800 border border-sky-200">
+                          <FileCheck size={13} className="text-sky-600" />
+                          <span>Remise papier (Scan reçu)</span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleRefuserScan(pv.id)}
+                          className="px-2.5 py-1 rounded-lg text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition-colors cursor-pointer"
+                        >
+                          Refuser scan
+                        </button>
+                      </div>
+                    ) : pv.scanStatut === 'refuse' ? (
+                      <div className="flex items-center gap-1.5">
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-50 text-rose-800 border border-rose-200">
+                          <XCircle size={13} className="text-rose-600" />
+                          <span>Scan refusé</span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleDeposerScan(pv.id)}
+                          className="px-2.5 py-1 rounded-lg text-xs font-semibold text-sky-700 bg-sky-50 hover:bg-sky-100 border border-sky-200 transition-colors cursor-pointer"
+                        >
+                          Re-déposer scan
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleDeposerScan(pv.id)}
+                        className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer border border-slate-300"
+                      >
+                        <Upload size={13} />
+                        <span>Déposer scan PV</span>
+                      </button>
+                    )}
+
+                    {/* Publication résultats */}
                     {isPublished ? (
                       <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
                         <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />

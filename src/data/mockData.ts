@@ -8,6 +8,7 @@ import {
   ApogeeFictifEntry,
   Rapport,
   Doctorant,
+  Compte,
 } from '../types';
 
 export const INITIAL_ENSEIGNANTS: Enseignant[] = [
@@ -257,6 +258,12 @@ export const DEMO_CANDIDAT_YASSINE: Candidat = {
   dossier: {
     casParticulier: false,
     guichet: false,
+  },
+  cursus: {
+    diplome: 'Master Sciences et Techniques',
+    etablissement: 'Faculté des Sciences et Techniques (FST Fès)',
+    anneeObtention: 2026,
+    mention: 'Bien',
   },
   pieces: INITIAL_PIECES_YASSINE,
 };
@@ -632,3 +639,111 @@ export const INITIAL_RAPPORTS: Rapport[] = [
     ],
   },
 ];
+
+/* ========================================================================= */
+/* ÉCHÉANCES ET DATE DE DÉMO (PARCOURS CANDIDAT)                             */
+/* ========================================================================= */
+
+export const ECHEANCES: Record<string, string> = {
+  candidature: '2026-11-10',
+  dossier: '2026-11-11',
+  validee: '2026-11-12',
+  validation: '2026-11-12',
+  entretien: '2026-11-20',
+  resultat: '2026-11-30',
+};
+
+export const DEMO_DATE_STORAGE_KEY = 'usmba_demo_date';
+
+/**
+ * Renvoie la "date de démo" si elle existe en localStorage, sinon la vraie date.
+ * Format : AAAA-MM-JJ
+ */
+export function aujourdhui(): string {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const demoDate = localStorage.getItem(DEMO_DATE_STORAGE_KEY);
+      if (demoDate && /^\d{4}-\d{2}-\d{2}$/.test(demoDate.trim())) {
+        return demoDate.trim();
+      }
+    }
+  } catch {
+    // safe fallback
+  }
+
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+/* ========================================================================= */
+/* COMPTES UTILISATEURS ET VALIDATION SCOLARITÉ                              */
+/* ========================================================================= */
+
+export const INITIAL_COMPTES: Compte[] = [
+  {
+    id: 'cpt-admin-1',
+    nom: 'Service Scolarité',
+    email: 'admin@demo.ma',
+    motDePasse: 'demo1234',
+    role: 'admin',
+    structure: 'Présidence USMBA - Pôle Scolarité & Doctorat',
+    etablissement: 'Université Sidi Mohamed Ben Abdellah',
+    statut: 'actif',
+    dateCreation: '2026-10-01',
+  },
+  {
+    id: 'cpt-att-1',
+    nom: 'Pr. Nadia Berrada',
+    email: 'n.berrada@demo.ma',
+    motDePasse: 'demo1234',
+    role: 'enseignant',
+    structure: 'Laboratoire Génie Industriel & IA Appliquée',
+    etablissement: 'Faculté des Sciences et Techniques (FST Fès)',
+    statut: 'en_attente',
+    dateCreation: '2026-11-01',
+  },
+  {
+    id: 'cpt-att-2',
+    nom: 'M. Rachid Lahlou',
+    email: 'r.lahlou@demo.ma',
+    motDePasse: 'demo1234',
+    role: 'directeur_ced',
+    structure: 'Centre d’Études Doctorales USMBA',
+    etablissement: 'Présidence USMBA',
+    statut: 'en_attente',
+    dateCreation: '2026-11-02',
+  },
+];
+
+export const STORAGE_KEY_COMPTES = 'gcd_comptes';
+
+export function getComptes(): Compte[] {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const stored = localStorage.getItem(STORAGE_KEY_COMPTES);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+    }
+  } catch {
+    // fallback to initial
+  }
+  return INITIAL_COMPTES;
+}
+
+export function saveComptes(comptes: Compte[]): void {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(STORAGE_KEY_COMPTES, JSON.stringify(comptes));
+    }
+  } catch {
+    // ignore
+  }
+}
+
