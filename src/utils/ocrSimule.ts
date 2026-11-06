@@ -1,43 +1,59 @@
 // Simulation : aucune lecture réelle de l'image
 
 export interface OcrResultatCIN {
-  nom: string;
+  numero: string;
   cin: string;
+  nom: string;
   confiance: number;
+  statutValidite?: StatutValiditeCIN;
+  controleEffectue?: boolean;
+}
+
+export type StatutValiditeCIN = 'valide' | 'illisible' | 'expiree';
+
+/**
+ * Lit de façon simulée une carte CIN à partir d'une image.
+ * Délai : 800 ms.
+ * Simulation déterministe :
+ * - Lit le numéro saisi avec une confiance de 0.9.
+ * - Si le champ est vide : confiance 0.5.
+ */
+export function lireCIN(image: string, cinCandidat?: string): Promise<OcrResultatCIN> {
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      const cleanSaisi = cinCandidat ? cinCandidat.trim().toUpperCase() : '';
+      if (cleanSaisi) {
+        resolve({
+          numero: cleanSaisi,
+          cin: cleanSaisi,
+          nom: 'EL FASSI Yassine',
+          confiance: 0.9,
+        });
+      } else {
+        const defaultCin = 'CD789123';
+        resolve({
+          numero: defaultCin,
+          cin: defaultCin,
+          nom: 'EL FASSI Yassine',
+          confiance: 0.5,
+        });
+      }
+    }, 800);
+  });
 }
 
 /**
- * Lit de façon simulée une carte CIN à partir d'un dataUrl d'image.
- * Si la longueur de dataUrl est paire : confiance 0.93 et CIN exact.
- * Si la longueur de dataUrl est impaire : confiance 0.58 et un caractère du CIN modifié.
+ * Vérification d'authenticité simulée.
+ * verifierCIN(numero) → 'valide' | 'illisible' | 'expiree'
  */
-export function lireCIN(dataUrl: string, cinCandidat?: string): Promise<OcrResultatCIN> {
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      // Base CIN du candidat ou valeur par défaut
-      const baseCin = (cinCandidat && cinCandidat.trim().toUpperCase()) || 'CD789123';
-      const isEven = dataUrl.length % 2 === 0;
-
-      if (isEven) {
-        resolve({
-          nom: 'EL FASSI Yassine',
-          cin: baseCin,
-          confiance: 0.93,
-        });
-      } else {
-        // Un caractère du CIN modifié (le dernier chiffre/caractère)
-        const lastChar = baseCin.slice(-1);
-        const alteredLast = !isNaN(Number(lastChar))
-          ? String((parseInt(lastChar, 10) + 1) % 10)
-          : lastChar === 'Z' ? 'A' : 'Z';
-        const cinModifie = baseCin.slice(0, -1) + alteredLast;
-
-        resolve({
-          nom: 'EL FASSI Yassine',
-          cin: cinModifie,
-          confiance: 0.58,
-        });
-      }
-    }, 1500);
-  });
+export function verifierCIN(numero: string): StatutValiditeCIN {
+  const clean = (numero || '').trim().toUpperCase();
+  if (!clean || clean.length < 4 || !/^[A-Z]{1,2}[0-9]{5,6}$/.test(clean) || clean.includes('ILL')) {
+    return 'illisible';
+  }
+  if (clean.endsWith('00') || clean.includes('EXP')) {
+    return 'expiree';
+  }
+  return 'valide';
 }
+

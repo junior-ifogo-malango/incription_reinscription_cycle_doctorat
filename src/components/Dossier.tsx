@@ -1,12 +1,12 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Camera, Upload, FileText, CheckCircle2, AlertCircle, X, Eye, RotateCcw, Award, ShieldCheck, UserCheck, AlertTriangle, ArrowRight } from 'lucide-react';
+import { Camera, Upload, FileText, CheckCircle2, AlertCircle, X, Eye, RotateCcw, Award, ShieldCheck, UserCheck, AlertTriangle, ArrowRight, Info } from 'lucide-react';
 import { Piece, PieceType, Candidat, MotifCasParticulier, PV, dossierComplet, AnomalieCandidature, CandidatureStatut, Notification } from '../types';
 import { ApogeeFictif, MOCK_CANDIDATS } from '../data/mockData';
 import { storageService } from '../services/storage';
 import { StatusBadge } from './StatusBadge';
 import { CameraCapture } from './CameraCapture';
 import { fr } from '../i18n/fr';
-import { lireCIN, OcrResultatCIN } from '../utils/ocrSimule';
+import { lireCIN, verifierCIN, OcrResultatCIN } from '../utils/ocrSimule';
 import { logEvent } from '../utils/journal';
 import { ProgressionCandidat } from './ProgressionCandidat';
 
@@ -165,6 +165,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
   const [ocrEditNom, setOcrEditNom] = useState<string>('');
   const [ocrEditCin, setOcrEditCin] = useState<string>('');
   const [ecartChoix, setEcartChoix] = useState<'lue' | 'saisie' | null>(null);
+  const [cinVerifError, setCinVerifError] = useState<string | null>(null);
   const [cinImgError, setCinImgError] = useState<boolean>(false);
   const [provenCinImgError, setProvenCinImgError] = useState<boolean>(false);
   const [pvs, setPvs] = useState<PV[]>([]);
@@ -494,19 +495,51 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
     setShowOcrPanel(false);
     setCinImgError(false);
     setEcartChoix(null);
+    setCinVerifError(null);
 
     const currentCinSaisi = candidat?.cin || cinInput;
     lireCIN(dataUrl, currentCinSaisi).then((res) => {
       setOcrLoading(false);
       setOcrResult(res);
-      setOcrEditNom(res.nom);
-      setOcrEditCin(res.cin);
+      setOcrEditNom(res.nom || 'EL FASSI Yassine');
+      setOcrEditCin(res.numero || res.cin);
+      setShowOcrPanel(true);
     });
   };
 
   const handleConfirmerPieceCin = () => {
     const cleanNom = ocrEditNom.trim();
     const cleanCin = ocrEditCin.trim().toUpperCase();
+
+    // Authenticity check: verifierCIN(numero) -> 'valide' | 'illisible' | 'expiree'
+    let validite: 'valide' | 'illisible' | 'expiree' | null = null;
+    try {
+      if (typeof verifierCIN === 'function') {
+        validite = verifierCIN(cleanCin);
+      }
+    } catch {
+      // 4. Cas d'erreur : verifierCIN indisponible -> "Preuve fournie - non contrôlée", sans plantage
+      validite = null;
+    }
+
+    // 2. Si 'illisible' ou 'expiree' : badge "À corriger" et message "Recharge une image plus nette"
+    if (validite === 'illisible' || validite === 'expiree') {
+      setCinVerifError(fr.dossier.rechargeImagePlusNette);
+      handleUpdatePiece('CIN', {
+        statut: 'illisible',
+        ocrResultat: {
+          ...(ocrResult || { numero: cleanCin, cin: cleanCin, nom: cleanNom, confiance: 0.5 }),
+          statutValidite: validite,
+          controleEffectue: true,
+        } as any,
+      });
+      return;
+    }
+
+    // 1. Si verifierCIN renvoie 'valide' : badge "Vérifiée (contrôle simulé)"
+    // Si le contrôle n'a pas été fait ou indisponible : "Preuve fournie - non contrôlée"
+    const isValide = validite === 'valide';
+    setCinVerifError(null);
 
     try {
       const curCandidat = resolveCandidate(candidatId, candidat);
@@ -522,7 +555,11 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
 
     handleUpdatePiece('CIN', {
       statut: 'prouvee',
-      ocrResultat: ocrResult || undefined,
+      ocrResultat: {
+        ...(ocrResult || { numero: cleanCin, cin: cleanCin, nom: cleanNom, confiance: 0.9 }),
+        statutValidite: isValide ? 'valide' : undefined,
+        controleEffectue: isValide,
+      } as any,
     });
 
     setShowOcrPanel(false);
@@ -533,6 +570,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
     setShowOcrPanel(false);
     setOcrResult(null);
     setOcrLoading(false);
+    setCinVerifError(null);
     setActiveCameraPiece('CIN');
   };
 
@@ -1057,12 +1095,12 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
             : 'carte-piece-releves';
 
           return (
-            <div
-              key={type}
-              id={cardId}
-              data-carte={isDiplome ? 'cursus' : undefined}
-              className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3"
-            >
+            <React.Fragment key={type}>
+              <div
+                id={cardId}
+                data-carte={isDiplome ? 'cursus' : undefined}
+                className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3"
+              >
               {/* Ligne 1 : Nom de la pièce + Badge unique */}
               <div className="flex items-start justify-between gap-3">
                 <div className="space-y-0.5">
@@ -1083,14 +1121,20 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                       <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />
                       <span>{fr.dossier.verifieeApogee}</span>
                     </span>
+                  ) : isProven && isCin && (piece.ocrResultat as any)?.statutValidite === 'valide' ? (
+                    // 1b. Vérifiée (contrôle simulé) - après confirmation avec verifierCIN 'valide'
+                    <span className="inline-flex items-center gap-1.5 font-medium rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs px-2.5 py-0.5">
+                      <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />
+                      <span>{fr.dossier.verifieeControleSimule}</span>
+                    </span>
                   ) : isProven ? (
-                    // 2. Preuve fournie - non contrôlée
+                    // 2. Preuve fournie - non contrôlée (si le contrôle n'a pas été fait ou indisponible)
                     <span className="inline-flex items-center gap-1.5 font-medium rounded-full bg-blue-50 text-blue-800 border border-blue-200 text-xs px-2.5 py-0.5">
                       <CheckCircle2 size={13} className="text-blue-600 shrink-0" />
                       <span>{fr.dossier.preuveFournieNonControlee}</span>
                     </span>
-                  ) : pieceMatchesAnomalie ? (
-                    // 3. À corriger (si anomalie)
+                  ) : (pieceMatchesAnomalie || (isCin && (piece.statut === 'illisible' || (piece.ocrResultat as any)?.statutValidite === 'illisible' || (piece.ocrResultat as any)?.statutValidite === 'expiree'))) ? (
+                    // 3. À corriger (si anomalie ou 'illisible'/'expiree')
                     <span className="inline-flex items-center gap-1.5 font-bold rounded-full bg-rose-50 text-rose-800 border border-rose-300 text-xs px-2.5 py-0.5">
                       <AlertTriangle size={13} className="text-rose-600 shrink-0" />
                       <span>{fr.dossier.aCorriger}</span>
@@ -1202,6 +1246,14 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                 </div>
               )}
 
+              {/* Message d'erreur de vérification CIN */}
+              {isCin && (piece.statut === 'illisible' || (piece.ocrResultat as any)?.statutValidite === 'illisible' || (piece.ocrResultat as any)?.statutValidite === 'expiree' || cinVerifError) && !showOcrPanel && (
+                <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 flex items-center gap-2 text-xs text-rose-800 font-medium">
+                  <AlertCircle size={15} className="shrink-0 text-rose-600" />
+                  <span>{fr.dossier.rechargeImagePlusNette}</span>
+                </div>
+              )}
+
               {/* État OCR en cours sur la carte CIN */}
               {isCin && ocrLoading && (
                 <div className="flex items-center gap-2.5 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800">
@@ -1301,6 +1353,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                             onChange={(e) => {
                               setOcrEditCin(e.target.value);
                               setEcartChoix(null);
+                              setCinVerifError(null);
                             }}
                             className="w-full min-h-[36px] px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-600 font-mono uppercase"
                           />
@@ -1375,6 +1428,13 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                           <span>{fr.dossier.ocrRefairePhoto}</span>
                         </button>
                       </div>
+
+                      {cinVerifError && (
+                        <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 flex items-center gap-2 text-xs text-rose-800 font-medium">
+                          <AlertCircle size={15} className="shrink-0 text-rose-600" />
+                          <span>{cinVerifError}</span>
+                        </div>
+                      )}
 
                       {ocrDisabledReason && (
                         <p className="text-xs text-amber-700 font-medium text-center">
@@ -1551,7 +1611,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                       className="flex-1 min-h-[40px] px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer active:scale-98"
                     >
                       <Camera size={15} />
-                      <span>{fr.dossier.takePhoto}</span>
+                      <span>{isCin ? fr.dossier.scannerCin : fr.dossier.takePhoto}</span>
                     </button>
 
                     <button
@@ -1579,7 +1639,15 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                   </p>
                 </div>
               )}
-            </div>
+              </div>
+              {/* 3. Texte d'aide sous la carte */}
+              {isCin && (
+                <p className="text-[11px] text-slate-500 px-1 -mt-1.5 mb-1 flex items-center gap-1.5">
+                  <Info size={13} className="shrink-0 text-slate-400" />
+                  <span>{fr.dossier.aideControleSimule}</span>
+                </p>
+              )}
+            </React.Fragment>
           );
         })}
       </div>

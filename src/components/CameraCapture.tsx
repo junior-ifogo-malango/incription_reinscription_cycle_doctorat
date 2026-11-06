@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Camera, X, AlertCircle } from 'lucide-react';
+import { Camera, X, AlertCircle, CheckCircle2, Upload } from 'lucide-react';
 import { fr } from '../i18n/fr';
 
 interface CameraCaptureProps {
@@ -19,7 +19,19 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
   const streamRef = useRef<MediaStream | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isReady, setIsReady] = useState(false);
+  const [isCadreValide, setIsCadreValide] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isReady) {
+      const timer = setTimeout(() => {
+        setIsCadreValide(true);
+      }, 1000);
+      return () => clearTimeout(timer);
+    } else {
+      setIsCadreValide(false);
+    }
+  }, [isReady]);
 
   const stopStream = () => {
     if (streamRef.current) {
@@ -144,13 +156,28 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
           <div className="text-center p-6 max-w-sm space-y-3 bg-slate-900/80 rounded-2xl border border-slate-800">
             <AlertCircle size={32} className="mx-auto text-amber-400" />
             <p className="text-xs text-slate-300 leading-relaxed">{error}</p>
-            <button
-              type="button"
-              onClick={handleClose}
-              className="mt-2 px-4 py-2 text-xs font-semibold rounded-xl bg-white text-slate-900 hover:bg-slate-100 cursor-pointer"
-            >
-              {fr.dossier.close}
-            </button>
+            <div className="flex items-center justify-center gap-2 pt-2">
+              {onErrorFallback && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    stopStream();
+                    onErrorFallback();
+                  }}
+                  className="px-4 py-2 text-xs font-semibold rounded-xl bg-emerald-600 text-white hover:bg-emerald-500 transition-colors cursor-pointer flex items-center gap-1.5 shadow-sm"
+                >
+                  <Upload size={14} />
+                  <span>{fr.dossier.upload}</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={handleClose}
+                className="px-4 py-2 text-xs font-semibold rounded-xl bg-white/10 text-white hover:bg-white/20 transition-colors cursor-pointer"
+              >
+                {fr.dossier.close}
+              </button>
+            </div>
           </div>
         ) : previewUrl ? (
           <div className="w-full h-full flex items-center justify-center p-2">
@@ -170,17 +197,47 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
               className="w-full h-full object-cover rounded-2xl"
             />
 
-            {/* Cadre de guidage sobre */}
+            {/* Cadre de guidage */}
             <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center p-6">
-              <div className="w-full max-w-sm aspect-[4/3] border-2 border-dashed border-emerald-400/90 rounded-2xl shadow-[0_0_0_9999px_rgba(0,0,0,0.45)] relative">
-                <div className="absolute -top-1 -left-1 w-4 h-4 border-t-4 border-l-4 border-emerald-300 rounded-tl-lg" />
-                <div className="absolute -top-1 -right-1 w-4 h-4 border-t-4 border-r-4 border-emerald-300 rounded-tr-lg" />
-                <div className="absolute -bottom-1 -left-1 w-4 h-4 border-b-4 border-l-4 border-emerald-300 rounded-bl-lg" />
-                <div className="absolute -bottom-1 -right-1 w-4 h-4 border-b-4 border-r-4 border-emerald-300 rounded-br-lg" />
+              <div
+                className={`w-full max-w-sm aspect-[4/3] border-2 border-dashed rounded-2xl shadow-[0_0_0_9999px_rgba(0,0,0,0.45)] relative transition-colors duration-300 ${
+                  isCadreValide ? 'border-emerald-400/90' : 'border-amber-400/80'
+                }`}
+              >
+                <div
+                  className={`absolute -top-1 -left-1 w-4 h-4 border-t-4 border-l-4 rounded-tl-lg transition-colors ${
+                    isCadreValide ? 'border-emerald-300' : 'border-amber-300'
+                  }`}
+                />
+                <div
+                  className={`absolute -top-1 -right-1 w-4 h-4 border-t-4 border-r-4 rounded-tr-lg transition-colors ${
+                    isCadreValide ? 'border-emerald-300' : 'border-amber-300'
+                  }`}
+                />
+                <div
+                  className={`absolute -bottom-1 -left-1 w-4 h-4 border-b-4 border-l-4 rounded-bl-lg transition-colors ${
+                    isCadreValide ? 'border-emerald-300' : 'border-amber-300'
+                  }`}
+                />
+                <div
+                  className={`absolute -bottom-1 -right-1 w-4 h-4 border-b-4 border-r-4 rounded-br-lg transition-colors ${
+                    isCadreValide ? 'border-emerald-300' : 'border-amber-300'
+                  }`}
+                />
               </div>
-              <p className="mt-4 text-xs font-medium text-white/90 bg-black/60 px-3 py-1 rounded-full backdrop-blur-xs">
-                {fr.dossier.cameraGuide}
-              </p>
+              <div className="mt-4 flex items-center gap-1.5 text-xs font-medium text-white/95 bg-black/70 px-3 py-1.5 rounded-full backdrop-blur-xs shadow-xs">
+                {isCadreValide ? (
+                  <>
+                    <CheckCircle2 size={13} className="text-emerald-400 shrink-0" />
+                    <span>{fr.dossier.cadreValide}</span>
+                  </>
+                ) : (
+                  <>
+                    <AlertCircle size={13} className="text-amber-400 shrink-0" />
+                    <span>{fr.dossier.cadreNonValideRaison}</span>
+                  </>
+                )}
+              </div>
             </div>
           </>
         )}
@@ -210,32 +267,47 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
               </button>
             </div>
           ) : (
-            <div className="flex items-center justify-between">
-              <button
-                type="button"
-                onClick={handleClose}
-                className="text-xs font-medium text-slate-300 hover:text-white px-3 py-2 cursor-pointer"
-              >
-                {fr.dossier.cancel}
-              </button>
+            <div className="flex flex-col items-center gap-2 max-w-sm mx-auto">
+              <div className="flex items-center justify-between w-full">
+                <button
+                  type="button"
+                  onClick={handleClose}
+                  className="text-xs font-medium text-slate-300 hover:text-white px-3 py-2 cursor-pointer"
+                >
+                  {fr.dossier.cancel}
+                </button>
 
-              <button
-                type="button"
-                onClick={handleCapture}
-                disabled={!isReady}
-                className={`w-16 h-16 rounded-full border-4 border-white flex items-center justify-center transition-all cursor-pointer ${
-                  isReady
-                    ? 'bg-white/20 hover:bg-white/30 active:scale-95'
-                    : 'opacity-50 cursor-not-allowed'
-                }`}
-                aria-label={fr.dossier.capturePhoto}
-              >
-                <div className="w-12 h-12 rounded-full bg-white flex items-center justify-center text-slate-900 shadow-md">
-                  <Camera size={22} />
+                <button
+                  type="button"
+                  onClick={handleCapture}
+                  disabled={!isReady || !isCadreValide}
+                  className={`w-16 h-16 rounded-full border-4 flex items-center justify-center transition-all ${
+                    isReady && isCadreValide
+                      ? 'border-white bg-white/20 hover:bg-white/30 active:scale-95 cursor-pointer'
+                      : 'border-slate-500 bg-slate-800/60 opacity-50 cursor-not-allowed'
+                  }`}
+                  aria-label={fr.dossier.capturePhoto}
+                >
+                  <div
+                    className={`w-12 h-12 rounded-full flex items-center justify-center shadow-md ${
+                      isReady && isCadreValide
+                        ? 'bg-white text-slate-900'
+                        : 'bg-slate-600 text-slate-400'
+                    }`}
+                  >
+                    <Camera size={22} />
+                  </div>
+                </button>
+
+                <div className="w-12" />
+              </div>
+
+              {!isCadreValide && isReady && (
+                <div className="text-[11px] text-amber-300 flex items-center gap-1.5 font-medium bg-black/75 px-3 py-1 rounded-full border border-amber-400/30">
+                  <AlertCircle size={12} className="shrink-0 text-amber-400" />
+                  <span>{fr.dossier.cadreNonValideRaison}</span>
                 </div>
-              </button>
-
-              <div className="w-12" />
+              )}
             </div>
           )}
         </div>

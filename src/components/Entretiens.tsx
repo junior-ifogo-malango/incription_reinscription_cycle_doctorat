@@ -1,10 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Calendar, Clock, MapPin, CheckCircle2, AlertCircle, RefreshCw, Bell, User, Award, XCircle } from 'lucide-react';
-import { Creneau, CreneauStatut, Candidat, Sujet, Enseignant, PV } from '../types';
+import { Creneau, CreneauStatut, Candidat, Sujet, Enseignant, PV, dossierComplet } from '../types';
 import { fr } from '../i18n/fr';
 import { StatusBadge } from './StatusBadge';
 import { storageService } from '../services/storage';
-import { ProgressionCandidat } from './ProgressionCandidat';
 import { logEvent } from '../utils/journal';
 
 const STORAGE_KEY_CRENEAUX = 'usmba_doctorat_creneaux';
@@ -284,14 +283,84 @@ export const Entretiens: React.FC<EntretiensProps> = ({
       return a.heure.localeCompare(b.heure);
     });
 
+  // Calcul de l'étape en cours pour le candidat
+  const { etapeNumero, etapeLibelle } = useMemo(() => {
+    try {
+      const candidatures = Array.isArray(candidat?.candidatures) ? candidat.candidatures : [];
+      // 3. Candidat sans candidature : ni cercle ni ligne
+      if (candidatures.length === 0) {
+        return { etapeNumero: null, etapeLibelle: null };
+      }
+
+      const currentCandidatId = candidat?.id || '';
+      const candidaturesStatuts = candidat?.candidaturesStatuts || {};
+
+      // Étape 1 : Dossier complet
+      const step1Done = Boolean(dossierComplet(candidat)?.complet);
+
+      // Étape 2 : Candidature envoyée
+      const step2Done = candidatures.some((id) => {
+        const st = candidaturesStatuts[id];
+        return Boolean(st && st !== 'brouillon');
+      });
+
+      // Étape 3 : Validée (≥1 candidature retenue)
+      const step3Done = Object.values(candidaturesStatuts).some((st) => st === 'retenue');
+
+      // Étape 4 : Entretien (créneau au statut 'confirme')
+      const step4Done = Boolean(currentCandidatId) && Array.isArray(creneaux) && creneaux.some(
+        (c) => c?.candidatId === currentCandidatId && c?.statut === 'confirme'
+      );
+
+      // Étape 5 : Résultat (PV publié avec résultat)
+      const publishedPv = Array.isArray(pvs) ? pvs.find(
+        (pv) =>
+          Boolean(pv?.publieLe) &&
+          Boolean(currentCandidatId) &&
+          pv?.resultats?.some((r) => r?.candidatId === currentCandidatId)
+      ) : undefined;
+      const monResultat = publishedPv?.resultats?.find(
+        (r) => Boolean(currentCandidatId) && r?.candidatId === currentCandidatId
+      );
+      const step5Done = Boolean(monResultat);
+
+      // Étape 6 : Inscription
+      const step6Done = false;
+
+      const rawDones = [step1Done, step2Done, step3Done, step4Done, step5Done, step6Done];
+      const firstNonDoneIndex = rawDones.findIndex((done) => !done);
+      const num = firstNonDoneIndex === -1 ? 6 : firstNonDoneIndex + 1;
+
+      const CLES = ['dossier', 'candidature', 'validee', 'entretien', 'resultat', 'inscription'] as const;
+      const cle = CLES[num - 1];
+      const nom = cle && fr?.progression?.steps?.[cle]?.nom ? fr.progression.steps[cle].nom : undefined;
+
+      return { etapeNumero: num, etapeLibelle: nom };
+    } catch {
+      // 4. Cas d'erreur : étape introuvable -> "Étape N/6" seule, sans plantage
+      return { etapeNumero: 1, etapeLibelle: undefined };
+    }
+  }, [candidat, creneaux, pvs]);
+
   return (
     <div className="space-y-4">
-      {/* 1. ProgressionCandidat TOUT EN HAUT du rendu, avant tout message conditionnel */}
-      <ProgressionCandidat
-        candidatId={candidat.id}
-        candidat={candidat}
-        onNavigate={onNavigate}
-      />
+      {/* 1. Ligne de progression : Étape N/6 : [libellé] + lien Voir ma progression */}
+      {etapeNumero !== null && (
+        <div className="bg-white border border-slate-200 rounded-xl px-4 py-2.5 shadow-xs flex items-center justify-between gap-3 text-xs flex-wrap">
+          <span className="font-semibold text-slate-800">
+            {etapeLibelle
+              ? `Étape ${etapeNumero}/6 : ${etapeLibelle}`
+              : `Étape ${etapeNumero}/6`}
+          </span>
+          <button
+            type="button"
+            onClick={() => onNavigate?.('dossier')}
+            className="text-emerald-700 hover:text-emerald-800 font-semibold underline underline-offset-2 hover:no-underline focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-1 rounded transition-colors cursor-pointer"
+          >
+            {fr.entretiens.voirMaProgression}
+          </button>
+        </div>
+      )}
 
       {/* CAS 1 : Candidat NON retenu */}
       {!isRetenu ? (
