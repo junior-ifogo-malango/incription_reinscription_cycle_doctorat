@@ -10,16 +10,37 @@ import {
   RotateCcw,
   LogOut,
   X,
+  MoreHorizontal,
+  Calendar,
+  Award,
+  Users,
 } from 'lucide-react';
-import { UserRole } from '../types';
+import { UserRole, Role, normaliserRole } from '../types';
 import { fr } from '../i18n/fr';
 
-export type TabType = 'socle' | 'sujets' | 'panier' | 'dossier' | 'entretiens' | 'candidatures_recues' | 'ced';
+export type TabType =
+  | 'socle'
+  | 'sujets'
+  | 'panier'
+  | 'dossier'
+  | 'entretiens'
+  | 'candidatures_recues'
+  | 'ced'
+  | 'seances'
+  | 'reinscriptions'
+  | 'commission'
+  | 'admin_comptes'
+  | 'admin_journal'
+  | 'rapport'
+  | 'suivi'
+  | 'guichet'
+  | 'vote_comite';
 
 interface MobileNavProps {
-  currentTab: TabType;
+  currentTab: TabType | string;
   onTabChange: (tab: TabType) => void;
-  role: UserRole;
+  role?: UserRole;
+  roles?: Role[];
   isLoggedIn: boolean;
   userName?: string;
   onOpenLogin: () => void;
@@ -34,7 +55,7 @@ interface MobileNavProps {
 }
 
 interface TabItem {
-  id: TabType | 'login' | 'account';
+  id: TabType | 'login' | 'account' | 'plus';
   label: string;
   icon: React.ReactNode;
   badge?: string;
@@ -44,7 +65,8 @@ interface TabItem {
 export const MobileNav: React.FC<MobileNavProps> = ({
   currentTab,
   onTabChange,
-  role,
+  role = 'candidat',
+  roles = [],
   isLoggedIn,
   userName,
   onOpenLogin,
@@ -54,93 +76,169 @@ export const MobileNav: React.FC<MobileNavProps> = ({
 }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  // Déterminer les onglets visibles selon le rôle
-  const getTabsForRole = (): TabItem[] => {
-    const sujetsTab: TabItem = {
-      id: 'sujets',
-      label: fr.nav.court.sujets,
-      icon: <Search size={18} />,
-    };
+  // Union des rôles effectifs
+  const effectiveRoles: Role[] =
+    roles && roles.length > 0 ? roles : role ? [role] : ['candidat'];
+  const normalizedRoles = Array.from(
+    new Set(effectiveRoles.map((r) => normaliserRole(r)))
+  );
 
-    const dossierTab: TabItem = {
+  // Définition de tous les onglets possibles
+  const allTabsMap: Record<string, TabItem> = {
+    sujets: {
+      id: 'sujets',
+      label: normalizedRoles.includes('enseignant')
+        ? fr.nav.court.sujets
+        : fr.nav.court.sujets,
+      icon: <Search size={18} />,
+    },
+    dossier: {
       id: 'dossier',
       label: fr.nav.court.dossier,
       icon: <FolderKanban size={18} />,
-      badge: badgeCounts.piecesPretes !== undefined ? `${badgeCounts.piecesPretes}/4` : undefined,
-    };
-
-    const entretiensTab: TabItem = {
-      id: 'entretiens',
-      label: fr.nav.court.entretiens,
-      icon: <CalendarCheck2 size={18} />,
-    };
-
-    const mesSujetsTab: TabItem = {
-      id: 'sujets',
-      label: fr.nav.court.sujets,
-      icon: <Search size={18} />,
-    };
-
-    const candidaturesRecuesTab: TabItem = {
+      badge:
+        badgeCounts.piecesPretes !== undefined
+          ? `${badgeCounts.piecesPretes}/4`
+          : undefined,
+    },
+    candidatures_recues: {
       id: 'candidatures_recues',
       label: fr.nav.court.candidatures,
       icon: <FileText size={18} />,
-      badge: badgeCounts.candidaturesCount ? String(badgeCounts.candidaturesCount) : undefined,
-    };
-
-    const mesCreneauxTab: TabItem = {
+      badge: badgeCounts.candidaturesCount
+        ? String(badgeCounts.candidaturesCount)
+        : undefined,
+    },
+    entretiens: {
       id: 'entretiens',
-      label: fr.nav.court.creneaux,
+      label: normalizedRoles.includes('enseignant')
+        ? fr.nav.court.creneaux
+        : fr.nav.court.entretiens,
       icon: <CalendarCheck2 size={18} />,
-    };
-
-    const cedTab: TabItem = {
+    },
+    commission: {
+      id: 'commission',
+      label: fr.commission.tabTitle,
+      icon: <Award size={18} />,
+    },
+    seances: {
+      id: 'seances',
+      label: fr.nav.court.seances,
+      icon: <Calendar size={18} />,
+    },
+    reinscriptions: {
+      id: 'reinscriptions',
+      label: fr.nav.court.reinscriptions,
+      icon: <Award size={18} />,
+    },
+    ced: {
       id: 'ced',
       label: fr.nav.court.exceptionsCed,
       icon: <ShieldAlert size={18} />,
       badge: badgeCounts.alertesCed ? `${badgeCounts.alertesCed}` : undefined,
       badgeColor: 'bg-rose-500',
-    };
-
-    const loginTab: TabItem = {
-      id: 'login',
-      label: fr.auth.login,
-      icon: <LogIn size={18} />,
-    };
-
-    const accountTab: TabItem = {
-      id: 'account',
-      label: fr.nav.court.compte,
-      icon: <User size={18} />,
-    };
-
-    // Visiteur sans compte : Sujets, Se connecter
-    if (!isLoggedIn) {
-      return [sujetsTab, loginTab];
-    }
-
-    // Connecté Candidat : Sujets, Dossier, Entretiens, Mon compte
-    if (role === 'candidat') {
-      return [sujetsTab, dossierTab, entretiensTab, accountTab];
-    }
-
-    // Connecté Enseignant
-    if (role === 'enseignant') {
-      return [mesSujetsTab, candidaturesRecuesTab, mesCreneauxTab, accountTab];
-    }
-
-    // Connecté Directeur CED
-    return [cedTab, sujetsTab, entretiensTab, accountTab];
+    },
+    admin_comptes: {
+      id: 'admin_comptes',
+      label: fr.nav.adminComptes,
+      icon: <Users size={18} />,
+    },
+    admin_journal: {
+      id: 'admin_journal',
+      label: fr.nav.adminJournal,
+      icon: <FileText size={18} />,
+    },
   };
 
-  const tabs = getTabsForRole();
+  const loginTab: TabItem = {
+    id: 'login',
+    label: fr.auth.login,
+    icon: <LogIn size={18} />,
+  };
+
+  const accountTab: TabItem = {
+    id: 'account',
+    label: fr.nav.court.compte,
+    icon: <User size={18} />,
+  };
+
+  // Calcul de l'union des onglets sans doublon
+  const getUnionTabItems = (): TabItem[] => {
+    if (!isLoggedIn) {
+      return [allTabsMap.sujets, loginTab, accountTab];
+    }
+
+    const items: TabItem[] = [];
+    const seen = new Set<string>();
+
+    const addTab = (key: string) => {
+      if (!seen.has(key) && allTabsMap[key]) {
+        seen.add(key);
+        items.push(allTabsMap[key]);
+      }
+    };
+
+    if (normalizedRoles.includes('candidat')) {
+      addTab('sujets');
+      addTab('dossier');
+      addTab('entretiens');
+    }
+    if (normalizedRoles.includes('enseignant')) {
+      addTab('sujets');
+      addTab('candidatures_recues');
+      addTab('entretiens');
+      addTab('commission');
+    }
+    if (normalizedRoles.includes('directeur_ced')) {
+      addTab('seances');
+      addTab('reinscriptions');
+      addTab('ced');
+    }
+    if (normalizedRoles.includes('admin')) {
+      addTab('admin_comptes');
+      addTab('admin_journal');
+    }
+
+    if (items.length === 0) {
+      addTab('sujets');
+    }
+
+    return items;
+  };
+
+  const rawUnionTabs = getUnionTabItems();
+
+  // Règle 2 : 5 onglets max dans la barre du bas, le reste dans "Plus"
+  let bottomBarItems: TabItem[] = [];
+  let overflowTabs: TabItem[] = [];
+
+  if (!isLoggedIn) {
+    bottomBarItems = rawUnionTabs;
+  } else {
+    const totalWithAccount = rawUnionTabs.length + 1; // + accountTab
+    if (totalWithAccount <= 5) {
+      bottomBarItems = [...rawUnionTabs, accountTab];
+      overflowTabs = [];
+    } else {
+      // 4 premiers onglets + bouton "Plus"
+      bottomBarItems = rawUnionTabs.slice(0, 4);
+      overflowTabs = rawUnionTabs.slice(4);
+      bottomBarItems.push({
+        id: 'plus',
+        label: fr.nav.plus || 'Plus',
+        icon: <MoreHorizontal size={18} />,
+      });
+    }
+  }
+
+  const isCurrentTabInOverflow = overflowTabs.some((t) => t.id === currentTab);
 
   const handleItemClick = (tabItem: TabItem) => {
     if (tabItem.id === 'login') {
       onOpenLogin();
       return;
     }
-    if (tabItem.id === 'account') {
+    if (tabItem.id === 'account' || tabItem.id === 'plus') {
       setMobileMenuOpen(true);
       return;
     }
@@ -151,8 +249,13 @@ export const MobileNav: React.FC<MobileNavProps> = ({
     <>
       <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200 shadow-lg safe-bottom">
         <div className="max-w-md md:max-w-3xl lg:max-w-5xl mx-auto grid grid-flow-col auto-cols-fr px-2 py-1.5">
-          {tabs.map((tab) => {
-            const isActive = tab.id === 'account' ? mobileMenuOpen : currentTab === tab.id;
+          {bottomBarItems.map((tab) => {
+            const isActive =
+              tab.id === 'account'
+                ? mobileMenuOpen
+                : tab.id === 'plus'
+                ? mobileMenuOpen || isCurrentTabInOverflow
+                : currentTab === tab.id;
             return (
               <button
                 key={tab.id}
@@ -190,14 +293,14 @@ export const MobileNav: React.FC<MobileNavProps> = ({
         </div>
       </nav>
 
-      {/* Menu Compte Mobile (Feuille tiroir sobre) */}
+      {/* Menu Compte & Plus Mobile (Feuille tiroir sobre) */}
       {mobileMenuOpen && (
         <div
           className="md:hidden fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex flex-col justify-end"
           onClick={() => setMobileMenuOpen(false)}
         >
           <div
-            className="bg-white rounded-t-2xl p-4 space-y-3 shadow-2xl border-t border-slate-200 max-w-md mx-auto w-full animate-in slide-in-from-bottom-6 duration-200"
+            className="bg-white rounded-t-2xl p-4 space-y-3 shadow-2xl border-t border-slate-200 max-w-md mx-auto w-full animate-in slide-in-from-bottom-6 duration-200 max-h-[85vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between pb-2 border-b border-slate-100">
@@ -208,11 +311,17 @@ export const MobileNav: React.FC<MobileNavProps> = ({
                 <div>
                   <p className="font-bold text-xs text-slate-900">{userName || fr.auth.accountMenu}</p>
                   <span className="text-[10px] font-bold uppercase text-emerald-700">
-                    {role === 'candidat'
-                      ? fr.auth.roleCandidatBadge
-                      : role === 'enseignant'
-                      ? fr.auth.roleEnseignantBadge
-                      : fr.auth.roleCedBadge}
+                    {normalizedRoles
+                      .map((r) =>
+                        r === 'candidat'
+                          ? fr.auth.roleCandidatBadge
+                          : r === 'enseignant'
+                          ? fr.auth.roleEnseignantBadge
+                          : r === 'admin'
+                          ? fr.auth.roleAdminBadge
+                          : fr.auth.roleCedBadge
+                      )
+                      .join(' • ')}
                   </span>
                 </div>
               </div>
@@ -224,6 +333,53 @@ export const MobileNav: React.FC<MobileNavProps> = ({
                 <X size={18} />
               </button>
             </div>
+
+            {/* Rubriques supplémentaires si barre du bas saturée (> 5 éléments) */}
+            {overflowTabs.length > 0 && (
+              <div className="space-y-1.5 pb-2 border-b border-slate-100">
+                <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider block px-1">
+                  {fr.nav.plus}
+                </span>
+                <div className="grid grid-cols-1 gap-1">
+                  {overflowTabs.map((ovTab) => {
+                    const isTabActive = currentTab === ovTab.id;
+                    return (
+                      <button
+                        key={ovTab.id}
+                        type="button"
+                        onClick={() => {
+                          setMobileMenuOpen(false);
+                          onTabChange(ovTab.id as TabType);
+                        }}
+                        className={`w-full text-left py-2.5 px-3 rounded-xl flex items-center justify-between text-xs font-semibold cursor-pointer transition ${
+                          isTabActive
+                            ? 'bg-emerald-50 text-emerald-800 border border-emerald-200 shadow-xs'
+                            : 'bg-slate-50 hover:bg-slate-100 text-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <span className={isTabActive ? 'text-emerald-700' : 'text-slate-500'}>
+                            {ovTab.icon}
+                          </span>
+                          <span>{ovTab.label}</span>
+                        </div>
+                        {ovTab.badge && (
+                          <span
+                            className={`text-[10px] font-bold px-1.5 py-0.2 rounded-full text-white shadow-xs ${
+                              'badgeColor' in ovTab && ovTab.badgeColor
+                                ? ovTab.badgeColor
+                                : 'bg-emerald-600'
+                            }`}
+                          >
+                            {ovTab.badge}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             <button
               type="button"

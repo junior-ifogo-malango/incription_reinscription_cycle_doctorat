@@ -1,18 +1,53 @@
 export type UserRole = 'candidat' | 'enseignant' | 'directeur_ced' | 'doctorant' | 'agent' | 'admin';
 
+export interface HistoriqueFinPeriode {
+  ancienne: string;
+  nouvelle: string;
+  motif: string;
+  modifieLe: string;
+  par: string;
+}
+
+export interface Periode {
+  debut: string;
+  fin: string;
+  historiqueFin: HistoriqueFinPeriode[];
+}
+
 export type CompteStatut = 'actif' | 'en_attente' | 'refuse';
+
+export type Role = UserRole | 'directeur' | 'structure';
+
+export function normaliserRole(role: Role): UserRole {
+  if (role === 'directeur') return 'enseignant';
+  if (role === 'structure') return 'directeur_ced';
+  return role;
+}
 
 export interface Compte {
   id: string;
   nom: string;
   email: string;
   motDePasse?: string;
-  role: UserRole;
+  role?: UserRole;
+  roles?: Role[];
   structure: string;
   etablissement?: string;
   statut: CompteStatut;
   motifRefus?: string;
   dateCreation?: string;
+  enseignantId?: string;
+}
+
+export function getCompteRoles(compte?: Partial<Compte> | null): Role[] {
+  if (!compte) return ['candidat'];
+  if (Array.isArray(compte.roles) && compte.roles.length > 0) {
+    return compte.roles;
+  }
+  if (compte.role) {
+    return [compte.role];
+  }
+  return ['candidat'];
 }
 
 export interface EvenementJournal {

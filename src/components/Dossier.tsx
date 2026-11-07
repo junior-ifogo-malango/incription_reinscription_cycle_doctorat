@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Camera, Upload, FileText, CheckCircle2, AlertCircle, X, Eye, RotateCcw, Award, ShieldCheck, UserCheck, AlertTriangle, ArrowRight, Info } from 'lucide-react';
-import { Piece, PieceType, Candidat, MotifCasParticulier, PV, dossierComplet, AnomalieCandidature, CandidatureStatut, Notification } from '../types';
-import { ApogeeFictif, MOCK_CANDIDATS } from '../data/mockData';
+import { Piece, PieceType, Candidat, MotifCasParticulier, PV, dossierComplet, AnomalieCandidature, CandidatureStatut, Notification, Periode } from '../types';
+import { ApogeeFictif, MOCK_CANDIDATS, getPeriodeCandidature, aujourdhui } from '../data/mockData';
 import { storageService } from '../services/storage';
 import { StatusBadge } from './StatusBadge';
 import { CameraCapture } from './CameraCapture';
@@ -317,10 +317,50 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
     (typeof localStorage !== 'undefined' && localStorage.getItem('usmba_doctorat_role') === 'enseignant')
   );
 
+  // Période de candidature et date du jour (démo)
+  const [periode, setPeriode] = useState<Periode>(() => getPeriodeCandidature());
+  const [today, setToday] = useState<string>(() => aujourdhui());
+
+  useEffect(() => {
+    const handlePeriodeUpdate = () => {
+      setPeriode(getPeriodeCandidature());
+    };
+    const handleDateUpdate = () => {
+      setToday(aujourdhui());
+    };
+    window.addEventListener('usmba_periode_updated', handlePeriodeUpdate);
+    window.addEventListener('usmba_demo_date_updated', handleDateUpdate);
+    window.addEventListener('storage', handlePeriodeUpdate);
+    window.addEventListener('storage', handleDateUpdate);
+    return () => {
+      window.removeEventListener('usmba_periode_updated', handlePeriodeUpdate);
+      window.removeEventListener('usmba_demo_date_updated', handleDateUpdate);
+      window.removeEventListener('storage', handlePeriodeUpdate);
+      window.removeEventListener('storage', handleDateUpdate);
+    };
+  }, []);
+
+  const debutPeriode = periode?.debut || '2026-07-01';
+  const finPeriode = periode?.fin || '2026-09-09';
+  const isBeforePeriod = today < debutPeriode;
+  const isAfterPeriod = today > finPeriode;
+  const isPeriodOpen = !isBeforePeriod && !isAfterPeriod;
+
+  // Calcul 48 h après signalement si après la date de fin
+  const isWithin48h = useMemo(() => {
+    if (!activeAnomalie?.le) return true;
+    const anomalieDay = activeAnomalie.le.slice(0, 10);
+    if (today <= anomalieDay) return true;
+    const dToday = new Date(today + 'T12:00:00Z').getTime();
+    const dAnomalie = new Date(anomalieDay + 'T12:00:00Z').getTime();
+    const diffHours = (dToday - dAnomalie) / (1000 * 60 * 60);
+    return diffHours <= 48;
+  }, [activeAnomalie, today]);
+
   const handleEnvoyerCandidature = () => {
     const cur = resolveCandidate(candidatId, candidat);
     const check = dossierComplet(cur);
-    if (!check.complet) return;
+    if (!check.complet || !isPeriodOpen) return;
 
     const nowIso = new Date().toISOString();
     const updatedStatuts: Record<string, CandidatureStatut> = {
@@ -382,7 +422,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
   const handleRenvoyerCandidature = () => {
     const cur = resolveCandidate(candidatId, candidat);
     const check = dossierComplet(cur);
-    if (!check.complet) return;
+    if (!check.complet || (isAfterPeriod && !isWithin48h)) return;
 
     const nowIso = new Date().toISOString();
     const updatedStatuts: Record<string, CandidatureStatut> = {
@@ -986,18 +1026,28 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
               <p className="text-xs font-bold text-slate-800">
                 Prêt à envoyer votre candidature ?
               </p>
-              {!checkDossier.complet && (
-                <p className="text-[11px] font-semibold text-rose-700">
-                  Dossier incomplet : {checkDossier.manques.join(', ')}
+              {!isPeriodOpen ? (
+                <p className="text-[11px] font-semibold text-rose-700 flex items-center gap-1.5 mt-0.5">
+                  <AlertCircle size={13} className="shrink-0" />
+                  <span>
+                    {isAfterPeriod
+                      ? fr.dossier.candidaturesCloses.replace('{fin}', finPeriode)
+                      : fr.dossier.candidaturesOuvertes.replace('{debut}', debutPeriode)}
+                  </span>
                 </p>
-              )}
+              ) : !checkDossier.complet ? (
+                <p className="text-[11px] font-semibold text-rose-700 flex items-center gap-1.5 mt-0.5">
+                  <AlertCircle size={13} className="shrink-0" />
+                  <span>Dossier incomplet : {checkDossier.manques.join(', ')}</span>
+                </p>
+              ) : null}
             </div>
             <button
               type="button"
-              disabled={!checkDossier.complet}
+              disabled={!checkDossier.complet || !isPeriodOpen}
               onClick={handleEnvoyerCandidature}
               className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs shrink-0 ${
-                checkDossier.complet
+                checkDossier.complet && isPeriodOpen
                   ? 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer active:scale-98'
                   : 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
               }`}
@@ -1015,18 +1065,30 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
               <p className="text-xs font-bold text-slate-800">
                 Renvoyer votre candidature après correction
               </p>
+              {isAfterPeriod && !isWithin48h ? (
+                <p className="text-[11px] font-semibold text-rose-700 flex items-center gap-1.5 mt-0.5">
+                  <AlertCircle size={13} className="shrink-0" />
+                  <span>{fr.dossier.delaiCorrectionExpire}</span>
+                </p>
+              ) : isAfterPeriod && isWithin48h ? (
+                <p className="text-[11px] font-semibold text-amber-700 flex items-center gap-1.5 mt-0.5">
+                  <AlertTriangle size={13} className="shrink-0 text-amber-600" />
+                  <span>{fr.dossier.delai48hActif}</span>
+                </p>
+              ) : null}
               {!checkDossier.complet && (
-                <p className="text-[11px] font-semibold text-rose-700">
-                  Dossier incomplet : {checkDossier.manques.join(', ')}
+                <p className="text-[11px] font-semibold text-rose-700 flex items-center gap-1.5 mt-0.5">
+                  <AlertCircle size={13} className="shrink-0" />
+                  <span>Dossier incomplet : {checkDossier.manques.join(', ')}</span>
                 </p>
               )}
             </div>
             <button
               type="button"
-              disabled={!checkDossier.complet}
+              disabled={!checkDossier.complet || (isAfterPeriod && !isWithin48h)}
               onClick={handleRenvoyerCandidature}
               className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs shrink-0 ${
-                checkDossier.complet
+                checkDossier.complet && (!isAfterPeriod || isWithin48h)
                   ? 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer active:scale-98'
                   : 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
               }`}

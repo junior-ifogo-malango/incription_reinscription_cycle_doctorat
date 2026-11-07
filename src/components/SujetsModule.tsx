@@ -26,15 +26,16 @@ import {
   Clock,
   XCircle,
   Eye,
+  Calendar,
 } from 'lucide-react';
-import { Sujet, Candidat, Enseignant, UserRole, Notification, dossierComplet } from '../types';
+import { Sujet, Candidat, Enseignant, UserRole, Notification, dossierComplet, Periode } from '../types';
 import { fr } from '../i18n/fr';
 import { storageService } from '../services/storage';
 import { StatusBadge } from './StatusBadge';
 import { AdvancedSearchModal, AdvancedFilterCriteria } from './AdvancedSearchModal';
 import { normalizeText } from './Autocomplete';
 import { normaliserTel } from '../utils/messages';
-import { MOCK_CANDIDATS } from '../data/mockData';
+import { MOCK_CANDIDATS, getPeriodeCandidature } from '../data/mockData';
 import { logEvent } from '../utils/journal';
 import { Dossier } from './Dossier';
 
@@ -123,6 +124,21 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
   React.useEffect(() => {
     setView(initialView);
   }, [initialView]);
+
+  // Période de candidature
+  const [periode, setPeriode] = useState<Periode>(() => getPeriodeCandidature());
+
+  React.useEffect(() => {
+    const handlePeriodeUpdate = () => {
+      setPeriode(getPeriodeCandidature());
+    };
+    window.addEventListener('usmba_periode_updated', handlePeriodeUpdate);
+    window.addEventListener('storage', handlePeriodeUpdate);
+    return () => {
+      window.removeEventListener('usmba_periode_updated', handlePeriodeUpdate);
+      window.removeEventListener('storage', handlePeriodeUpdate);
+    };
+  }, []);
 
   // Recherche globale, tri et pagination
   const [searchQuery, setSearchQuery] = useState('');
@@ -1771,6 +1787,10 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
             </h1>
             <p className="mt-2 text-base md:text-xl text-emerald-700 font-medium">
               {fr.sujetsModule.bannerSubtitle}
+            </p>
+            <p className="mt-2.5 text-xs md:text-sm font-semibold text-slate-700 flex items-center justify-center gap-1.5 bg-emerald-50/90 px-3.5 py-1 rounded-full border border-emerald-200/70 shadow-2xs">
+              <Calendar size={14} className="text-emerald-700 shrink-0" aria-hidden="true" />
+              <span>{fr.dossier.candidaturesDuAu.replace('{debut}', periode?.debut || '2026-07-01').replace('{fin}', periode?.fin || '2026-09-09')}</span>
             </p>
           </div>
         </div>

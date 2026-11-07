@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, LogIn, ChevronDown, ChevronUp, AlertCircle, KeyRound } from 'lucide-react';
-import { UserRole, Candidat } from '../types';
+import { UserRole, Candidat, Compte, normaliserRole, getCompteRoles } from '../types';
 import { fr } from '../i18n/fr';
 import { DEMO_CANDIDAT_YASSINE, INITIAL_ENSEIGNANTS, MOCK_CANDIDATS, getComptes } from '../data/mockData';
 import { logEvent } from '../utils/journal';
@@ -8,7 +8,7 @@ import { logEvent } from '../utils/journal';
 interface LoginModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onLoginSuccess: (role: UserRole, email: string, candidateData?: Candidat) => void;
+  onLoginSuccess: (role: UserRole, email: string, candidateData?: Candidat, compte?: Compte) => void;
   onRequestCreateAccount?: () => void;
   onOpenVoteComite?: () => void;
   restrictionMessage?: string;
@@ -71,12 +71,14 @@ export const LoginModal: React.FC<LoginModalProps> = ({
         setError(fr.auth.accountPendingValidation);
         return;
       }
+      const roles = getCompteRoles(compteTrouve);
+      const primaryRole = normaliserRole(roles[0] || compteTrouve.role || 'candidat');
       logEvent(
-        { id: compteTrouve.id, nom: compteTrouve.nom, role: compteTrouve.role },
+        { id: compteTrouve.id, nom: compteTrouve.nom, role: primaryRole },
         fr.journalActions.connexion,
         cleanEmail
       );
-      onLoginSuccess(compteTrouve.role, cleanEmail);
+      onLoginSuccess(primaryRole, cleanEmail, undefined, compteTrouve);
       onClose();
       return;
     }
@@ -313,7 +315,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
           {showDemoAccounts && (
             <div className="mt-2 space-y-1.5 animate-in fade-in duration-150">
-              {(['yassine@demo.ma', 'prof@demo.ma', 'ced@demo.ma'] as const).map((demoEmail) => (
+              {(['yassine@demo.ma', 'prof@demo.ma', 'ced@demo.ma', 'karim.structure@demo.ma'] as const).map((demoEmail) => (
                 <button
                   key={demoEmail}
                   type="button"

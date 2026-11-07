@@ -746,6 +746,32 @@ export default function App() {
               </span>
             </div>
 
+            {/* Sélecteur Date du jour (démo) dans l'en-tête */}
+            <div className="flex items-center gap-1.5 bg-emerald-900/90 border border-emerald-800 rounded-lg px-2.5 py-1 text-xs shadow-inner">
+              <Calendar size={13} className="text-amber-300 shrink-0" />
+              <label htmlFor="header-demo-date" className="text-[11px] font-semibold text-emerald-100 hidden sm:inline whitespace-nowrap cursor-pointer">
+                {fr.demoDate.label} :
+              </label>
+              <input
+                id="header-demo-date"
+                type="date"
+                aria-label={fr.demoDate.label}
+                value={demoDateInput || aujourdhui()}
+                onChange={(e) => handleDemoDateChange(e.target.value)}
+                className="bg-white text-slate-900 rounded px-1.5 py-0.5 text-xs font-mono font-medium focus:outline-none focus:ring-1 focus:ring-amber-400 cursor-pointer"
+              />
+              {Boolean(demoDateInput) && (
+                <button
+                  type="button"
+                  onClick={handleResetDemoDate}
+                  className="text-[11px] font-bold text-amber-300 hover:text-amber-200 underline cursor-pointer ml-0.5 transition-colors whitespace-nowrap"
+                  title={fr.demoDate.reset}
+                >
+                  {fr.demoDate.reset}
+                </button>
+              )}
+            </div>
+
             {/* Droite : Menu desktop + Icône panier */}
             <div className="flex items-center gap-2 sm:gap-3">
               {/* Menu horizontal sur tablette et PC (≥768px) */}

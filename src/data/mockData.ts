@@ -9,6 +9,7 @@ import {
   Rapport,
   Doctorant,
   Compte,
+  Periode,
 } from '../types';
 
 export const INITIAL_ENSEIGNANTS: Enseignant[] = [
@@ -678,6 +679,48 @@ export function aujourdhui(): string {
   return `${y}-${m}-${d}`;
 }
 
+export const PERIODE_CANDIDATURE_STORAGE_KEY = 'usmba_periode_candidature';
+
+export const PERIODE_CANDIDATURE_DEFAUT: Periode = {
+  debut: '2026-07-01',
+  fin: '2026-09-09',
+  historiqueFin: [],
+};
+
+export function getPeriodeCandidature(): Periode {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const raw = localStorage.getItem(PERIODE_CANDIDATURE_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.debut === 'string' && typeof parsed.fin === 'string') {
+          return {
+            debut: parsed.debut,
+            fin: parsed.fin,
+            historiqueFin: Array.isArray(parsed.historiqueFin) ? parsed.historiqueFin : [],
+          };
+        }
+      }
+    }
+  } catch {
+    // safe fallback
+  }
+  return PERIODE_CANDIDATURE_DEFAUT;
+}
+
+export function savePeriodeCandidature(periode: Periode): void {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(PERIODE_CANDIDATURE_STORAGE_KEY, JSON.stringify(periode));
+      window.dispatchEvent(new CustomEvent('usmba_periode_updated', { detail: periode }));
+      window.dispatchEvent(new CustomEvent('storage'));
+    }
+  } catch {
+    // safe fallback
+  }
+}
+
+
 /* ========================================================================= */
 /* COMPTES UTILISATEURS ET VALIDATION SCOLARITÉ                              */
 /* ========================================================================= */
@@ -695,11 +738,25 @@ export const INITIAL_COMPTES: Compte[] = [
     dateCreation: '2026-10-01',
   },
   {
+    id: 'cpt-karim-structure',
+    nom: 'Pr. Karim El Amrani',
+    email: 'karim.structure@demo.ma',
+    motDePasse: 'demo1234',
+    role: 'enseignant',
+    roles: ['directeur', 'structure'],
+    structure: 'Laboratoire LISAC & Direction CED',
+    etablissement: 'Faculté des Sciences Dhar El Mehraz (FSDM)',
+    statut: 'actif',
+    dateCreation: '2026-11-07',
+    enseignantId: 'ens-1',
+  },
+  {
     id: 'cpt-att-1',
     nom: 'Pr. Nadia Berrada',
     email: 'n.berrada@demo.ma',
     motDePasse: 'demo1234',
     role: 'enseignant',
+    roles: ['directeur'],
     structure: 'Laboratoire Génie Industriel & IA Appliquée',
     etablissement: 'Faculté des Sciences et Techniques (FST Fès)',
     statut: 'en_attente',
@@ -711,6 +768,7 @@ export const INITIAL_COMPTES: Compte[] = [
     email: 'r.lahlou@demo.ma',
     motDePasse: 'demo1234',
     role: 'directeur_ced',
+    roles: ['structure'],
     structure: 'Centre d’Études Doctorales USMBA',
     etablissement: 'Présidence USMBA',
     statut: 'en_attente',
@@ -727,6 +785,13 @@ export function getComptes(): Compte[] {
       if (stored) {
         const parsed = JSON.parse(stored);
         if (Array.isArray(parsed) && parsed.length > 0) {
+          if (!parsed.some((c: any) => c.email === 'karim.structure@demo.ma')) {
+            const demoKarim = INITIAL_COMPTES.find((c) => c.email === 'karim.structure@demo.ma');
+            if (demoKarim) {
+              parsed.push(demoKarim);
+              localStorage.setItem(STORAGE_KEY_COMPTES, JSON.stringify(parsed));
+            }
+          }
           return parsed;
         }
       }
@@ -735,6 +800,38 @@ export function getComptes(): Compte[] {
     // fallback to initial
   }
   return INITIAL_COMPTES;
+}
+
+export function getConnectedDirecteurId(): string | null {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const raw = localStorage.getItem('usmba_active_account');
+      if (raw) {
+        const acc = JSON.parse(raw);
+        if (acc) {
+          if (acc.enseignantId) return acc.enseignantId;
+          if (
+            acc.email === 'karim.structure@demo.ma' ||
+            acc.email === 'prof@demo.ma' ||
+            acc.email === 'k.elamrani@usmba.ac.ma'
+          ) {
+            return 'ens-1';
+          }
+          if (
+            acc.role === 'enseignant' ||
+            (Array.isArray(acc.roles) && (acc.roles.includes('enseignant') || acc.roles.includes('directeur')))
+          ) {
+            return acc.id || 'ens-1';
+          }
+        }
+      }
+      const role = localStorage.getItem('usmba_doctorat_role');
+      if (role === 'enseignant') {
+        return 'ens-1';
+      }
+    }
+  } catch {}
+  return null;
 }
 
 export function saveComptes(comptes: Compte[]): void {

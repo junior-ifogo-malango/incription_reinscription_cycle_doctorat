@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { Creneau, Enseignant, Candidat, Rapport, PV } from '../types';
 import { storageService } from '../services/storage';
-import { INITIAL_RAPPORTS, MOCK_CANDIDATS } from '../data/mockData';
+import { INITIAL_RAPPORTS, MOCK_CANDIDATS, getConnectedDirecteurId } from '../data/mockData';
 import { fr } from '../i18n/fr';
 
 // Constante unique du seuil d'inactivité (48 heures)
@@ -23,6 +23,8 @@ export const Exceptions: React.FC = () => {
   const [candidat, setCandidat] = useState<Candidat | null>(null);
   const [rapports, setRapports] = useState<Rapport[]>([]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const connectedDirecteurId = getConnectedDirecteurId();
 
   const loadData = () => {
     try {
@@ -102,6 +104,12 @@ export const Exceptions: React.FC = () => {
   });
 
   const handleRelancerRapport = (reportId: string) => {
+    const rTarget = rapports.find((r) => r.id === reportId);
+    if (connectedDirecteurId && rTarget?.encadrantId === connectedDirecteurId) {
+      setToastMessage(fr.exceptions.conflitDirecteur);
+      setTimeout(() => setToastMessage(null), 4000);
+      return;
+    }
     const todayStr = new Date().toLocaleDateString('fr-FR');
     const updated = rapports.map((r) => {
       if (r.id === reportId) {
@@ -159,6 +167,12 @@ export const Exceptions: React.FC = () => {
 
   // Bouton « Relancer (simulation) » : enregistre relanceLe = maintenant
   const handleRelancer = (creneauId: string) => {
+    const cTarget = creneaux.find((c) => c.id === creneauId);
+    if (connectedDirecteurId && cTarget?.enseignantId === connectedDirecteurId) {
+      setToastMessage(fr.exceptions.conflitDirecteur);
+      setTimeout(() => setToastMessage(null), 4000);
+      return;
+    }
     const updated = creneaux.map((c) => {
       if (c.id === creneauId) {
         return {
@@ -476,6 +490,9 @@ export const Exceptions: React.FC = () => {
                     const ensNom = getEnseignantName(c.enseignantId);
                     const duree = getDureeEcoulee(c.dateReservation);
                     const isRelance = Boolean(c.relanceLe);
+                    const isDirecteurOfCreneau = Boolean(
+                      connectedDirecteurId && c.enseignantId && connectedDirecteurId === c.enseignantId
+                    );
 
                     return (
                       <tr key={c.id} className="hover:bg-slate-50/60 transition">
@@ -504,14 +521,27 @@ export const Exceptions: React.FC = () => {
                               {fr.exceptions.relanceLePrefix} {formatRelanceDate(c.relanceLe)}
                             </span>
                           ) : (
-                            <button
-                              type="button"
-                              onClick={() => handleRelancer(c.id)}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-700 hover:bg-rose-800 text-white transition cursor-pointer active:scale-98 shadow-xs"
-                            >
-                              <Send size={12} />
-                              <span>{fr.exceptions.btnRelancer}</span>
-                            </button>
+                            <div className="flex flex-col items-end gap-1">
+                              <button
+                                type="button"
+                                disabled={isDirecteurOfCreneau}
+                                onClick={() => !isDirecteurOfCreneau && handleRelancer(c.id)}
+                                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold shadow-xs ${
+                                  isDirecteurOfCreneau
+                                    ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
+                                    : 'bg-rose-700 hover:bg-rose-800 text-white cursor-pointer active:scale-98'
+                                }`}
+                              >
+                                <Send size={12} />
+                                <span>{fr.exceptions.btnRelancer}</span>
+                              </button>
+                              {isDirecteurOfCreneau && (
+                                <p className="text-[11px] font-semibold text-amber-800 flex items-center justify-end gap-1 text-right max-w-[200px]">
+                                  <AlertTriangle size={12} className="shrink-0 text-amber-600" />
+                                  <span>{fr.exceptions.conflitDirecteur}</span>
+                                </p>
+                              )}
+                            </div>
                           )}
                         </td>
                       </tr>
@@ -528,6 +558,9 @@ export const Exceptions: React.FC = () => {
                 const ensNom = getEnseignantName(c.enseignantId);
                 const duree = getDureeEcoulee(c.dateReservation);
                 const isRelance = Boolean(c.relanceLe);
+                const isDirecteurOfCreneau = Boolean(
+                  connectedDirecteurId && c.enseignantId && connectedDirecteurId === c.enseignantId
+                );
 
                 return (
                   <div
@@ -565,14 +598,27 @@ export const Exceptions: React.FC = () => {
                           {fr.exceptions.relanceLePrefix} {formatRelanceDate(c.relanceLe)}
                         </span>
                       ) : (
-                        <button
-                          type="button"
-                          onClick={() => handleRelancer(c.id)}
-                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-700 text-white cursor-pointer active:scale-98"
-                        >
-                          <Send size={11} />
-                          <span>{fr.exceptions.btnRelancer}</span>
-                        </button>
+                        <div className="flex flex-col items-end gap-1">
+                          <button
+                            type="button"
+                            disabled={isDirecteurOfCreneau}
+                            onClick={() => !isDirecteurOfCreneau && handleRelancer(c.id)}
+                            className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold ${
+                              isDirecteurOfCreneau
+                                ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
+                                : 'bg-rose-700 text-white cursor-pointer active:scale-98'
+                            }`}
+                          >
+                            <Send size={11} />
+                            <span>{fr.exceptions.btnRelancer}</span>
+                          </button>
+                          {isDirecteurOfCreneau && (
+                            <p className="text-[10px] font-semibold text-amber-800 flex items-center gap-1 text-right max-w-[180px]">
+                              <AlertTriangle size={11} className="shrink-0 text-amber-600" />
+                              <span>{fr.exceptions.conflitDirecteur}</span>
+                            </p>
+                          )}
+                        </div>
                       )}
                     </div>
                   </div>
@@ -817,14 +863,34 @@ export const Exceptions: React.FC = () => {
                     </div>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => handleRelancerRapport(r.id)}
-                    className="self-end sm:self-center px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs active:scale-98 shrink-0"
-                  >
-                    <Send size={13} />
-                    <span>{fr.reinscription.btnRelancerReport}</span>
-                  </button>
+                  {(() => {
+                    const isDirecteurOfRapport = Boolean(
+                      connectedDirecteurId && r.encadrantId && connectedDirecteurId === r.encadrantId
+                    );
+                    return (
+                      <div className="flex flex-col items-end gap-1 shrink-0">
+                        <button
+                          type="button"
+                          disabled={isDirecteurOfRapport}
+                          onClick={() => !isDirecteurOfRapport && handleRelancerRapport(r.id)}
+                          className={`self-end sm:self-center px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-xs shrink-0 ${
+                            isDirecteurOfRapport
+                              ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
+                              : 'bg-amber-600 hover:bg-amber-700 text-white cursor-pointer active:scale-98'
+                          }`}
+                        >
+                          <Send size={13} />
+                          <span>{fr.reinscription.btnRelancerReport}</span>
+                        </button>
+                        {isDirecteurOfRapport && (
+                          <p className="text-[11px] font-semibold text-amber-800 flex items-center gap-1 text-right max-w-[200px]">
+                            <AlertTriangle size={12} className="shrink-0 text-amber-600" />
+                            <span>{fr.exceptions.conflitDirecteur}</span>
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })}

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Send, CheckCircle2, Clock, AlertCircle, FileText, Award, MessageCircle, Mail, Upload, FileCheck, XCircle } from 'lucide-react';
-import { PV, Notification, Resultat } from '../types';
+import { Send, CheckCircle2, Clock, AlertCircle, FileText, Award, MessageCircle, Mail, Upload, FileCheck, XCircle, Calendar, CalendarCheck2, AlertTriangle } from 'lucide-react';
+import { PV, Notification, Resultat, Periode, HistoriqueFinPeriode } from '../types';
+import { getPeriodeCandidature, savePeriodeCandidature, aujourdhui, getConnectedDirecteurId } from '../data/mockData';
 import { fr } from '../i18n/fr';
 import { logEvent } from '../utils/journal';
 import {
@@ -71,6 +72,65 @@ export const publierResultatsPV = (pvId: string): { success: boolean; message?: 
 export const CedSeances: React.FC = () => {
   const [pvs, setPvs] = useState<PV[]>([]);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [periode, setPeriode] = useState<Periode>(() => getPeriodeCandidature());
+  const [isEditingFin, setIsEditingFin] = useState(false);
+  const [nouvelleFinInput, setNouvelleFinInput] = useState('');
+  const [motifInput, setMotifInput] = useState('');
+  const [editError, setEditError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handlePeriodeUpdate = () => {
+      setPeriode(getPeriodeCandidature());
+    };
+    window.addEventListener('usmba_periode_updated', handlePeriodeUpdate);
+    window.addEventListener('storage', handlePeriodeUpdate);
+    return () => {
+      window.removeEventListener('usmba_periode_updated', handlePeriodeUpdate);
+      window.removeEventListener('storage', handlePeriodeUpdate);
+    };
+  }, []);
+
+  const handleSaveNouvelleFin = (e: React.FormEvent) => {
+    e.preventDefault();
+    setEditError(null);
+
+    if (!nouvelleFinInput) {
+      setEditError(fr.periodeCandidature.erreurDatePosterieure.replace('{ancienne}', periode.fin));
+      return;
+    }
+
+    if (nouvelleFinInput <= periode.fin) {
+      setEditError(fr.periodeCandidature.erreurDatePosterieure.replace('{ancienne}', periode.fin));
+      return;
+    }
+
+    if (motifInput.trim().length < 5) {
+      setEditError(fr.periodeCandidature.erreurMotifCourt);
+      return;
+    }
+
+    const modif: HistoriqueFinPeriode = {
+      ancienne: periode.fin,
+      nouvelle: nouvelleFinInput,
+      motif: motifInput.trim(),
+      modifieLe: aujourdhui(),
+      par: 'Direction CED',
+    };
+
+    const updated: Periode = {
+      ...periode,
+      fin: nouvelleFinInput,
+      historiqueFin: [modif, ...(periode.historiqueFin || [])],
+    };
+
+    savePeriodeCandidature(updated);
+    setPeriode(updated);
+    setIsEditingFin(false);
+    setNouvelleFinInput('');
+    setMotifInput('');
+    setMessage({ type: 'success', text: fr.periodeCandidature.succesProlongation });
+    setTimeout(() => setMessage(null), 4000);
+  };
 
   const loadData = () => {
     try {
@@ -142,7 +202,14 @@ export const CedSeances: React.FC = () => {
     };
   }, []);
 
+  const connectedDirecteurId = getConnectedDirecteurId();
+
   const handlePublier = (pvId: string) => {
+    const curPv = pvs.find((p) => p.id === pvId);
+    if (connectedDirecteurId && curPv?.directeurId === connectedDirecteurId) {
+      setMessage({ type: 'error', text: fr.cedSeances.conflitDirecteur });
+      return;
+    }
     const res = publierResultatsPV(pvId);
     if (res.success) {
       setMessage({ type: 'success', text: fr.cedSeances.notifSuccess });
@@ -171,6 +238,11 @@ export const CedSeances: React.FC = () => {
   };
 
   const handleRefuserScan = (pvId: string, motif: string = 'Scan illisible ou signatures incomplètes') => {
+    const curPv = pvs.find((p) => p.id === pvId);
+    if (connectedDirecteurId && curPv?.directeurId === connectedDirecteurId) {
+      setMessage({ type: 'error', text: fr.cedSeances.conflitDirecteur });
+      return;
+    }
     try {
       const raw = localStorage.getItem('usmba_doctorat_pvs');
       let curPvs: PV[] = raw ? JSON.parse(raw) : [];
@@ -220,22 +292,154 @@ export const CedSeances: React.FC = () => {
         </div>
       </div>
 
-      {message && (
-        <div
-          className={`p-3 rounded-xl text-xs flex items-center gap-2 ${
-            message.type === 'success'
-              ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
-              : 'bg-rose-50 border border-rose-200 text-rose-800'
-          }`}
-        >
-          {message.type === 'success' ? (
-            <CheckCircle2 size={15} className="shrink-0 text-emerald-600" />
-          ) : (
-            <AlertCircle size={15} className="shrink-0 text-rose-600" />
-          )}
-          <span>{message.text}</span>
+      {/* Carte Période de candidature */}
+      <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs space-y-3.5">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+              <Calendar size={16} className="text-emerald-700 shrink-0" />
+              <span>{fr.periodeCandidature.title}</span>
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              {fr.periodeCandidature.subtitle}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setIsEditingFin(!isEditingFin);
+              setEditError(null);
+              if (!isEditingFin) {
+                setNouvelleFinInput('');
+                setMotifInput('');
+              }
+            }}
+            className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-700 hover:bg-emerald-800 text-white transition-colors cursor-pointer flex items-center gap-1.5 shadow-xs"
+          >
+            <Clock size={13} />
+            <span>{fr.periodeCandidature.btnModifierFin}</span>
+          </button>
         </div>
-      )}
+
+        {/* Dates affichées */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+          <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-between">
+            <span className="text-slate-600 font-medium">{fr.periodeCandidature.dateDebut} :</span>
+            <span className="font-mono font-bold text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200">
+              {periode.debut}
+            </span>
+          </div>
+          <div className="p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 flex items-center justify-between">
+            <span className="text-emerald-800 font-medium">{fr.periodeCandidature.dateFin} :</span>
+            <span className="font-mono font-bold text-emerald-900 bg-white px-2 py-0.5 rounded border border-emerald-300">
+              {periode.fin}
+            </span>
+          </div>
+        </div>
+
+        {/* Formulaire de modification de la date de fin */}
+        {isEditingFin && (
+          <form onSubmit={handleSaveNouvelleFin} className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+            <div className="space-y-1">
+              <label className="block text-xs font-bold text-slate-700">
+                {fr.periodeCandidature.nouvelleDateFinLabel} :
+              </label>
+              <input
+                type="date"
+                value={nouvelleFinInput}
+                onChange={(e) => {
+                  setNouvelleFinInput(e.target.value);
+                  setEditError(null);
+                }}
+                className="w-full sm:w-auto px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-600 font-mono"
+              />
+              <p className="text-[11px] text-slate-500">
+                Date actuelle de clôture : {periode.fin}.
+              </p>
+            </div>
+
+            <div className="space-y-1">
+              <label className="block text-xs font-bold text-slate-700">
+                {fr.periodeCandidature.motifLabel} :
+              </label>
+              <textarea
+                rows={2}
+                value={motifInput}
+                onChange={(e) => {
+                  setMotifInput(e.target.value);
+                  setEditError(null);
+                }}
+                placeholder={fr.periodeCandidature.motifPlaceholder}
+                className="w-full px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-600"
+              />
+            </div>
+
+            {editError && (
+              <div className="p-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-1.5 font-medium">
+                <AlertCircle size={14} className="shrink-0 text-rose-600" />
+                <span>{editError}</span>
+              </div>
+            )}
+
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="submit"
+                className="px-3.5 py-1.5 text-xs font-bold rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white transition-colors cursor-pointer"
+              >
+                {fr.periodeCandidature.btnEnregistrer}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsEditingFin(false);
+                  setEditError(null);
+                }}
+                className="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-white border border-slate-300 text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                {fr.periodeCandidature.btnAnnuler}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {/* Historique des prolongations en liste datée */}
+        <div className="space-y-2 pt-2 border-t border-slate-100">
+          <h4 className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+            <Clock size={13} className="text-slate-400" />
+            <span>{fr.periodeCandidature.historiqueTitle}</span>
+          </h4>
+
+          {periode.historiqueFin && periode.historiqueFin.length > 0 ? (
+            <ul className="space-y-2">
+              {periode.historiqueFin.map((item, idx) => (
+                <li
+                  key={`${item.modifieLe}-${idx}`}
+                  className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-xs space-y-1"
+                >
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <span className="font-semibold text-slate-900">
+                      Prolongée du <span className="font-mono">{item.ancienne}</span> au <span className="font-mono text-emerald-800 font-bold">{item.nouvelle}</span>
+                    </span>
+                    <span className="text-[11px] text-slate-500 font-mono">
+                      {fr.periodeCandidature.lePrefix} {item.modifieLe}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-600">
+                    <span className="font-medium text-slate-700">{fr.periodeCandidature.motifPrefix}</span> {item.motif}
+                  </p>
+                  <p className="text-[10px] text-slate-400">
+                    {fr.periodeCandidature.parPrefix} {item.par}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-xs text-slate-400 italic">
+              {fr.periodeCandidature.historiqueVide}
+            </p>
+          )}
+        </div>
+      </div>
 
       {pvs.length === 0 ? (
         <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-xs text-slate-400">
@@ -245,6 +449,9 @@ export const CedSeances: React.FC = () => {
         <div className="space-y-3">
           {pvs.map((pv) => {
             const isPublished = Boolean(pv.publieLe);
+            const isDirecteurOfPv = Boolean(
+              connectedDirecteurId && pv.directeurId && connectedDirecteurId === pv.directeurId
+            );
 
             return (
               <div
@@ -270,18 +477,31 @@ export const CedSeances: React.FC = () => {
                   <div className="flex items-center gap-2 flex-wrap">
                     {/* Scan PV (Remise papier) */}
                     {pv.scanStatut === 'valide' ? (
-                      <div className="flex items-center gap-1.5">
-                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-sky-50 text-sky-800 border border-sky-200">
-                          <FileCheck size={13} className="text-sky-600" />
-                          <span>Remise papier (Scan reçu)</span>
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => handleRefuserScan(pv.id)}
-                          className="px-2.5 py-1 rounded-lg text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition-colors cursor-pointer"
-                        >
-                          Refuser scan
-                        </button>
+                      <div className="flex flex-col items-end gap-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-sky-50 text-sky-800 border border-sky-200">
+                            <FileCheck size={13} className="text-sky-600" />
+                            <span>Remise papier (Scan reçu)</span>
+                          </span>
+                          <button
+                            type="button"
+                            disabled={isDirecteurOfPv}
+                            onClick={() => !isDirecteurOfPv && handleRefuserScan(pv.id)}
+                            className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors ${
+                              isDirecteurOfPv
+                                ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
+                                : 'text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 cursor-pointer'
+                            }`}
+                          >
+                            Refuser scan
+                          </button>
+                        </div>
+                        {isDirecteurOfPv && (
+                          <p className="text-[11px] font-semibold text-amber-800 flex items-center gap-1 text-right max-w-xs mt-0.5">
+                            <AlertTriangle size={12} className="shrink-0 text-amber-600" />
+                            <span>{fr.cedSeances.conflitDirecteur}</span>
+                          </p>
+                        )}
                       </div>
                     ) : pv.scanStatut === 'refuse' ? (
                       <div className="flex items-center gap-1.5">
@@ -317,14 +537,27 @@ export const CedSeances: React.FC = () => {
                         </span>
                       </span>
                     ) : (
-                      <button
-                        type="button"
-                        onClick={() => handlePublier(pv.id)}
-                        className="min-h-[36px] px-4 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer active:scale-98"
-                      >
-                        <Send size={13} />
-                        <span>{fr.cedSeances.btnPublier}</span>
-                      </button>
+                      <div className="flex flex-col items-end gap-1">
+                        <button
+                          type="button"
+                          disabled={isDirecteurOfPv}
+                          onClick={() => !isDirecteurOfPv && handlePublier(pv.id)}
+                          className={`min-h-[36px] px-4 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+                            isDirecteurOfPv
+                              ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
+                              : 'bg-slate-900 hover:bg-slate-800 text-white cursor-pointer active:scale-98'
+                          }`}
+                        >
+                          <Send size={13} />
+                          <span>{fr.cedSeances.btnPublier}</span>
+                        </button>
+                        {isDirecteurOfPv && (
+                          <p className="text-[11px] font-semibold text-amber-800 flex items-center gap-1 text-right max-w-xs">
+                            <AlertTriangle size={12} className="shrink-0 text-amber-600" />
+                            <span>{fr.cedSeances.conflitDirecteur}</span>
+                          </p>
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>
