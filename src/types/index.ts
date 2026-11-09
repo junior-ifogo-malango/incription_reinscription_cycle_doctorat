@@ -307,17 +307,20 @@ export interface Resultat {
   saisiLe: string; /* ISO */
 }
 
-export type PVStatut = 'a_signer' | 'signe' | 'original_recu' | 'approuve';
+export type PVStatut = 'a_signer' | 'signe' | 'envoye' | 'publie' | 'original_recu' | 'approuve';
 
 export interface PV {
   id: string;
   directeurId: string;
+  structure?: string; /* Structure de recherche du PV / directeur */
   date: string; /* AAAA-MM-JJ de la séance */
   resultats: Resultat[]; /* copie figée */
   statut: PVStatut;
   code: string;
   genereLe: string; /* ISO */
   publieLe?: string; /* ISO */
+  envoyeLe?: string; /* ISO */
+  envoyePar?: string;
   version?: number;
   remplaceePar?: string; /* id de la version suivante */
   rouvertLe?: string; /* ISO */

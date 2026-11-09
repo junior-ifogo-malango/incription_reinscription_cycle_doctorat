@@ -1342,7 +1342,10 @@ export default function App() {
                   setRole('candidat');
                 }
               }}
-              onUpdateSujets={(newSujets) => setSujets(newSujets)}
+              onUpdateSujets={(newSujets) => {
+                setSujets(newSujets);
+                storageService.setSujets(newSujets);
+              }}
               initialView="catalog"
               onNavigateTab={handleTabChange}
             />
@@ -1363,7 +1366,10 @@ export default function App() {
                   setRole('candidat');
                 }
               }}
-              onUpdateSujets={(newSujets) => setSujets(newSujets)}
+              onUpdateSujets={(newSujets) => {
+                setSujets(newSujets);
+                storageService.setSujets(newSujets);
+              }}
               initialView="panier"
               onNavigateTab={handleTabChange}
             />

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Send, CheckCircle2, Clock, AlertCircle, FileText, Award, MessageCircle, Mail, Upload, FileCheck, XCircle, Calendar, CalendarCheck2, AlertTriangle } from 'lucide-react';
+import { Send, CheckCircle2, Clock, AlertCircle, FileText, Award, MessageCircle, Mail, Upload, FileCheck, XCircle, Calendar, CalendarCheck2, AlertTriangle, Eye } from 'lucide-react';
 import { PV, Notification, Resultat, Periode, HistoriqueFinPeriode } from '../types';
-import { getPeriodeCandidature, savePeriodeCandidature, aujourdhui, getConnectedDirecteurId } from '../data/mockData';
+import { getPeriodeCandidature, savePeriodeCandidature, aujourdhui, getConnectedDirecteurId, getDirectorStructure, enrichirPVLecture, getComptes } from '../data/mockData';
 import { fr } from '../i18n/fr';
 import { logEvent } from '../utils/journal';
 import {
@@ -37,6 +37,7 @@ export const publierResultatsPV = (pvId: string): { success: boolean; message?: 
 
     const nowIso = new Date().toISOString();
     targetPv.publieLe = nowIso;
+    targetPv.statut = 'publie';
     pvs[pvIndex] = targetPv;
     localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(pvs));
 
@@ -77,6 +78,11 @@ export const CedSeances: React.FC = () => {
   const [nouvelleFinInput, setNouvelleFinInput] = useState('');
   const [motifInput, setMotifInput] = useState('');
   const [editError, setEditError] = useState<string | null>(null);
+  const [conformiteMap, setConformiteMap] = useState<Record<string, boolean>>({});
+  const [scanModalPv, setScanModalPv] = useState<PV | null>(null);
+  const [refusModalPvId, setRefusModalPvId] = useState<string | null>(null);
+  const [refusMotif, setRefusMotif] = useState('');
+  const [refusError, setRefusError] = useState<string | null>(null);
 
   useEffect(() => {
     const handlePeriodeUpdate = () => {
@@ -132,13 +138,34 @@ export const CedSeances: React.FC = () => {
     setTimeout(() => setMessage(null), 4000);
   };
 
+  const getConnectedStructureName = (): string => {
+    try {
+      const raw = localStorage.getItem('usmba_active_account');
+      if (raw) {
+        const acc = JSON.parse(raw);
+        if (acc) {
+          if (acc.email === 'ced@demo.ma') {
+            return 'LISAC - FSDM Fès';
+          }
+          if (acc.structure && acc.structure !== 'CED USMBA') {
+            return acc.structure;
+          }
+        }
+      }
+      const allComptes = getComptes();
+      const cedCompte = allComptes.find((c) => c.email === 'ced@demo.ma');
+      if (cedCompte?.structure) return cedCompte.structure;
+    } catch {}
+    return 'LISAC - FSDM Fès';
+  };
+
   const loadData = () => {
     try {
       const raw = localStorage.getItem('usmba_doctorat_pvs');
       if (raw) {
         const parsed: PV[] = JSON.parse(raw);
-        // Ignore les versions remplacées
-        setPvs(parsed.filter((p) => !p.remplaceePar));
+        // Ignore les versions remplacées et enrichit à la lecture sans modifier les données
+        setPvs(parsed.filter((p) => !p.remplaceePar).map(enrichirPVLecture));
       } else {
         // PV de démonstration initial prêt à être publié si aucun PV n'a encore été généré
         const demoResults: Resultat[] = [
@@ -176,11 +203,16 @@ export const CedSeances: React.FC = () => {
         const demoPV: PV = {
           id: 'pv-demo-fsdm-01',
           directeurId: 'ens-1',
+          structure: 'LISAC - FSDM Fès',
           date: '2026-11-10',
           resultats: demoResults,
-          statut: 'a_signer',
+          statut: 'envoye',
+          envoyeLe: new Date().toISOString(),
+          envoyePar: 'Pr. Karim El Amrani',
           code: 'PV-2026-FSDM-001',
           genereLe: new Date().toISOString(),
+          scanDeposeLe: new Date().toISOString(),
+          scanStatut: 'valide',
         };
 
         setPvs([demoPV]);
@@ -221,24 +253,6 @@ export const CedSeances: React.FC = () => {
     }
   };
 
-  const handleDeposerScan = (pvId: string) => {
-    try {
-      const raw = localStorage.getItem('usmba_doctorat_pvs');
-      let curPvs: PV[] = raw ? JSON.parse(raw) : [];
-      const idx = curPvs.findIndex((p) => p.id === pvId);
-      if (idx !== -1) {
-        curPvs[idx].statut = 'original_recu';
-        curPvs[idx].scanDeposeLe = new Date().toISOString();
-        curPvs[idx].scanStatut = 'valide';
-        localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(curPvs));
-        setPvs(curPvs.filter((p) => !p.remplaceePar));
-        window.dispatchEvent(new CustomEvent('usmba_pvs_updated'));
-        logEvent({ id: 'dir-ced', nom: 'Structure CED', role: 'directeur_ced' }, fr.journalActions.scanPvDepose, `PV-${curPvs[idx].date}-${(curPvs[idx].code || '').slice(0, 4)}`, 'Remise papier');
-        setMessage({ type: 'success', text: 'Scan du PV déposé avec succès (Remise papier)' });
-      }
-    } catch {}
-  };
-
   const handleRefuserScan = (pvId: string, motif: string = 'Scan illisible ou signatures incomplètes') => {
     const curPv = pvs.find((p) => p.id === pvId);
     if (connectedDirecteurId && curPv?.directeurId === connectedDirecteurId) {
@@ -250,15 +264,38 @@ export const CedSeances: React.FC = () => {
       let curPvs: PV[] = raw ? JSON.parse(raw) : [];
       const idx = curPvs.findIndex((p) => p.id === pvId);
       if (idx !== -1) {
+        // Règle : le PV repasse à 'a_signer'
+        curPvs[idx].statut = 'a_signer';
         curPvs[idx].scanStatut = 'refuse';
         curPvs[idx].scanMotifRefus = motif;
+        delete curPvs[idx].envoyeLe;
+        delete curPvs[idx].envoyePar;
         localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(curPvs));
-        setPvs(curPvs.filter((p) => !p.remplaceePar));
+        setPvs(curPvs.filter((p) => !p.remplaceePar).map(enrichirPVLecture));
         window.dispatchEvent(new CustomEvent('usmba_pvs_updated'));
         logEvent({ id: 'dir-ced', nom: 'Structure CED', role: 'directeur_ced' }, fr.journalActions.scanPvRefuse, `PV-${curPvs[idx].date}-${(curPvs[idx].code || '').slice(0, 4)}`, motif);
-        setMessage({ type: 'error', text: `Scan du PV refusé : ${motif}` });
+        setMessage({ type: 'error', text: `Scan du PV refusé : ${motif}. Le PV repasse à À signer.` });
+        setTimeout(() => setMessage(null), 4000);
       }
     } catch {}
+  };
+
+  const handleOpenRefusModal = (pvId: string) => {
+    setRefusModalPvId(pvId);
+    setRefusMotif('');
+    setRefusError(null);
+  };
+
+  const handleConfirmRefus = () => {
+    if (!refusModalPvId) return;
+    const cleanMotif = (refusMotif || '').trim();
+    if (cleanMotif.length < 5) {
+      setRefusError(fr.cedSeances.motifRefusMinError);
+      return;
+    }
+    handleRefuserScan(refusModalPvId, cleanMotif);
+    setRefusModalPvId(null);
+    setRefusMotif('');
   };
 
   const formatDate = (isoString?: string) => {
@@ -278,18 +315,43 @@ export const CedSeances: React.FC = () => {
     }
   };
 
+  const structureName = getConnectedStructureName();
+
+  const pvsStructure = pvs.filter((pv) => {
+    if (pv.remplaceePar) return false;
+    // Déterminer la structure à la lecture
+    const pvStructure = pv.structure || getDirectorStructure(pv.directeurId);
+    // Cas d'erreur : structure absente -> PV invisible pour toute Structure
+    if (!pvStructure) return false;
+    // Ne liste que les PV avec PV.structure égale à sa structure
+    if (pvStructure !== structureName) return false;
+
+    // ET statut 'envoye' (ou 'publie'/refusé déjà traités)
+    const isEnvoye = pv.statut === 'envoye';
+    const isPublie = pv.statut === 'publie' || Boolean(pv.publieLe);
+    const isRefuse = pv.scanStatut === 'refuse';
+    const isLegacyTraite = pv.statut === 'original_recu' || pv.statut === 'approuve';
+
+    return isEnvoye || isPublie || isRefuse || isLegacyTraite;
+  });
+
   return (
     <div className="space-y-4">
       <div className="bg-slate-900 text-white rounded-xl p-4 flex items-center justify-between shadow-xs">
         <div>
-          <h2 className="text-sm font-bold text-amber-300">
-            {fr.cedSeances.title}
-          </h2>
-          <p className="text-xs text-slate-300 mt-0.5">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 bg-slate-800 border border-slate-700 px-2 py-0.5 rounded">
+              {fr.cedSeances.structureTitle}
+            </span>
+            <h2 className="text-sm sm:text-base font-extrabold text-white">
+              {structureName}
+            </h2>
+          </div>
+          <p className="text-xs text-slate-300 mt-1">
             {fr.cedSeances.subtitle}
           </p>
         </div>
-        <div className="w-9 h-9 rounded-lg bg-slate-800 text-amber-300 flex items-center justify-center">
+        <div className="w-9 h-9 rounded-lg bg-slate-800 text-amber-300 flex items-center justify-center shrink-0">
           <Award size={18} />
         </div>
       </div>
@@ -443,16 +505,22 @@ export const CedSeances: React.FC = () => {
         </div>
       </div>
 
-      {pvs.length === 0 ? (
+      {pvsStructure.length === 0 ? (
         <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-xs text-slate-400">
           {fr.cedSeances.emptyList}
         </div>
       ) : (
         <div className="space-y-3">
-          {pvs.map((pv) => {
-            const isPublished = Boolean(pv.publieLe);
+          {pvsStructure.map((pv) => {
+            const isPublished = Boolean(pv.publieLe) || pv.statut === 'publie';
             const isDirecteurOfPv = Boolean(
               connectedDirecteurId && pv.directeurId && connectedDirecteurId === pv.directeurId
+            );
+            const isEnvoyeNonPublie48h = Boolean(
+              pv.statut === 'envoye' &&
+              !isPublished &&
+              pv.envoyeLe &&
+              (Date.now() - new Date(pv.envoyeLe).getTime()) / (1000 * 60 * 60) > 48
             );
 
             return (
@@ -460,9 +528,17 @@ export const CedSeances: React.FC = () => {
                 key={pv.id}
                 className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3"
               >
+                {/* Exception 5 : PV envoyé non publié depuis plus de 48 h (visible de la Structure) */}
+                {isEnvoyeNonPublie48h && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-900 flex items-center gap-2 font-semibold">
+                    <Clock size={16} className="text-amber-600 shrink-0" />
+                    <span>{fr.cedSeances.exceptionEnvoyeNonPublie}</span>
+                  </div>
+                )}
+
                 <div className="flex items-start justify-between gap-2 flex-wrap">
                   <div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <FileText size={15} className="text-emerald-700" />
                       <span className="text-xs font-bold text-slate-900 font-mono">
                         PV-{pv.date}-{(pv.code || '').slice(0, 4)}
@@ -470,6 +546,19 @@ export const CedSeances: React.FC = () => {
                       <span className="text-[11px] font-semibold text-slate-500 font-sans">
                         (v{pv.version ?? 1})
                       </span>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
+                        {pv.structure || structureName}
+                      </span>
+                      {pv.statut === 'envoye' && !isPublished && (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-50 text-sky-800 border border-sky-200">
+                          Envoyé par {pv.envoyePar || 'Directeur'}
+                        </span>
+                      )}
+                      {pv.scanStatut === 'refuse' && (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-50 text-rose-800 border border-rose-200">
+                          Scan refusé
+                        </span>
+                      )}
                     </div>
                     <p className="text-xs text-slate-600 mt-1">
                       {fr.cedSeances.datePrefix} {pv.date} • {pv.resultats?.length || 0} {fr.cedSeances.candidatsCount} • Code : {pv.code}
@@ -477,56 +566,30 @@ export const CedSeances: React.FC = () => {
                   </div>
 
                   <div className="flex items-center gap-2 flex-wrap">
-                    {/* Scan PV (Remise papier) */}
-                    {pv.scanStatut === 'valide' ? (
-                      <div className="flex flex-col items-end gap-1">
-                        <div className="flex items-center gap-1.5">
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-sky-50 text-sky-800 border border-sky-200">
-                            <FileCheck size={13} className="text-sky-600" />
-                            <span>Remise papier (Scan reçu)</span>
-                          </span>
-                          <button
-                            type="button"
-                            disabled={isDirecteurOfPv}
-                            onClick={() => !isDirecteurOfPv && handleRefuserScan(pv.id)}
-                            className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors ${
-                              isDirecteurOfPv
-                                ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
-                                : 'text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 cursor-pointer'
-                            }`}
-                          >
-                            {fr.cedSeances.btnRefuserScan}
-                          </button>
-                        </div>
-                        {isDirecteurOfPv && (
-                          <p className="text-[11px] font-semibold text-amber-800 flex items-center gap-1 text-right max-w-xs mt-0.5">
-                            <AlertTriangle size={12} className="shrink-0 text-amber-600" />
-                            <span>{fr.cedSeances.conflitDirecteur}</span>
-                          </p>
-                        )}
-                      </div>
-                    ) : pv.scanStatut === 'refuse' ? (
-                      <div className="flex items-center gap-1.5">
-                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-50 text-rose-800 border border-rose-200">
-                          <XCircle size={13} className="text-rose-600" />
-                          <span>Scan refusé</span>
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => handleDeposerScan(pv.id)}
-                          className="px-2.5 py-1 rounded-lg text-xs font-semibold text-sky-700 bg-sky-50 hover:bg-sky-100 border border-sky-200 transition-colors cursor-pointer"
-                        >
-                          Re-déposer scan
-                        </button>
-                      </div>
-                    ) : (
+                    {/* Voir le scan */}
+                    <button
+                      type="button"
+                      onClick={() => setScanModalPv(pv)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-sky-800 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-xl transition cursor-pointer"
+                    >
+                      <Eye size={13} />
+                      <span>{fr.cedSeances.btnVoirScan}</span>
+                    </button>
+
+                    {/* Refuser le scan (motif obligatoire, le PV repasse à 'a_signer') */}
+                    {!isPublished && (
                       <button
                         type="button"
-                        onClick={() => handleDeposerScan(pv.id)}
-                        className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer border border-slate-300"
+                        disabled={isDirecteurOfPv}
+                        onClick={() => !isDirecteurOfPv && handleOpenRefusModal(pv.id)}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors ${
+                          isDirecteurOfPv
+                            ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
+                            : 'text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 cursor-pointer active:scale-98'
+                        }`}
                       >
-                        <Upload size={13} />
-                        <span>Déposer scan PV</span>
+                        <XCircle size={13} />
+                        <span>{fr.cedSeances.btnRefuserScan}</span>
                       </button>
                     )}
 
@@ -542,12 +605,12 @@ export const CedSeances: React.FC = () => {
                       <div className="flex flex-col items-end gap-1">
                         <button
                           type="button"
-                          disabled={isDirecteurOfPv}
-                          onClick={() => !isDirecteurOfPv && handlePublier(pv.id)}
+                          disabled={isDirecteurOfPv || !conformiteMap[pv.id]}
+                          onClick={() => !isDirecteurOfPv && conformiteMap[pv.id] && handlePublier(pv.id)}
                           className={`min-h-[36px] px-4 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors ${
-                            isDirecteurOfPv
+                            isDirecteurOfPv || !conformiteMap[pv.id]
                               ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
-                              : 'bg-slate-900 hover:bg-slate-800 text-white cursor-pointer active:scale-98'
+                              : 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer active:scale-98'
                           }`}
                         >
                           <Send size={13} />
@@ -563,6 +626,28 @@ export const CedSeances: React.FC = () => {
                     )}
                   </div>
                 </div>
+
+                {/* Case de conformité obligatoire avant publication */}
+                {!isPublished && (
+                  <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-3">
+                    <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(conformiteMap[pv.id])}
+                        onChange={(e) =>
+                          setConformiteMap((prev) => ({ ...prev, [pv.id]: e.target.checked }))
+                        }
+                        className="w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 cursor-pointer"
+                      />
+                      <span>{fr.cedSeances.conformiteLabel}</span>
+                    </label>
+                    {!conformiteMap[pv.id] && !isDirecteurOfPv && (
+                      <span className="text-[10px] text-amber-800 font-medium">
+                        Cochez la case de conformité pour activer la publication
+                      </span>
+                    )}
+                  </div>
+                )}
 
                 {/* Liste succincte des résultats pour contrôle CED */}
                 <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 space-y-1.5">
@@ -698,6 +783,139 @@ export const CedSeances: React.FC = () => {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Modal : Aperçu du scan signé */}
+      {scanModalPv && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="bg-white rounded-2xl max-w-xl w-full p-5 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b pb-3 border-slate-100">
+              <div>
+                <h3 className="font-bold text-sm text-slate-900 flex items-center gap-2">
+                  <FileText size={16} className="text-emerald-700" />
+                  <span>Scan du PV — PV-{scanModalPv.date}-{(scanModalPv.code || '').slice(0, 4)}</span>
+                </h3>
+                <p className="text-[11px] text-slate-500 font-mono mt-0.5">
+                  Structure : {scanModalPv.structure || structureName} • Code : {scanModalPv.code}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setScanModalPv(null)}
+                className="text-slate-400 hover:text-slate-600 text-base font-bold p-1 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-semibold text-slate-700">Séance du : {scanModalPv.date}</span>
+                <span className="font-mono text-emerald-800 font-bold bg-white px-2 py-0.5 rounded border border-slate-200">
+                  Scan signé officiel
+                </span>
+              </div>
+
+              <div className="border border-slate-200 rounded-lg overflow-hidden bg-white">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-100 text-[10px] uppercase font-bold text-slate-600">
+                    <tr>
+                      <th className="p-2">Candidat</th>
+                      <th className="p-2 text-center">Note</th>
+                      <th className="p-2 text-center">Résultat</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {scanModalPv.resultats.map((r, i) => (
+                      <tr key={i}>
+                        <td className="p-2 font-medium text-slate-800">{r.candidatId}</td>
+                        <td className="p-2 text-center font-bold text-emerald-800">{r.note} / 20</td>
+                        <td className="p-2 text-center font-bold text-slate-700">{r.resultat}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="p-3 bg-white border border-dashed border-slate-300 rounded-xl flex items-center gap-3">
+                <FileCheck size={20} className="text-emerald-600 shrink-0" />
+                <div className="text-xs">
+                  <p className="font-bold text-slate-800">Paraphes et signatures de la commission validés</p>
+                  <p className="text-[11px] text-slate-500">
+                    Déposé par le directeur le {scanModalPv.scanDeposeLe ? formatDate(scanModalPv.scanDeposeLe) : scanModalPv.date}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-1">
+              <button
+                type="button"
+                onClick={() => setScanModalPv(null)}
+                className="px-4 py-2 text-xs font-semibold rounded-xl bg-slate-900 hover:bg-slate-800 text-white transition cursor-pointer"
+              >
+                Fermer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal : Refus du scan avec motif obligatoire */}
+      {refusModalPvId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b pb-3 border-slate-100">
+              <h3 className="font-bold text-sm text-slate-900 flex items-center gap-2">
+                <XCircle size={16} className="text-rose-600" />
+                <span>{fr.cedSeances.modalRefusTitle}</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setRefusModalPvId(null)}
+                className="text-slate-400 hover:text-slate-600 text-base font-bold p-1 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="block text-xs font-bold text-slate-700">
+                {fr.cedSeances.motifRefusLabel} *
+              </label>
+              <textarea
+                rows={3}
+                value={refusMotif}
+                onChange={(e) => {
+                  setRefusMotif(e.target.value);
+                  setRefusError(null);
+                }}
+                placeholder={fr.cedSeances.motifRefusPlaceholder}
+                className="w-full text-xs p-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-rose-500 focus:outline-none"
+              />
+              {refusError && (
+                <p className="text-[11px] font-semibold text-rose-600">{refusError}</p>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setRefusModalPvId(null)}
+                className="px-3.5 py-1.5 text-xs font-semibold rounded-xl text-slate-600 hover:bg-slate-100 cursor-pointer"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmRefus}
+                className="px-4 py-1.5 text-xs font-semibold rounded-xl bg-rose-700 hover:bg-rose-800 text-white shadow-xs cursor-pointer active:scale-98"
+              >
+                {fr.cedSeances.btnConfirmerRefus}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

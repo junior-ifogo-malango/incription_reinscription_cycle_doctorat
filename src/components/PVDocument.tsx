@@ -209,9 +209,29 @@ export const PVDocument: React.FC<PVDocumentProps> = ({
                         </span>
 
                         {/* StatusBadge */}
-                        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-800 border border-amber-300">
-                          <FileSignature size={14} className="text-amber-600" />
-                          <span>{fr.commission.pvStatuts.a_signer}</span>
+                        <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border ${
+                          pv.statut === 'publie' || Boolean(pv.publieLe)
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                            : pv.statut === 'envoye'
+                            ? 'bg-sky-50 text-sky-800 border-sky-300'
+                            : pv.statut === 'signe'
+                            ? 'bg-indigo-50 text-indigo-800 border-indigo-300'
+                            : 'bg-amber-50 text-amber-800 border-amber-300'
+                        }`}>
+                          <FileSignature size={14} className={
+                            pv.statut === 'publie' || Boolean(pv.publieLe) ? 'text-emerald-600' :
+                            pv.statut === 'envoye' ? 'text-sky-600' :
+                            pv.statut === 'signe' ? 'text-indigo-600' : 'text-amber-600'
+                          } />
+                          <span>{
+                            pv.statut === 'publie' || Boolean(pv.publieLe)
+                              ? fr.commission.pvStatuts.publie
+                              : pv.statut === 'envoye'
+                              ? fr.commission.pvStatuts.envoye
+                              : pv.statut === 'signe'
+                              ? fr.commission.pvStatuts.signe
+                              : fr.commission.pvStatuts.a_signer
+                          }</span>
                         </span>
                       </div>
 
@@ -224,7 +244,7 @@ export const PVDocument: React.FC<PVDocumentProps> = ({
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 text-xs text-slate-700">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2 text-xs text-slate-700">
                     <div>
                       <span className="font-semibold text-slate-500">{fr.commission.pvDocument.dateLabel}</span>{' '}
                       <span className="font-bold text-slate-900">{formattedDate()}</span>
@@ -232,6 +252,10 @@ export const PVDocument: React.FC<PVDocumentProps> = ({
                     <div>
                       <span className="font-semibold text-slate-500">{fr.commission.pvDocument.directeurLabel}</span>{' '}
                       <span className="font-bold text-slate-900">{directeurNom}</span>
+                    </div>
+                    <div>
+                      <span className="font-semibold text-slate-500">Structure :</span>{' '}
+                      <span className="font-bold text-slate-900">{pv.structure || 'LISAC - FSDM Fès'}</span>
                     </div>
                   </div>
                 </div>

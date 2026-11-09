@@ -751,6 +751,18 @@ export const INITIAL_COMPTES: Compte[] = [
     enseignantId: 'ens-1',
   },
   {
+    id: 'cpt-ced-demo',
+    nom: 'Direction CED (Structure)',
+    email: 'ced@demo.ma',
+    motDePasse: 'demo1234',
+    role: 'directeur_ced',
+    roles: ['structure'],
+    structure: 'LISAC - FSDM Fès',
+    etablissement: 'Faculté des Sciences Dhar El Mehraz (FSDM)',
+    statut: 'actif',
+    dateCreation: '2026-11-01',
+  },
+  {
     id: 'cpt-att-1',
     nom: 'Pr. Nadia Berrada',
     email: 'n.berrada@demo.ma',
@@ -778,6 +790,29 @@ export const INITIAL_COMPTES: Compte[] = [
 
 export const STORAGE_KEY_COMPTES = 'gcd_comptes';
 
+export function getDirectorStructure(directeurId?: string): string {
+  if (!directeurId) return '';
+  const ens = INITIAL_ENSEIGNANTS.find((e) => e.id === directeurId);
+  if (ens?.structure) return ens.structure;
+  const comptes = getComptes();
+  const cpt = comptes.find((c) => c.enseignantId === directeurId || c.id === directeurId);
+  if (cpt?.structure) return cpt.structure;
+  if (directeurId === 'ens-1') return 'LISAC - FSDM Fès';
+  return '';
+}
+
+/**
+ * Règle : Anciens PV sans structure : prennent celle de leur directeur à la lecture, sans modifier les données.
+ */
+export function enrichirPVLecture(pv: import('../types').PV): import('../types').PV {
+  if (pv.structure) return pv;
+  const fallbackStructure = getDirectorStructure(pv.directeurId);
+  return {
+    ...pv,
+    structure: fallbackStructure,
+  };
+}
+
 export function getComptes(): Compte[] {
   try {
     if (typeof localStorage !== 'undefined') {
@@ -785,12 +820,29 @@ export function getComptes(): Compte[] {
       if (stored) {
         const parsed = JSON.parse(stored);
         if (Array.isArray(parsed) && parsed.length > 0) {
+          let updated = false;
           if (!parsed.some((c: any) => c.email === 'karim.structure@demo.ma')) {
             const demoKarim = INITIAL_COMPTES.find((c) => c.email === 'karim.structure@demo.ma');
             if (demoKarim) {
               parsed.push(demoKarim);
-              localStorage.setItem(STORAGE_KEY_COMPTES, JSON.stringify(parsed));
+              updated = true;
             }
+          }
+          const cedCompte = parsed.find((c: any) => c.email === 'ced@demo.ma');
+          if (cedCompte) {
+            if (cedCompte.structure !== 'LISAC - FSDM Fès') {
+              cedCompte.structure = 'LISAC - FSDM Fès';
+              updated = true;
+            }
+          } else {
+            const demoCed = INITIAL_COMPTES.find((c) => c.email === 'ced@demo.ma');
+            if (demoCed) {
+              parsed.push(demoCed);
+              updated = true;
+            }
+          }
+          if (updated) {
+            localStorage.setItem(STORAGE_KEY_COMPTES, JSON.stringify(parsed));
           }
           return parsed;
         }

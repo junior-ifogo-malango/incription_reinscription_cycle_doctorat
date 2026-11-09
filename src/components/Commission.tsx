@@ -13,9 +13,14 @@ import {
   Eye,
   PlusCircle,
   RotateCcw,
+  Printer,
+  Upload,
+  Send,
+  AlertTriangle,
+  FileCheck,
 } from 'lucide-react';
 import { Creneau, Resultat, ResultatType, PV, Candidat } from '../types';
-import { MOCK_CANDIDATS, INITIAL_CRENEAUX } from '../data/mockData';
+import { MOCK_CANDIDATS, INITIAL_CRENEAUX, getDirectorStructure, enrichirPVLecture } from '../data/mockData';
 import { PVDocument } from './PVDocument';
 import { fr } from '../i18n/fr';
 import { logEvent } from '../utils/journal';
@@ -112,7 +117,8 @@ export const Commission: React.FC<CommissionProps> = ({
     try {
       const rawPvs = localStorage.getItem('usmba_doctorat_pvs');
       if (rawPvs) {
-        setPvs(JSON.parse(rawPvs));
+        const parsed: PV[] = JSON.parse(rawPvs);
+        setPvs(parsed.map(enrichirPVLecture));
       }
     } catch {}
   };
@@ -311,6 +317,8 @@ export const Commission: React.FC<CommissionProps> = ({
       const raw = localStorage.getItem('usmba_doctorat_pvs');
       let curPvs: PV[] = raw ? JSON.parse(raw) : [];
 
+      const dirStructure = getDirectorStructure(enseignantId);
+
       if (existing && existing.rouvertLe) {
         // Régénération après réouverture : version = ancienne version + 1
         const nextVersion = (existing.version ?? 1) + 1;
@@ -320,6 +328,7 @@ export const Commission: React.FC<CommissionProps> = ({
         const newPV: PV = {
           id: newId,
           directeurId: enseignantId,
+          structure: dirStructure,
           date,
           resultats: frozenResults,
           statut: 'a_signer',
@@ -334,7 +343,7 @@ export const Commission: React.FC<CommissionProps> = ({
         }
         curPvs.push(newPV);
         localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(curPvs));
-        setPvs(curPvs);
+        setPvs(curPvs.map(enrichirPVLecture));
         window.dispatchEvent(new CustomEvent('usmba_pvs_updated'));
         setActivePV(newPV);
       } else {
@@ -342,6 +351,7 @@ export const Commission: React.FC<CommissionProps> = ({
         const newPV: PV = {
           id: `pv-${Date.now()}`,
           directeurId: enseignantId,
+          structure: dirStructure,
           date,
           resultats: frozenResults,
           statut: 'a_signer',
@@ -351,11 +361,72 @@ export const Commission: React.FC<CommissionProps> = ({
         };
         curPvs.push(newPV);
         localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(curPvs));
-        setPvs(curPvs);
+        setPvs(curPvs.map(enrichirPVLecture));
         window.dispatchEvent(new CustomEvent('usmba_pvs_updated'));
         setActivePV(newPV);
       }
       logEvent({ id: enseignantId, nom: enseignantNom, role: 'enseignant' }, fr.journalActions.pvGenere, `PV séance du ${date} (Code ${newCode})`);
+    } catch {}
+  };
+
+  const handleDownloadPV = (pv: PV) => {
+    setActivePV(pv);
+    setTimeout(() => {
+      window.print();
+    }, 250);
+  };
+
+  const handleDeposerScanCommission = (pvId: string) => {
+    try {
+      const raw = localStorage.getItem('usmba_doctorat_pvs');
+      let curPvs: PV[] = raw ? JSON.parse(raw) : [];
+      const idx = curPvs.findIndex((p) => p.id === pvId);
+      if (idx !== -1) {
+        const nowIso = new Date().toISOString();
+        curPvs[idx].statut = 'signe';
+        curPvs[idx].scanDeposeLe = nowIso;
+        curPvs[idx].scanStatut = 'valide';
+        delete curPvs[idx].scanMotifRefus;
+        localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(curPvs));
+        setPvs(curPvs.map(enrichirPVLecture));
+        window.dispatchEvent(new CustomEvent('usmba_pvs_updated'));
+        logEvent(
+          { id: enseignantId, nom: enseignantNom, role: 'enseignant' },
+          fr.journalActions.scanPvDepose,
+          `PV-${curPvs[idx].date}-${(curPvs[idx].code || '').slice(0, 4)}`,
+          'Scan signé déposé par le directeur'
+        );
+        setFeedback({ id: pvId, text: fr.commission.scanDeposeToast });
+        setTimeout(() => setFeedback(null), 3000);
+      }
+    } catch {}
+  };
+
+  const handleEnvoyerStructure = (pvId: string) => {
+    const confirmed = window.confirm(fr.commission.confirmEnvoyerStructure);
+    if (!confirmed) return;
+
+    try {
+      const raw = localStorage.getItem('usmba_doctorat_pvs');
+      let curPvs: PV[] = raw ? JSON.parse(raw) : [];
+      const idx = curPvs.findIndex((p) => p.id === pvId);
+      if (idx !== -1) {
+        const nowIso = new Date().toISOString();
+        curPvs[idx].statut = 'envoye';
+        curPvs[idx].envoyeLe = nowIso;
+        curPvs[idx].envoyePar = enseignantNom;
+        localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(curPvs));
+        setPvs(curPvs.map(enrichirPVLecture));
+        window.dispatchEvent(new CustomEvent('usmba_pvs_updated'));
+        logEvent(
+          { id: enseignantId, nom: enseignantNom, role: 'enseignant' },
+          fr.journalActions.pvEnvoye,
+          `PV-${curPvs[idx].date}-${(curPvs[idx].code || '').slice(0, 4)}`,
+          `Transmis à la structure (${curPvs[idx].structure || ''})`
+        );
+        setFeedback({ id: pvId, text: fr.commission.pvEnvoyeToast });
+        setTimeout(() => setFeedback(null), 3000);
+      }
     } catch {}
   };
 
@@ -697,19 +768,47 @@ export const Commission: React.FC<CommissionProps> = ({
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       {existingPV ? (
-                        existingPV.rouvertLe ? (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-800 border border-amber-300">
-                            <RotateCcw size={13} className="text-amber-600" />
-                            <span>{fr.commission.reopenedBadge}</span>
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                            <FileSignature size={13} className="text-emerald-600" />
-                            <span>{fr.commission.pvStatuts.a_signer}</span>
-                          </span>
-                        )
+                        <>
+                          {!existingPV.structure && (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-800 border border-amber-300">
+                              <AlertTriangle size={13} className="text-amber-600 shrink-0" />
+                              <span>{fr.commission.structureManquante}</span>
+                            </span>
+                          )}
+                          {existingPV.rouvertLe ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-800 border border-amber-300">
+                              <RotateCcw size={13} className="text-amber-600" />
+                              <span>{fr.commission.reopenedBadge}</span>
+                            </span>
+                          ) : existingPV.scanStatut === 'refuse' ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-50 text-rose-800 border border-rose-300">
+                              <XCircle size={13} className="text-rose-600" />
+                              <span>Scan refusé</span>
+                            </span>
+                          ) : existingPV.publieLe || existingPV.statut === 'publie' ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-300">
+                              <CheckCircle2 size={13} className="text-emerald-600" />
+                              <span>{fr.commission.pvStatuts.publie}</span>
+                            </span>
+                          ) : existingPV.statut === 'envoye' ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-sky-50 text-sky-800 border border-sky-300">
+                              <Send size={13} className="text-sky-600" />
+                              <span>{fr.commission.pvStatuts.envoye}</span>
+                            </span>
+                          ) : existingPV.statut === 'signe' ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-indigo-50 text-indigo-800 border border-indigo-300">
+                              <FileCheck size={13} className="text-indigo-600" />
+                              <span>{fr.commission.pvStatuts.signe}</span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-800 border border-amber-300">
+                              <FileSignature size={13} className="text-amber-600" />
+                              <span>{fr.commission.pvStatuts.a_signer}</span>
+                            </span>
+                          )}
+                        </>
                       ) : allEvaluated ? (
                         <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
                           <CheckCircle2 size={12} />
@@ -728,6 +827,31 @@ export const Commission: React.FC<CommissionProps> = ({
                       )}
                     </div>
                   </div>
+
+                  {/* Exception 5 : PV signé non envoyé depuis plus de 48 h (directeur concerné uniquement) */}
+                  {existingPV &&
+                    existingPV.directeurId === enseignantId &&
+                    existingPV.statut === 'signe' &&
+                    existingPV.scanDeposeLe &&
+                    (Date.now() - new Date(existingPV.scanDeposeLe).getTime()) / (1000 * 60 * 60) > 48 && (
+                      <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-xs text-rose-900 flex items-center gap-2 font-semibold">
+                        <Clock size={16} className="text-rose-600 shrink-0" />
+                        <span>{fr.commission.exceptionSigneNonEnvoye}</span>
+                      </div>
+                  )}
+
+                  {/* Alerte si scan refusé par la Structure */}
+                  {existingPV?.scanStatut === 'refuse' && existingPV.scanMotifRefus && (
+                    <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-xs text-rose-900 space-y-1">
+                      <div className="flex items-center gap-1.5 font-bold">
+                        <XCircle size={14} className="text-rose-600" />
+                        <span>Scan refusé par la Structure</span>
+                      </div>
+                      <p className="text-[11px] text-rose-800 italic">
+                        Motif : « {existingPV.scanMotifRefus} ». Merci de déposer un nouveau scan signé.
+                      </p>
+                    </div>
+                  )}
 
                   {/* Liste des candidats de la séance */}
                   <div className="text-xs text-slate-600 space-y-1">
@@ -770,12 +894,12 @@ export const Commission: React.FC<CommissionProps> = ({
                     </div>
                   )}
 
-                  {/* Action PV : Générer, Consulter, Rouvrir ou Régénérer */}
+                  {/* Action PV : Générer, Consulter, Télécharger, Dépôt scan, Envoyer à la Structure */}
                   <div className="pt-2 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     {existingPV ? (
                       <>
                         <div className="space-y-0.5 text-xs text-slate-500">
-                          <div className="flex items-center gap-2 font-mono">
+                          <div className="flex items-center gap-2 font-mono flex-wrap">
                             <span className="font-bold text-slate-900">
                               PV-{existingPV.date}-{(existingPV.code || '').slice(0, 4)}
                             </span>
@@ -783,26 +907,86 @@ export const Commission: React.FC<CommissionProps> = ({
                             <span className="font-semibold text-slate-700 font-sans">
                               Version {existingPV.version ?? 1}
                             </span>
+                            {existingPV.structure ? (
+                              <span className="text-[11px] font-sans text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
+                                {existingPV.structure}
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-300 font-sans">
+                                <AlertTriangle size={11} className="text-amber-600" />
+                                <span>{fr.commission.structureManquante}</span>
+                              </span>
+                            )}
                           </div>
                           <p className="text-[11px] text-slate-400 font-mono">
                             Code : {existingPV.code}
                           </p>
                         </div>
 
-                        <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2">
-                          {/* Consulter le PV */}
+                        <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2 flex-wrap">
+                          {/* Télécharger le PV (Impression CSS avec référence, tableau, signatures, QR) */}
                           <button
                             type="button"
-                            onClick={() => setActivePV(existingPV)}
+                            onClick={() => handleDownloadPV(existingPV)}
                             className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition cursor-pointer"
                           >
-                            <Eye size={14} />
-                            <span>
-                              {existingPV.rouvertLe
-                                ? `Consulter (v${existingPV.version ?? 1})`
-                                : fr.commission.btnViewPV}
-                            </span>
+                            <Printer size={14} />
+                            <span>{fr.commission.btnTelechargerPV}</span>
                           </button>
+
+                          {/* Dépôt du scan signé si non signé ou refusé */}
+                          {(existingPV.statut === 'a_signer' || existingPV.scanStatut === 'refuse') && (
+                            <label className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-sky-800 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-xl transition cursor-pointer">
+                              <Upload size={14} />
+                              <span>{fr.commission.btnDeposerScanSigne}</span>
+                              <input
+                                type="file"
+                                accept=".pdf,image/*"
+                                className="hidden"
+                                onChange={() => handleDeposerScanCommission(existingPV.id)}
+                              />
+                            </label>
+                          )}
+
+                          {/* Bouton Envoyer à la Structure */}
+                          {existingPV.statut === 'signe' ? (
+                            <button
+                              type="button"
+                              onClick={() => handleEnvoyerStructure(existingPV.id)}
+                              className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl shadow-xs transition cursor-pointer active:scale-98"
+                            >
+                              <Send size={14} />
+                              <span>{fr.commission.btnEnvoyerStructure}</span>
+                            </button>
+                          ) : existingPV.statut === 'envoye' ? (
+                            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-sky-50 text-sky-800 border border-sky-200">
+                              <Send size={13} className="text-sky-600" />
+                              <span>
+                                {fr.commission.pvEnvoyeNotice}
+                                {existingPV.envoyeLe ? ` (${new Date(existingPV.envoyeLe).toLocaleDateString('fr-FR')})` : ''}
+                              </span>
+                            </div>
+                          ) : existingPV.statut === 'publie' || Boolean(existingPV.publieLe) ? (
+                            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                              <CheckCircle2 size={13} className="text-emerald-600" />
+                              <span>{fr.cedSeances.alreadyPublished}</span>
+                            </div>
+                          ) : (
+                            /* Statut 'a_signer' sans scan déposé : grisé avec mention */
+                            <div className="flex flex-col items-end">
+                              <button
+                                type="button"
+                                disabled
+                                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed"
+                              >
+                                <Send size={14} />
+                                <span>{fr.commission.btnEnvoyerStructure}</span>
+                              </button>
+                              <span className="text-[10px] text-slate-500 font-medium mt-1">
+                                {fr.commission.deposeScanDabord}
+                              </span>
+                            </div>
+                          )}
 
                           {/* Si le PV est rouvert : Bouton Régénérer */}
                           {existingPV.rouvertLe ? (
