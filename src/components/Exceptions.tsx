@@ -48,8 +48,14 @@ export const Exceptions: React.FC = () => {
     loadData();
     const handleSync = () => loadData();
     window.addEventListener('usmba_rapports_updated', handleSync);
+    window.addEventListener('usmba_creneaux_updated', handleSync);
+    window.addEventListener('usmba_account_updated', handleSync);
+    window.addEventListener('storage', handleSync);
     return () => {
       window.removeEventListener('usmba_rapports_updated', handleSync);
+      window.removeEventListener('usmba_creneaux_updated', handleSync);
+      window.removeEventListener('usmba_account_updated', handleSync);
+      window.removeEventListener('storage', handleSync);
     };
   }, []);
 

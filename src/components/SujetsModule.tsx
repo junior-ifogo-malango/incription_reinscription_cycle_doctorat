@@ -27,17 +27,18 @@ import {
   XCircle,
   Eye,
   Calendar,
+  Plus,
+  Archive,
 } from 'lucide-react';
-import { Sujet, Candidat, Enseignant, UserRole, Notification, dossierComplet, Periode } from '../types';
+import { Sujet, Candidat, Enseignant, UserRole, Notification, dossierComplet, Periode, QUOTA_SUJETS } from '../types';
 import { fr } from '../i18n/fr';
 import { storageService } from '../services/storage';
 import { StatusBadge } from './StatusBadge';
 import { AdvancedSearchModal, AdvancedFilterCriteria } from './AdvancedSearchModal';
 import { normalizeText } from './Autocomplete';
 import { normaliserTel } from '../utils/messages';
-import { MOCK_CANDIDATS, getPeriodeCandidature } from '../data/mockData';
 import { logEvent } from '../utils/journal';
-import { Dossier } from './Dossier';
+import { MOCK_CANDIDATS, getPeriodeCandidature } from '../data/mockData';
 
 const getDisciplineConfig = (discipline: string) => {
   const norm = discipline
@@ -1470,6 +1471,7 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
   /* VUE 1 : CATALOGUE DES SUJETS (ACCUEIL CANDIDAT)                           */
   /* ========================================================================= */
   const isCandidateOrVisitor = role === 'candidat' || role === 'visiteur';
+  const isTeacher = role === 'enseignant';
 
   return (
     <div>
@@ -1512,250 +1514,94 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
           </div>
 
           {teacherSubView === 'candidatures' && (
-            <div className="space-y-3">
-              <div className="bg-slate-900 text-white rounded-xl p-3.5 flex items-center justify-between">
-                <div>
-                  <h2 className="text-xs font-bold uppercase text-amber-300">
-                    {fr.sujetsModule.teacherCandidaturesTitle}
-                  </h2>
-                  <p className="text-[11px] text-slate-300">
-                    {activeTeacher.nom} ({activeTeacher.structure}) — {fr.sujetsModule.teacherCandidaturesSubtitle}
-                  </p>
+            selectedCandidatForDossier ? (
+              <DossierDirecteur
+                candidatId={selectedCandidatForDossier.id}
+                onRetour={() => setSelectedCandidatForDossier(null)}
+                enseignantId={activeTeacher.id}
+              />
+            ) : (
+              <div className="space-y-3">
+                <div className="bg-slate-900 text-white rounded-xl p-3.5 flex items-center justify-between">
+                  <div>
+                    <h2 className="text-xs font-bold uppercase text-amber-300">
+                      {fr.sujetsModule.teacherCandidaturesTitle}
+                    </h2>
+                    <p className="text-[11px] text-slate-300">
+                      {activeTeacher.nom} ({activeTeacher.structure}) — {fr.sujetsModule.teacherCandidaturesSubtitle}
+                    </p>
+                  </div>
+                  <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-slate-800 text-emerald-400">
+                    {teacherCandidatures.length}
+                  </span>
                 </div>
-                <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-slate-800 text-emerald-400">
-                  {teacherCandidatures.length}
-                </span>
-              </div>
 
-              {actionFeedback && (
-                <div className="bg-emerald-50 border border-emerald-300 text-emerald-900 rounded-xl p-3 text-xs flex items-center gap-2">
-                  <CheckCircle2 size={16} className="text-emerald-700 shrink-0" />
-                  <span>{actionFeedback}</span>
-                </div>
-              )}
+                {actionFeedback && (
+                  <div className="bg-emerald-50 border border-emerald-300 text-emerald-900 rounded-xl p-3 text-xs flex items-center gap-2">
+                    <CheckCircle2 size={16} className="text-emerald-700 shrink-0" />
+                    <span>{actionFeedback}</span>
+                  </div>
+                )}
 
-              {teacherCandidatures.length === 0 ? (
-                <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-xs text-slate-500">
-                  {fr.sujetsModule.teacherCandidaturesEmpty}
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {teacherCandidatures.map((item) => {
-                    const check = dossierComplet(item.candidat);
-                    const cinPiece = (item.candidat.pieces || []).find(
-                      (p) => p.type.toUpperCase() === 'CIN'
-                    );
-                    const cvPiece = (item.candidat.pieces || []).find(
-                      (p) => p.type.toUpperCase() === 'CV'
-                    );
-                    const cinOk = cinPiece?.statut === 'prouvee';
-                    const cvOk = cvPiece?.statut === 'prouvee';
-                    const cursusOk = Boolean(
-                      item.candidat.cursus ||
-                        (item.candidat.dossier?.casParticulier && item.candidat.dossier?.motif)
-                    );
+                {teacherCandidatures.length === 0 ? (
+                  <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-xs text-slate-500">
+                    {fr.sujetsModule.teacherCandidaturesEmpty}
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {teacherCandidatures.map((item) => {
+                      const check = dossierComplet(item.candidat);
 
-                    return (
-                      <div
-                        key={item.key}
-                        className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs space-y-3"
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <h3 className="text-sm font-bold text-slate-900">
+                      return (
+                        <div
+                          key={item.key}
+                          className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:border-slate-300 transition-colors"
+                        >
+                          <div className="min-w-0 space-y-1">
+                            <h3 className="text-sm font-bold text-slate-900 truncate">
                               {item.candidat.nom || 'Candidat'}
                             </h3>
-                            <p className="text-xs text-slate-600 font-medium mt-0.5">
+                            <p className="text-xs text-slate-700 font-medium line-clamp-1">
                               {item.sujet.titre}
                             </p>
-                            <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-1">
-                              <span>CNE : {item.candidat.cne || 'Non renseigné'}</span>
-                              <span>•</span>
-                              <span>Date : {item.date}</span>
-                            </div>
-                          </div>
-
-                          {item.statut === 'retenue' ? (
-                            <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 shrink-0">
-                              <CheckCircle2 size={13} className="text-emerald-700 shrink-0" />
-                              <span>{fr.sujetsModule.btnCandidatureValidee}</span>
-                            </span>
-                          ) : item.statut === 'a_corriger' ? (
-                            <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full bg-amber-100 text-amber-900 border border-amber-300 shrink-0">
-                              <AlertTriangle size={13} className="text-amber-700 shrink-0" />
-                              <span>{fr.sujetsModule.candidatureACorrigerBadge}</span>
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-sky-50 text-sky-800 border border-sky-200 shrink-0">
-                              <Clock size={12} className="text-sky-600 shrink-0" />
-                              <span>{fr.sujetsModule.candidatureDeposeeBadge}</span>
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Signalement d'anomalie actif */}
-                        {item.statut === 'a_corriger' &&
-                          (item.candidat.candidaturesAnomalies?.[item.sujet.id] || item.candidat.anomalie) && (
-                            <div className="bg-amber-50/80 border border-amber-200 rounded-lg p-2.5 text-xs text-amber-900 flex items-start gap-2">
-                              <AlertTriangle size={15} className="text-amber-600 shrink-0 mt-0.5" />
-                              <div>
-                                <span className="font-bold">Anomalie : </span>
-                                <span>
-                                  {(item.candidat.candidaturesAnomalies?.[item.sujet.id] || item.candidat.anomalie)?.piece} (
-                                  {(item.candidat.candidaturesAnomalies?.[item.sujet.id] || item.candidat.anomalie)?.nature}) —{' '}
-                                  {(item.candidat.candidaturesAnomalies?.[item.sujet.id] || item.candidat.anomalie)?.motif}
+                            <div>
+                              {check.complet ? (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                  <CheckCircle2 size={12} className="text-emerald-700 shrink-0" />
+                                  <span>{fr.dossierDirecteur.verdictComplet}</span>
                                 </span>
-                              </div>
-                            </div>
-                          )}
-
-                        {/* Liste de contrôle (coche ou croix + texte) pour cursus, CIN, CV */}
-                        <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-2">
-                          <p className="text-[11px] font-bold uppercase text-slate-500 tracking-wider">
-                            {fr.sujetsModule.checklistTitle}
-                          </p>
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                            {/* Cursus */}
-                            <div className="flex items-center gap-2 text-xs">
-                              {cursusOk ? (
-                                <>
-                                  <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
-                                  <span className="text-emerald-900 font-medium">
-                                    {fr.sujetsModule.checklistCursusOk}
-                                  </span>
-                                </>
                               ) : (
-                                <>
-                                  <XCircle size={16} className="text-rose-600 shrink-0" />
-                                  <span className="text-rose-900 font-medium">
-                                    {fr.sujetsModule.checklistCursusKo}
+                                <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
+                                  <AlertTriangle size={12} className="text-amber-700 shrink-0" />
+                                  <span>
+                                    {fr.dossierDirecteur.verdictIncomplet.replace('{manques}', check.manques.join(', '))}
                                   </span>
-                                </>
+                                </span>
                               )}
                             </div>
-
-                            {/* CIN */}
-                            <div className="flex items-center gap-2 text-xs">
-                              {cinOk ? (
-                                <>
-                                  <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
-                                  <span className="text-emerald-900 font-medium">
-                                    {fr.sujetsModule.checklistCinOk}
-                                  </span>
-                                </>
-                              ) : (
-                                <>
-                                  <XCircle size={16} className="text-rose-600 shrink-0" />
-                                  <span className="text-rose-900 font-medium">
-                                    {fr.sujetsModule.checklistCinKo}
-                                  </span>
-                                </>
-                              )}
-                            </div>
-
-                            {/* CV */}
-                            <div className="flex items-center gap-2 text-xs">
-                              {cvOk ? (
-                                <>
-                                  <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
-                                  <span className="text-emerald-900 font-medium">
-                                    {fr.sujetsModule.checklistCvOk}
-                                  </span>
-                                </>
-                              ) : (
-                                <>
-                                  <XCircle size={16} className="text-rose-600 shrink-0" />
-                                  <span className="text-rose-900 font-medium">
-                                    {fr.sujetsModule.checklistCvKo}
-                                  </span>
-                                </>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Actions : Bouton Valider + Bouton Signaler une anomalie + Consulter le dossier */}
-                        <div className="flex items-center justify-between gap-2 flex-wrap pt-1 border-t border-slate-100">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            {item.statut !== 'retenue' && (
-                              <>
-                                {item.statut === 'deposee' ? (
-                                  check.complet ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => handleValidateByTeacher(item.candidat, item.sujet, item.statut)}
-                                      className="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-700 hover:bg-emerald-800 text-white transition-all cursor-pointer shadow-xs active:scale-98"
-                                    >
-                                      {fr.sujetsModule.btnValiderCandidature}
-                                    </button>
-                                  ) : (
-                                    <div className="flex items-center gap-2 flex-wrap">
-                                      <button
-                                        type="button"
-                                        disabled
-                                        className="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed"
-                                      >
-                                        {fr.sujetsModule.btnValiderCandidature}
-                                      </button>
-                                      <span className="text-[11px] font-semibold text-rose-700">
-                                        {fr.sujetsModule.dossierIncompletRaison.replace(
-                                          '{manques}',
-                                          check.manques.join(', ')
-                                        )}
-                                      </span>
-                                    </div>
-                                  )
-                                ) : (
-                                  <div className="flex items-center gap-2 flex-wrap">
-                                    <button
-                                      type="button"
-                                      disabled
-                                      className="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed"
-                                    >
-                                      {fr.sujetsModule.btnValiderCandidature}
-                                    </button>
-                                    <span className="text-[11px] font-medium text-amber-800 italic">
-                                      En attente de correction par le candidat
-                                    </span>
-                                  </div>
-                                )}
-
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setAnomalieModalTarget({ candidat: item.candidat, sujet: item.sujet });
-                                    setAnomalieMotif('');
-                                    setAnomalieError(null);
-                                  }}
-                                  className="px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white transition-all cursor-pointer shadow-xs active:scale-98 flex items-center gap-1.5"
-                                >
-                                  <AlertTriangle size={13} />
-                                  <span>{fr.sujetsModule.btnSignalerAnomalie}</span>
-                                </button>
-                              </>
-                            )}
                           </div>
 
                           <button
                             type="button"
                             onClick={() => setSelectedCandidatForDossier(item.candidat)}
-                            className="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 transition cursor-pointer flex items-center gap-1.5"
+                            className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 transition cursor-pointer shrink-0 shadow-xs active:scale-98"
                           >
-                            <Eye size={14} />
-                            <span>{fr.sujetsModule.btnConsulterDossier}</span>
+                            {fr.dossierDirecteur.btnOuvrirDossier}
                           </button>
                         </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )
           )}
         </div>
       )}
 
-      {isCandidateOrVisitor && (
+      {(!isTeacher || teacherSubView === 'catalogue') && (
+        <>
+          {isCandidateOrVisitor && (
         <div className="mt-6 mb-4 relative overflow-hidden bg-white rounded-2xl border border-slate-200/80 shadow-xs text-center py-6 px-4 md:py-8">
           {/* Motif géométrique discret style zellige (étoile à 8 branches) */}
           <svg
@@ -2130,30 +1976,7 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
         </div>
       )}
       </div>
-
-      {selectedCandidatForDossier && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto p-4 sm:p-6 space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-200">
-              <div>
-                <h3 className="text-base font-bold text-slate-900">
-                  Dossier de {selectedCandidatForDossier.nom}
-                </h3>
-                <p className="text-xs text-slate-500">
-                  Consultation en lecture seule pour le directeur de thèse
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setSelectedCandidatForDossier(null)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
-              >
-                <X size={20} />
-              </button>
-            </div>
-            <Dossier candidatId={selectedCandidatForDossier.id} />
-          </div>
-        </div>
+      </>
       )}
 
       {anomalieModalTarget && (

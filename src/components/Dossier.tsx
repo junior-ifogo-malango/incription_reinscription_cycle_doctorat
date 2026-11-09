@@ -497,7 +497,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
       if (isQuota) {
         setFeedbackMessage({
           type: 'error',
-          text: fr.dossier.quotaExceeded,
+          text: fr.dossier.quotaExceededSupprime,
         });
       }
       return false;
@@ -618,8 +618,17 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Fichier > 2 Mo refusé avec le message « Fichier trop lourd (2 Mo max) », état inchangé
-    if (file.size > 2 * 1024 * 1024) {
+    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+
+    // PDF conservé tel quel, refusé au-delà de 1,5 Mo
+    if (isPdf && file.size > 1.5 * 1024 * 1024) {
+      setFeedbackMessage({ type: 'error', text: fr.dossier.fileTooHeavyPdf });
+      e.target.value = '';
+      return;
+    }
+
+    // Image : refusée au-delà de 2 Mo avant compression
+    if (!isPdf && file.size > 2 * 1024 * 1024) {
       setFeedbackMessage({ type: 'error', text: fr.dossier.fileTooHeavy });
       e.target.value = '';
       return;
@@ -627,26 +636,31 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
 
     setFeedbackMessage(null);
 
-    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
-
     const reader = new FileReader();
     reader.onload = async () => {
       let result = reader.result as string;
       if (!isPdf && (file.type.startsWith('image/') || result.startsWith('data:image'))) {
         result = await compressImageDataUrl(result);
       }
-      if (type.toUpperCase() === 'CIN') {
-        handleUpdatePiece(type, {
-          statut: 'declaree',
-          source: 'televersement',
-          fichier: result,
-        });
-        demarrerOcr(result);
-      } else {
-        handleUpdatePiece(type, {
-          statut: 'prouvee',
-          source: 'televersement',
-          fichier: result,
+      try {
+        if (type.toUpperCase() === 'CIN') {
+          handleUpdatePiece(type, {
+            statut: 'declaree',
+            source: 'televersement',
+            fichier: result,
+          });
+          demarrerOcr(result);
+        } else {
+          handleUpdatePiece(type, {
+            statut: 'prouvee',
+            source: 'televersement',
+            fichier: result,
+          });
+        }
+      } catch (err: any) {
+        setFeedbackMessage({
+          type: 'error',
+          text: fr.dossier.quotaExceededSupprime,
         });
       }
     };

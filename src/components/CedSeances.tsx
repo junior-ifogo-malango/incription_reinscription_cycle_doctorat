@@ -195,9 +195,11 @@ export const CedSeances: React.FC = () => {
     loadData();
     const handleSync = () => loadData();
     window.addEventListener('usmba_pvs_updated', handleSync);
+    window.addEventListener('usmba_account_updated', handleSync);
     window.addEventListener('storage', handleSync);
     return () => {
       window.removeEventListener('usmba_pvs_updated', handleSync);
+      window.removeEventListener('usmba_account_updated', handleSync);
       window.removeEventListener('storage', handleSync);
     };
   }, []);
@@ -493,7 +495,7 @@ export const CedSeances: React.FC = () => {
                                 : 'text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 cursor-pointer'
                             }`}
                           >
-                            Refuser scan
+                            {fr.cedSeances.btnRefuserScan}
                           </button>
                         </div>
                         {isDirecteurOfPv && (

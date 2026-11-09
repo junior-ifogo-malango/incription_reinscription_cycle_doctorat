@@ -24,17 +24,19 @@ import {
   X,
   UserCog,
   Users,
+  Eye,
 } from 'lucide-react';
-import { UserRole, Candidat, Enseignant, Sujet, Piece, Creneau, Notification, type Dossier as DossierData, Rapport, Vote, CandidatureStatut } from './types';
+import { UserRole, Role, Compte, Candidat, Enseignant, Sujet, Piece, Creneau, Notification, type Dossier as DossierData, Rapport, Vote, CandidatureStatut, normaliserRole, getCompteRoles, dossierComplet } from './types';
 import { storageService } from './services/storage';
-import { INITIAL_RAPPORTS, DEMO_DOCTORANT_NADIA, aujourdhui } from './data/mockData';
+import { INITIAL_RAPPORTS, DEMO_DOCTORANT_NADIA, aujourdhui, getComptes, MOCK_CANDIDATS } from './data/mockData';
 import { fr } from './i18n/fr';
 import { LoginModal } from './components/LoginModal';
-import { TabType } from './components/MobileNav';
+import { MobileNav, TabType } from './components/MobileNav';
 import { Notifications } from './components/Notifications';
 import { StatusBadge } from './components/StatusBadge';
 import { SujetsModule } from './components/SujetsModule';
 import { Dossier } from './components/Dossier';
+import { DossierDirecteur } from './components/DossierDirecteur';
 import { Entretiens } from './components/Entretiens';
 import { MesCreneaux } from './components/MesCreneaux';
 import { Exceptions } from './components/Exceptions';
@@ -107,10 +109,49 @@ function useEstMobile(): boolean {
   return estMobile;
 }
 
+function formatDateJJMM(d?: string): string {
+  if (!d) return '';
+  if (d.includes('/')) {
+    const parts = d.split('/');
+    if (parts.length >= 2) return `${parts[0].padStart(2, '0')}/${parts[1].padStart(2, '0')}`;
+  }
+  try {
+    const dt = new Date(d);
+    if (!isNaN(dt.getTime())) {
+      const day = String(dt.getDate()).padStart(2, '0');
+      const month = String(dt.getMonth() + 1).padStart(2, '0');
+      return `${day}/${month}`;
+    }
+  } catch {}
+  return d;
+}
+
 export default function App() {
   const estMobile = useEstMobile();
   const [role, setRole] = useState<UserRole>('candidat');
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [activeCompte, setActiveCompte] = useState<Compte | null>(() => {
+    try {
+      const raw = localStorage.getItem('usmba_active_account');
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const userRoles: Role[] = useMemo(() => {
+    if (!isLoggedIn) return ['candidat'];
+    if (activeCompte) {
+      return getCompteRoles(activeCompte);
+    }
+    return role ? [role] : ['candidat'];
+  }, [isLoggedIn, activeCompte, role]);
+
+  const normalizedRoles: UserRole[] = useMemo(() => {
+    const list = userRoles.map((r) => normaliserRole(r));
+    return Array.from(new Set(list));
+  }, [userRoles]);
+
   const [isLoginOpen, setIsLoginOpen] = useState(false);
   const [restrictionMsg, setRestrictionMsg] = useState<string | undefined>(undefined);
   const [tab, setTab] = useState<AppTabType>('sujets');
@@ -134,6 +175,7 @@ export default function App() {
   const [teacherFeedbackMsg, setTeacherFeedbackMsg] = useState<string | null>(null);
   const [showToast, setShowToast] = useState(false);
   const [simulatedStatuts, setSimulatedStatuts] = useState<Record<string, 'deposee' | 'retenue'>>({});
+  const [selectedCandidatForDossier, setSelectedCandidatForDossier] = useState<{ id: string; nom: string } | null>(null);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [demoDateInput, setDemoDateInput] = useState<string>(() => {
@@ -233,10 +275,54 @@ export default function App() {
     }
   };
 
-  const handleLoginSuccess = (userRole: UserRole, _email?: string, candidateData?: Candidat) => {
+  const handleLoginSuccess = (
+    userRole: UserRole,
+    userEmail?: string,
+    candidateData?: Candidat,
+    connectedCompte?: Compte
+  ) => {
     setIsLoggedIn(true);
     setRole(userRole);
     setRestrictionMsg(undefined);
+
+    let compteToStore = connectedCompte || null;
+    if (!compteToStore && userEmail) {
+      const allComptes = getComptes();
+      compteToStore =
+        allComptes.find((c) => c.email && c.email.toLowerCase().trim() === userEmail.toLowerCase().trim()) || null;
+    }
+    if (!compteToStore && userRole === 'enseignant') {
+      compteToStore = {
+        id: 'ens-1',
+        nom: 'Pr. Karim El Amrani',
+        email: userEmail || 'prof@demo.ma',
+        role: 'enseignant',
+        roles: ['directeur'],
+        structure: 'LISAC - FSDM Fès',
+        statut: 'actif',
+        enseignantId: 'ens-1',
+      };
+    } else if (!compteToStore && userRole === 'directeur_ced') {
+      compteToStore = {
+        id: 'dir-ced',
+        nom: 'Direction CED',
+        email: userEmail || 'ced@demo.ma',
+        role: 'directeur_ced',
+        roles: ['structure'],
+        structure: 'CED USMBA',
+        statut: 'actif',
+      };
+    }
+    setActiveCompte(compteToStore);
+    try {
+      if (compteToStore) {
+        localStorage.setItem('usmba_active_account', JSON.stringify(compteToStore));
+      } else {
+        localStorage.removeItem('usmba_active_account');
+      }
+      window.dispatchEvent(new CustomEvent('usmba_account_updated'));
+      window.dispatchEvent(new CustomEvent('storage'));
+    } catch {}
 
     if (userRole === 'candidat') {
       if (candidateData) {
@@ -263,6 +349,12 @@ export default function App() {
   const handleLogout = () => {
     setIsLoggedIn(false);
     setRole('candidat');
+    setActiveCompte(null);
+    try {
+      localStorage.removeItem('usmba_active_account');
+      window.dispatchEvent(new CustomEvent('usmba_account_updated'));
+      window.dispatchEvent(new CustomEvent('storage'));
+    } catch {}
     const visitor: Candidat = {
       id: 'visiteur-001',
       nom: '',
@@ -291,7 +383,7 @@ export default function App() {
     }
 
     // Protection stricte Admin : navigation exclusive entre ses 2 onglets, aucun accès aux autres écrans
-    if (role === 'admin') {
+    if (normalizedRoles.includes('admin') && !normalizedRoles.some((r) => r !== 'admin')) {
       if (targetTab === 'admin_comptes' || targetTab === 'admin_journal') {
         setTab(targetTab);
       }
@@ -299,7 +391,7 @@ export default function App() {
     }
 
     // Protection des onglets admin pour les non-admins
-    if (targetTab === 'admin_comptes' || targetTab === 'admin_journal') {
+    if ((targetTab === 'admin_comptes' || targetTab === 'admin_journal') && !normalizedRoles.includes('admin')) {
       setRestrictionMsg(fr.auth.accessRestricted);
       setIsLoginOpen(true);
       return;
@@ -318,19 +410,25 @@ export default function App() {
       return;
     }
 
-    if (targetTab === 'dossier' && role !== 'candidat') {
+    if (targetTab === 'dossier' && !normalizedRoles.includes('candidat')) {
       setRestrictionMsg(fr.auth.accessRestricted);
       setIsLoginOpen(true);
       return;
     }
 
-    if (targetTab === 'candidatures_recues' && role !== 'enseignant') {
+    if (targetTab === 'candidatures_recues' && !normalizedRoles.includes('enseignant')) {
       setRestrictionMsg(fr.auth.accessRestricted);
       setIsLoginOpen(true);
       return;
     }
 
-    if (targetTab === 'commission' && role !== 'enseignant') {
+    if (targetTab === 'entretiens' && !normalizedRoles.includes('candidat') && !normalizedRoles.includes('enseignant')) {
+      setRestrictionMsg(fr.auth.accessRestricted);
+      setIsLoginOpen(true);
+      return;
+    }
+
+    if (targetTab === 'commission' && !normalizedRoles.includes('enseignant')) {
       setRestrictionMsg(fr.auth.accessRestricted);
       setIsLoginOpen(true);
       return;
@@ -338,25 +436,26 @@ export default function App() {
 
     if (
       (targetTab === 'ced' || targetTab === 'seances' || targetTab === 'reinscriptions') &&
-      role !== 'directeur_ced'
+      !normalizedRoles.includes('directeur_ced')
     ) {
       setRestrictionMsg(fr.auth.accessRestricted);
       setIsLoginOpen(true);
       return;
     }
 
-    if ((targetTab === 'rapport' || targetTab === 'suivi') && role !== 'doctorant') {
+    if ((targetTab === 'rapport' || targetTab === 'suivi') && !normalizedRoles.includes('doctorant')) {
       setRestrictionMsg(fr.auth.accessRestricted);
       setIsLoginOpen(true);
       return;
     }
 
-    if (targetTab === 'guichet' && role !== 'agent') {
+    if (targetTab === 'guichet' && !normalizedRoles.includes('agent')) {
       setRestrictionMsg(fr.auth.accessRestricted);
       setIsLoginOpen(true);
       return;
     }
 
+    setSelectedCandidatForDossier(null);
     setTab(targetTab);
   };
 
@@ -746,239 +845,172 @@ export default function App() {
               </span>
             </div>
 
-            {/* Sélecteur Date du jour (démo) dans l'en-tête */}
-            <div className="flex items-center gap-1.5 bg-emerald-900/90 border border-emerald-800 rounded-lg px-2.5 py-1 text-xs shadow-inner">
-              <Calendar size={13} className="text-amber-300 shrink-0" />
-              <label htmlFor="header-demo-date" className="text-[11px] font-semibold text-emerald-100 hidden sm:inline whitespace-nowrap cursor-pointer">
-                {fr.demoDate.label} :
-              </label>
-              <input
-                id="header-demo-date"
-                type="date"
-                aria-label={fr.demoDate.label}
-                value={demoDateInput || aujourdhui()}
-                onChange={(e) => handleDemoDateChange(e.target.value)}
-                className="bg-white text-slate-900 rounded px-1.5 py-0.5 text-xs font-mono font-medium focus:outline-none focus:ring-1 focus:ring-amber-400 cursor-pointer"
-              />
-              {Boolean(demoDateInput) && (
-                <button
-                  type="button"
-                  onClick={handleResetDemoDate}
-                  className="text-[11px] font-bold text-amber-300 hover:text-amber-200 underline cursor-pointer ml-0.5 transition-colors whitespace-nowrap"
-                  title={fr.demoDate.reset}
-                >
-                  {fr.demoDate.reset}
-                </button>
-              )}
-            </div>
-
             {/* Droite : Menu desktop + Icône panier */}
             <div className="flex items-center gap-2 sm:gap-3">
               {/* Menu horizontal sur tablette et PC (≥768px) */}
               <nav className="hidden md:flex items-center gap-1">
-                {/* Onglets Candidat */}
-                {isLoggedIn && role === 'candidat' && (
+                {/* Onglets selon l'union des rôles du compte (sans doublon, sans sélecteur) */}
+                {isLoggedIn && (
                   <>
-                    <button
-                      onClick={() => handleTabChange('sujets')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
-                        tab === 'sujets'
-                          ? 'bg-emerald-800 text-amber-300'
-                          : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
-                      }`}
-                    >
-                      <span>{fr.nav.sujets}</span>
-                    </button>
-                    <button
-                      onClick={() => handleTabChange('dossier')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
-                        tab === 'dossier'
-                          ? 'bg-emerald-800 text-amber-300'
-                          : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
-                      }`}
-                    >
-                      <span>{fr.nav.dossier}</span>
-                      {isRetenuWithUnproven && (
-                        <span
-                          className="px-1.5 py-0.5 rounded-full bg-amber-500 text-white font-bold text-[10px] flex items-center gap-1 shadow-xs"
-                          title={`${piecesAProverCount} ${fr.dossier.preuvesAFournirCount}`}
+                    {/* Sujets : candidat ou enseignant */}
+                    {(normalizedRoles.includes('candidat') || normalizedRoles.includes('enseignant')) && (
+                      <button
+                        onClick={() => handleTabChange('sujets')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                          tab === 'sujets'
+                            ? 'bg-emerald-800 text-amber-300'
+                            : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
+                        }`}
+                      >
+                        <span>{normalizedRoles.includes('enseignant') ? fr.nav.mesSujets : fr.nav.sujets}</span>
+                      </button>
+                    )}
+
+                    {/* Dossier : candidat */}
+                    {normalizedRoles.includes('candidat') && (
+                      <button
+                        onClick={() => handleTabChange('dossier')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                          tab === 'dossier'
+                            ? 'bg-emerald-800 text-amber-300'
+                            : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
+                        }`}
+                      >
+                        <span>{fr.nav.dossier}</span>
+                        {isRetenuWithUnproven && (
+                          <span
+                            className="px-1.5 py-0.5 rounded-full bg-amber-500 text-white font-bold text-[10px] flex items-center gap-1 shadow-xs"
+                            title={`${piecesAProverCount} ${fr.dossier.preuvesAFournirCount}`}
+                          >
+                            <AlertCircle size={10} className="shrink-0" />
+                            <span>{piecesAProverCount}</span>
+                          </span>
+                        )}
+                      </button>
+                    )}
+
+                    {/* Candidatures reçues : enseignant */}
+                    {normalizedRoles.includes('enseignant') && (
+                      <button
+                        onClick={() => handleTabChange('candidatures_recues')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                          tab === 'candidatures_recues'
+                            ? 'bg-emerald-800 text-amber-300'
+                            : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
+                        }`}
+                      >
+                        <span>{fr.nav.candidatures}</span>
+                        {candidaturesEnseignant.length > 0 && (
+                          <span className="px-1.5 py-0.2 rounded-full bg-emerald-600 text-white font-bold text-[10px]">
+                            {candidaturesEnseignant.length}
+                          </span>
+                        )}
+                      </button>
+                    )}
+
+                    {/* Entretiens / Créneaux : candidat ou enseignant */}
+                    {(normalizedRoles.includes('candidat') || normalizedRoles.includes('enseignant')) && (
+                      <button
+                        onClick={() => handleTabChange('entretiens')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                          tab === 'entretiens'
+                            ? 'bg-emerald-800 text-amber-300'
+                            : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
+                        }`}
+                      >
+                        <span>{normalizedRoles.includes('enseignant') ? fr.nav.mesCreneaux : fr.nav.entretiens}</span>
+                      </button>
+                    )}
+
+                    {/* Commission : enseignant */}
+                    {normalizedRoles.includes('enseignant') && (
+                      <button
+                        onClick={() => handleTabChange('commission')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                          tab === 'commission'
+                            ? 'bg-emerald-800 text-amber-300'
+                            : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
+                        }`}
+                      >
+                        <Award size={14} />
+                        <span>{fr.commission.tabTitle}</span>
+                      </button>
+                    )}
+
+                    {/* Séances : directeur_ced */}
+                    {normalizedRoles.includes('directeur_ced') && (
+                      <button
+                        onClick={() => handleTabChange('seances')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                          tab === 'seances'
+                            ? 'bg-emerald-800 text-amber-300'
+                            : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
+                        }`}
+                      >
+                        <span>{fr.nav.seances}</span>
+                      </button>
+                    )}
+
+                    {/* Réinscriptions : directeur_ced */}
+                    {normalizedRoles.includes('directeur_ced') && (
+                      <button
+                        onClick={() => handleTabChange('reinscriptions')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                          tab === 'reinscriptions'
+                            ? 'bg-emerald-800 text-amber-300'
+                            : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
+                        }`}
+                      >
+                        <span>{fr.nav.reinscriptions}</span>
+                      </button>
+                    )}
+
+                    {/* Exceptions : directeur_ced */}
+                    {normalizedRoles.includes('directeur_ced') && (
+                      <button
+                        onClick={() => handleTabChange('ced')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                          tab === 'ced'
+                            ? 'bg-emerald-800 text-amber-300'
+                            : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
+                        }`}
+                      >
+                        <span>{fr.nav.exceptionsCed}</span>
+                        {alertesCreneaux.length > 0 && (
+                          <span className="px-1.5 py-0.2 rounded-full bg-rose-500 text-white font-bold text-[10px]">
+                            {alertesCreneaux.length}
+                          </span>
+                        )}
+                      </button>
+                    )}
+
+                    {/* Scolarité (Admin) */}
+                    {normalizedRoles.includes('admin') && (
+                      <>
+                        <button
+                          onClick={() => handleTabChange('admin_comptes')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                            tab === 'admin_comptes'
+                              ? 'bg-purple-800 text-purple-200'
+                              : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
+                          }`}
                         >
-                          <AlertCircle size={10} className="shrink-0" />
-                          <span>{piecesAProverCount}</span>
-                        </span>
-                      )}
-                    </button>
-                    <button
-                      onClick={() => handleTabChange('entretiens')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
-                        tab === 'entretiens'
-                          ? 'bg-emerald-800 text-amber-300'
-                          : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
-                      }`}
-                    >
-                      <span>{fr.nav.entretiens}</span>
-                    </button>
-                  </>
-                )}
-
-                {/* Onglets Enseignant */}
-                {isLoggedIn && role === 'enseignant' && (
-                  <>
-                    <button
-                      onClick={() => handleTabChange('sujets')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
-                        tab === 'sujets'
-                          ? 'bg-emerald-800 text-amber-300'
-                          : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
-                      }`}
-                    >
-                      <span>{fr.nav.mesSujets}</span>
-                    </button>
-                    <button
-                      onClick={() => handleTabChange('candidatures_recues')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
-                        tab === 'candidatures_recues'
-                          ? 'bg-emerald-800 text-amber-300'
-                          : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
-                      }`}
-                    >
-                      <span>{fr.nav.candidatures}</span>
-                      {candidaturesEnseignant.length > 0 && (
-                        <span className="px-1.5 py-0.2 rounded-full bg-emerald-600 text-white font-bold text-[10px]">
-                          {candidaturesEnseignant.length}
-                        </span>
-                      )}
-                    </button>
-                    <button
-                      onClick={() => handleTabChange('entretiens')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
-                        tab === 'entretiens'
-                          ? 'bg-emerald-800 text-amber-300'
-                          : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
-                      }`}
-                    >
-                      <span>{fr.nav.mesCreneaux}</span>
-                    </button>
-                    <button
-                      onClick={() => handleTabChange('commission')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
-                        tab === 'commission'
-                          ? 'bg-emerald-800 text-amber-300'
-                          : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
-                      }`}
-                    >
-                      <Award size={14} />
-                      <span>{fr.commission.tabTitle}</span>
-                    </button>
-                  </>
-                )}
-                {/* Onglets Doctorant (masqué) */}
-                {false && isLoggedIn && role === 'doctorant' && (
-                  <>
-                    <button
-                      onClick={() => handleTabChange('rapport')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
-                        tab === 'rapport'
-                          ? 'bg-emerald-800 text-amber-300'
-                          : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
-                      }`}
-                    >
-                      <span>{fr.nav.rapport}</span>
-                    </button>
-                    <button
-                      onClick={() => handleTabChange('suivi')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
-                        tab === 'suivi'
-                          ? 'bg-emerald-800 text-amber-300'
-                          : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
-                      }`}
-                    >
-                      <span>{fr.nav.suivi}</span>
-                    </button>
-                  </>
-                )}
-
-                {/* Onglets CED */}
-                {isLoggedIn && role === 'directeur_ced' && (
-                  <>
-                    <button
-                      onClick={() => handleTabChange('seances')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
-                        tab === 'seances'
-                          ? 'bg-emerald-800 text-amber-300'
-                          : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
-                      }`}
-                    >
-                      <span>{fr.nav.seances}</span>
-                    </button>
-                    <button
-                      onClick={() => handleTabChange('reinscriptions')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
-                        tab === 'reinscriptions'
-                          ? 'bg-emerald-800 text-amber-300'
-                          : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
-                      }`}
-                    >
-                      <span>{fr.nav.reinscriptions}</span>
-                    </button>
-                    <button
-                      onClick={() => handleTabChange('ced')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
-                        tab === 'ced'
-                          ? 'bg-emerald-800 text-amber-300'
-                          : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
-                      }`}
-                    >
-                      <span>{fr.nav.exceptionsCed}</span>
-                      {alertesCreneaux.length > 0 && (
-                        <span className="px-1.5 py-0.2 rounded-full bg-rose-500 text-white font-bold text-[10px]">
-                          {alertesCreneaux.length}
-                        </span>
-                      )}
-                    </button>
-                  </>
-                )}
-
-                {/* Onglet Agent Guichet (masqué) */}
-                {false && isLoggedIn && role === 'agent' && (
-                  <button
-                    onClick={() => handleTabChange('guichet')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
-                      tab === 'guichet'
-                        ? 'bg-emerald-800 text-amber-300'
-                        : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
-                    }`}
-                  >
-                    <UserCog size={14} />
-                    <span>{fr.nav.guichet}</span>
-                  </button>
-                )}
-
-                {/* Onglets Scolarité (Admin) */}
-                {isLoggedIn && role === 'admin' && (
-                  <>
-                    <button
-                      onClick={() => handleTabChange('admin_comptes')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
-                        tab === 'admin_comptes'
-                          ? 'bg-purple-800 text-purple-200'
-                          : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
-                      }`}
-                    >
-                      <Users size={14} />
-                      <span>{fr.nav.adminComptes}</span>
-                    </button>
-                    <button
-                      onClick={() => handleTabChange('admin_journal')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
-                        tab === 'admin_journal'
-                          ? 'bg-purple-800 text-purple-200'
-                          : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
-                      }`}
-                    >
-                      <FileText size={14} />
-                      <span>{fr.nav.adminJournal}</span>
-                    </button>
+                          <Users size={14} />
+                          <span>{fr.nav.adminComptes}</span>
+                        </button>
+                        <button
+                          onClick={() => handleTabChange('admin_journal')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                            tab === 'admin_journal'
+                              ? 'bg-purple-800 text-purple-200'
+                              : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
+                          }`}
+                        >
+                          <FileText size={14} />
+                          <span>{fr.nav.adminJournal}</span>
+                        </button>
+                      </>
+                    )}
                   </>
                 )}
 
@@ -1105,13 +1137,25 @@ export default function App() {
                         <div className="px-3 py-2 border-b border-slate-100">
                           <p className="font-bold text-slate-900 truncate">{currentUserName || fr.auth.accountMenu}</p>
                           <span className="text-[10px] font-semibold uppercase text-emerald-700">
-                            {role === 'candidat'
-                              ? fr.auth.roleCandidatBadge
-                              : role === 'enseignant'
-                              ? fr.auth.roleEnseignantBadge
-                              : role === 'admin'
-                              ? fr.auth.roleAdminBadge
-                              : fr.auth.roleCedBadge}
+                            {userRoles
+                              .map((r) =>
+                                r === 'candidat'
+                                  ? fr.auth.roleCandidatBadge
+                                  : r === 'enseignant'
+                                  ? fr.auth.roleEnseignantBadge
+                                  : r === 'admin'
+                                  ? fr.auth.roleAdminBadge
+                                  : r === 'directeur'
+                                  ? fr.auth.rolesLabels.directeur
+                                  : r === 'structure'
+                                  ? fr.auth.rolesLabels.structure
+                                  : r === 'directeur_ced'
+                                  ? fr.auth.rolesLabels.directeur_ced
+                                  : r === 'doctorant'
+                                  ? fr.auth.rolesLabels.doctorant
+                                  : fr.auth.roleCedBadge
+                              )
+                              .join(' • ')}
                           </span>
                           {role === 'enseignant' && (
                             <div className="mt-1.5 pt-1.5 border-t border-slate-100">
@@ -1298,6 +1342,7 @@ export default function App() {
                   setRole('candidat');
                 }
               }}
+              onUpdateSujets={(newSujets) => setSujets(newSujets)}
               initialView="catalog"
               onNavigateTab={handleTabChange}
             />
@@ -1318,6 +1363,7 @@ export default function App() {
                   setRole('candidat');
                 }
               }}
+              onUpdateSujets={(newSujets) => setSujets(newSujets)}
               initialView="panier"
               onNavigateTab={handleTabChange}
             />
@@ -1325,6 +1371,13 @@ export default function App() {
 
           {/* Onglet Enseignant : Candidatures reçues */}
           {tab === 'candidatures_recues' && (
+            selectedCandidatForDossier ? (
+              <DossierDirecteur
+                candidatId={selectedCandidatForDossier.id}
+                onRetour={() => setSelectedCandidatForDossier(null)}
+                enseignantId={activeEnseignant.id}
+              />
+            ) : (
             <div className="space-y-3">
               <div className="bg-slate-900 text-white rounded-xl p-3 flex items-center justify-between">
                 <div>
@@ -1345,74 +1398,64 @@ export default function App() {
                   <p className="text-xs text-slate-500">{fr.sujetsModule.teacherCandidaturesEmpty}</p>
                 </div>
               ) : (
-                <div className="space-y-2.5">
-                  {candidaturesEnseignant.map((item) => (
-                    <div key={item.key} className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-xs space-y-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-bold text-slate-900">{item.candidatNom}</span>
-                        {item.statut === 'deposee' ? (
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-[10px] text-slate-400 italic">
-                              {fr.dossier.simulationMention}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => handleToggleRetenir(item)}
-                              className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-emerald-700 hover:bg-emerald-800 text-white transition-colors cursor-pointer active:scale-98"
-                            >
-                              {fr.dossier.btnRetenir}
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-2">
-                            <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
-                              <CheckCircle2 size={12} className="text-emerald-700 shrink-0" />
-                              <span>{fr.dossier.badgeRetenu}</span>
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => handleToggleRetenir(item)}
-                              className="text-[11px] text-slate-500 hover:text-rose-600 underline underline-offset-2 transition-colors cursor-pointer"
-                            >
-                              {fr.dossier.btnAnnuler}
-                            </button>
-                          </div>
-                        )}
-                      </div>
+                <div className="space-y-3">
+                  {candidaturesEnseignant.map((item) => {
+                    const itemCandidate = item.isCurrentCandidat
+                      ? candidat
+                      : (MOCK_CANDIDATS.find((c) => c.id === item.candidatId) || {
+                          id: item.candidatId,
+                          nom: item.candidatNom,
+                          cne: item.cne,
+                          pieces: [
+                            { type: 'CIN', statut: item.piecesProuvees >= 1 ? 'prouvee' : 'absente' },
+                            { type: 'CV', statut: item.piecesProuvees >= 2 ? 'prouvee' : 'absente' },
+                            { type: 'DIPLOME', statut: item.piecesProuvees >= 3 ? 'prouvee' : 'absente', source: 'apogee' },
+                          ],
+                        });
+                    const check = dossierComplet(itemCandidate as any);
 
-                      <p className="text-xs text-slate-700 font-medium">{item.sujetTitre}</p>
-
-                      <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
-                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md">
-                          <FileText size={11} className="text-slate-500" />
-                          <span>{item.piecesDeclarees}/4 {fr.dossier.piecesDeclarees}</span>
-                        </span>
-
-                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
-                          <CheckCircle2 size={11} className="text-emerald-600" />
-                          <span>{item.piecesProuvees}/4 {fr.dossier.piecesProuvees}</span>
-                        </span>
-
-                        {item.motifCasParticulier && (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-purple-700 bg-purple-50 border border-purple-200 px-2 py-0.5 rounded-md">
-                            <span>Cas : {item.motifCasParticulier}</span>
+                    return (
+                      <div
+                        key={item.key}
+                        className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-xs space-y-3 hover:border-slate-300 transition-colors"
+                      >
+                        {/* 4. Carte candidat (onglet Candidatures) : retire le titre du sujet. Nom, date JJ/MM, une pastille d'état, "Ouvrir le dossier". */}
+                        <div className="flex items-center justify-between gap-2">
+                          <h3 className="text-sm font-bold text-slate-900 truncate">{item.candidatNom}</h3>
+                          <span className="text-xs font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md shrink-0">
+                            {formatDateJJMM(item.date)}
                           </span>
-                        )}
+                        </div>
 
-                        {item.guichet && (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">
-                            <AlertCircle size={11} className="text-amber-600" />
-                            <span>{fr.dossier.guichetBadge}</span>
-                          </span>
-                        )}
-                      </div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {check.complet ? (
+                            <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
+                              <CheckCircle2 size={13} className="text-emerald-700 shrink-0" />
+                              <span>{fr.dossierDirecteur.verdictComplet}</span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
+                              <AlertCircle size={13} className="text-amber-700 shrink-0" />
+                              <span>
+                                {fr.dossierDirecteur.verdictIncomplet.replace('{manques}', check.manques.join(', '))}
+                              </span>
+                            </span>
+                          )}
+                        </div>
 
-                      <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1.5 border-t border-slate-100">
-                        <span>{item.cne}</span>
-                        <span>{item.date}</span>
+                        <div className="pt-2 border-t border-slate-100 flex items-center justify-end">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedCandidatForDossier({ id: item.candidatId, nom: item.candidatNom })}
+                            className="px-3.5 py-2 rounded-xl text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 transition cursor-pointer flex items-center gap-1.5 active:scale-98 shadow-xs"
+                          >
+                            <Eye size={14} />
+                            <span>{fr.dossierDirecteur.btnOuvrirDossier}</span>
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
 
@@ -1565,6 +1608,7 @@ export default function App() {
                 )}
               </div>
             </div>
+            )
           )}
 
           {/* Onglet « Mon dossier » (candidat) */}
@@ -1640,349 +1684,23 @@ export default function App() {
           </button>
         </footer>
 
-        {/* Barre de navigation mobile inférieure tactile (masquée sur md: et plus) */}
-        <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200 shadow-lg safe-bottom">
-          <div className="max-w-md md:max-w-3xl lg:max-w-5xl mx-auto grid grid-flow-col auto-cols-fr px-2 py-1.5">
-            {/* Non connecté */}
-            {!isLoggedIn && (
-              <>
-                <button
-                  onClick={() => handleTabChange('sujets')}
-                  type="button"
-                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
-                    tab === 'sujets' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  <div className="relative">
-                    <Search size={18} />
-                  </div>
-                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
-                    {fr.nav.court.sujets}
-                  </span>
-                  {tab === 'sujets' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
-                </button>
-                <button
-                  onClick={() => setIsLoginOpen(true)}
-                  type="button"
-                  className="relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer text-slate-500 hover:text-slate-800"
-                >
-                  <div className="relative">
-                    <LogIn size={18} />
-                  </div>
-                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
-                    {fr.auth.login}
-                  </span>
-                </button>
-                <button
-                  onClick={() => setMobileMenuOpen(true)}
-                  type="button"
-                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
-                    mobileMenuOpen ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  <div className="relative">
-                    <User size={18} />
-                  </div>
-                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
-                    {fr.nav.court.compte}
-                  </span>
-                </button>
-              </>
-            )}
-
-            {/* DOCTORANT : barre du bas = Rapport, Suivi, Compte (masqué) */}
-            {false && isLoggedIn && role === 'doctorant' && (
-              <>
-                <button
-                  onClick={() => handleTabChange('rapport')}
-                  type="button"
-                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
-                    tab === 'rapport' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  <div className="relative">
-                    <FileText size={18} />
-                  </div>
-                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
-                    {fr.nav.rapport}
-                  </span>
-                  {tab === 'rapport' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
-                </button>
-                <button
-                  onClick={() => handleTabChange('suivi')}
-                  type="button"
-                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
-                    tab === 'suivi' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  <div className="relative">
-                    <CheckCircle2 size={18} />
-                  </div>
-                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
-                    {fr.nav.suivi}
-                  </span>
-                  {tab === 'suivi' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
-                </button>
-              </>
-            )}
-
-            {/* CED : barre du bas = Séances, Réinscriptions, Exceptions, Compte */}
-            {isLoggedIn && role === 'directeur_ced' && (
-              <>
-                <button
-                  onClick={() => handleTabChange('seances')}
-                  type="button"
-                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
-                    tab === 'seances' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  <div className="relative">
-                    <Calendar size={18} />
-                  </div>
-                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
-                    {fr.nav.court.seances}
-                  </span>
-                  {tab === 'seances' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
-                </button>
-                <button
-                  onClick={() => handleTabChange('reinscriptions')}
-                  type="button"
-                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
-                    tab === 'reinscriptions' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  <div className="relative">
-                    <Award size={18} />
-                  </div>
-                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
-                    {fr.nav.court.reinscriptions}
-                  </span>
-                  {tab === 'reinscriptions' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
-                </button>
-                <button
-                  onClick={() => handleTabChange('ced')}
-                  type="button"
-                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
-                    tab === 'ced' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  <div className="relative">
-                    <ShieldAlert size={18} />
-                    {alertesCreneaux.length > 0 && (
-                      <span className="absolute -top-1.5 -right-3 text-[10px] font-bold px-1.5 py-0.2 rounded-full text-white bg-rose-500 shadow-xs">
-                        {alertesCreneaux.length}
-                      </span>
-                    )}
-                  </div>
-                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
-                    {fr.nav.court.exceptionsCed}
-                  </span>
-                  {tab === 'ced' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
-                </button>
-              </>
-            )}
-
-            {/* CANDIDAT : barre du bas = Sujets, Dossier, Entretiens, Compte */}
-            {isLoggedIn && role === 'candidat' && (
-              <>
-                <button
-                  onClick={() => handleTabChange('sujets')}
-                  type="button"
-                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
-                    tab === 'sujets' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  <div className="relative">
-                    <Search size={18} />
-                  </div>
-                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
-                    {fr.nav.court.sujets}
-                  </span>
-                  {tab === 'sujets' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
-                </button>
-                <button
-                  onClick={() => handleTabChange('dossier')}
-                  type="button"
-                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
-                    tab === 'dossier' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  <div className="relative">
-                    <FolderKanban size={18} />
-                    {isRetenuWithUnproven && (
-                      <span
-                        className="absolute -top-1.5 -right-3 text-[9px] font-bold px-1.5 py-0.2 rounded-full text-white bg-amber-500 shadow-xs flex items-center gap-0.5"
-                        title={`${piecesAProverCount} ${fr.dossier.preuvesAFournirCount}`}
-                      >
-                        <AlertCircle size={9} className="shrink-0" />
-                        <span>{piecesAProverCount}</span>
-                      </span>
-                    )}
-                  </div>
-                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
-                    {fr.nav.court.dossier}
-                  </span>
-                  {tab === 'dossier' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
-                </button>
-                <button
-                  onClick={() => handleTabChange('entretiens')}
-                  type="button"
-                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
-                    tab === 'entretiens' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  <div className="relative">
-                    <CalendarCheck2 size={18} />
-                  </div>
-                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
-                    {fr.nav.court.entretiens}
-                  </span>
-                  {tab === 'entretiens' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
-                </button>
-              </>
-            )}
-
-            {/* ENSEIGNANT : barre du bas = Sujets, Candidatures, Créneaux, Commission, Compte */}
-            {isLoggedIn && role === 'enseignant' && (
-              <>
-                <button
-                  onClick={() => handleTabChange('sujets')}
-                  type="button"
-                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
-                    tab === 'sujets' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  <div className="relative">
-                    <Search size={18} />
-                  </div>
-                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
-                    {fr.nav.mesSujets}
-                  </span>
-                  {tab === 'sujets' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
-                </button>
-                <button
-                  onClick={() => handleTabChange('candidatures_recues')}
-                  type="button"
-                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
-                    tab === 'candidatures_recues' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  <div className="relative">
-                    <FileText size={18} />
-                    {candidaturesEnseignant.length > 0 && (
-                      <span className="absolute -top-1.5 -right-3 text-[10px] font-bold px-1.5 py-0.2 rounded-full text-white bg-emerald-600 shadow-xs">
-                        {candidaturesEnseignant.length}
-                      </span>
-                    )}
-                  </div>
-                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
-                    {fr.nav.court.candidatures}
-                  </span>
-                  {tab === 'candidatures_recues' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
-                </button>
-                <button
-                  onClick={() => handleTabChange('entretiens')}
-                  type="button"
-                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
-                    tab === 'entretiens' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  <div className="relative">
-                    <CalendarCheck2 size={18} />
-                  </div>
-                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
-                    {fr.nav.court.creneaux}
-                  </span>
-                  {tab === 'entretiens' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
-                </button>
-                <button
-                  onClick={() => handleTabChange('commission')}
-                  type="button"
-                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
-                    tab === 'commission' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  <div className="relative">
-                    <Award size={18} />
-                  </div>
-                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
-                    {fr.nav.court.commission}
-                  </span>
-                  {tab === 'commission' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
-                </button>
-              </>
-            )}
-
-            {/* AGENT GUICHET : barre du bas = Guichet, Compte (masqué) */}
-            {false && isLoggedIn && role === 'agent' && (
-              <button
-                onClick={() => handleTabChange('guichet')}
-                type="button"
-                className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
-                  tab === 'guichet' ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                <div className="relative">
-                  <UserCog size={18} />
-                </div>
-                <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
-                  {fr.nav.court.guichet}
-                </span>
-                {tab === 'guichet' && <span className="w-5 h-1 bg-emerald-600 rounded-full mt-0.5 animate-pulse" />}
-              </button>
-            )}
-
-            {/* SCOLARITÉ (ADMIN) : exactement 2 onglets en bas sur mobile */}
-            {isLoggedIn && role === 'admin' && (
-              <>
-                <button
-                  onClick={() => handleTabChange('admin_comptes')}
-                  type="button"
-                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
-                    tab === 'admin_comptes' ? 'text-purple-700 font-bold' : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  <Users size={18} />
-                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
-                    {fr.nav.court.adminComptes}
-                  </span>
-                  {tab === 'admin_comptes' && <span className="w-5 h-1 bg-purple-600 rounded-full mt-0.5 animate-pulse" />}
-                </button>
-                <button
-                  onClick={() => handleTabChange('admin_journal')}
-                  type="button"
-                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
-                    tab === 'admin_journal' ? 'text-purple-700 font-bold' : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  <FileText size={18} />
-                  <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
-                    {fr.nav.court.adminJournal}
-                  </span>
-                  {tab === 'admin_journal' && <span className="w-5 h-1 bg-purple-600 rounded-full mt-0.5 animate-pulse" />}
-                </button>
-              </>
-            )}
-
-            {/* Connecté non-admin : Mon compte */}
-            {isLoggedIn && role !== 'admin' && (
-              <button
-                onClick={() => setMobileMenuOpen(true)}
-                type="button"
-                className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all min-h-[50px] active:scale-90 cursor-pointer ${
-                  mobileMenuOpen ? 'text-emerald-700 font-bold' : 'text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                <div className="relative">
-                  <User size={18} />
-                </div>
-                <span className="text-[11px] mt-1 tracking-tight truncate max-w-full">
-                  {estMobile ? fr.nav.court.compte : fr.auth.accountMenu}
-                </span>
-              </button>
-            )}
-          </div>
-        </nav>
+        {/* Barre de navigation mobile inférieure tactile (5 max + Plus) via MobileNav */}
+        <MobileNav
+          currentTab={tab}
+          onTabChange={handleTabChange}
+          isLoggedIn={isLoggedIn}
+          role={role}
+          roles={userRoles}
+          userName={currentUserName}
+          onOpenLogin={() => setIsLoginOpen(true)}
+          onLogout={handleLogout}
+          onReset={handleResetData}
+          badgeCounts={{
+            candidaturesCount: candidaturesEnseignant.length,
+            piecesPretes: piecesAProverCount,
+            alertesCed: alertesCreneaux.length,
+          }}
+        />
 
         {/* Menu Compte Mobile (Feuille tiroir) */}
         {mobileMenuOpen && (
@@ -2005,11 +1723,25 @@ export default function App() {
                     </p>
                     <span className="text-[10px] font-bold uppercase text-emerald-700">
                       {isLoggedIn
-                        ? role === 'candidat'
-                          ? fr.auth.roleCandidatBadge
-                          : role === 'enseignant'
-                          ? fr.auth.roleEnseignantBadge
-                          : fr.auth.roleCedBadge
+                        ? userRoles
+                            .map((r) =>
+                              r === 'candidat'
+                                ? fr.auth.roleCandidatBadge
+                                : r === 'enseignant'
+                                ? fr.auth.roleEnseignantBadge
+                                : r === 'admin'
+                                ? fr.auth.roleAdminBadge
+                                : r === 'directeur'
+                                ? fr.auth.rolesLabels.directeur
+                                : r === 'structure'
+                                ? fr.auth.rolesLabels.structure
+                                : r === 'directeur_ced'
+                                ? fr.auth.rolesLabels.directeur_ced
+                                : r === 'doctorant'
+                                ? fr.auth.rolesLabels.doctorant
+                                : fr.auth.roleCedBadge
+                            )
+                            .join(' • ')
                         : 'Non connecté'}
                     </span>
                     {isLoggedIn && role === 'enseignant' && (
@@ -2112,6 +1844,8 @@ export default function App() {
             </div>
           </div>
         )}
+
+
 
         {/* Modale de connexion / identification du rôle */}
         <LoginModal

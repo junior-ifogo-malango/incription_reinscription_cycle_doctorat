@@ -76,6 +76,8 @@ export type PieceSource = 'camera' | 'televersement' | 'apogee';
 
 export type CreneauStatut = 'libre' | 'reserve' | 'confirme';
 
+export const QUOTA_SUJETS = 5;
+
 export interface Sujet {
   id: string;
   titre: string;
@@ -84,6 +86,7 @@ export interface Sujet {
   enseignantId: string;
   structure: string; // Ex: Laboratoire LISAC, FST Fès / FS Dhar El Mehraz
   descriptionCourte?: string;
+  statut?: 'actif' | 'archive';
 }
 
 export interface Enseignant {
