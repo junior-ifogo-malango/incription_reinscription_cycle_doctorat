@@ -67,6 +67,8 @@ export const INITIAL_SUJETS: Sujet[] = [
     enseignantId: 'ens-1',
     structure: 'LISAC - FSDM Fès',
     descriptionCourte: 'Étude prospective de modèles prédictifs pour lisser les pics de charge électrique dans la région Fès-Meknès.',
+    statutValidation: 'publie',
+    dateValidation: '2026-10-15',
   },
   {
     id: 'suj-02',
@@ -76,6 +78,8 @@ export const INITIAL_SUJETS: Sujet[] = [
     enseignantId: 'ens-4',
     structure: 'Biotechnologie et Pharmacologie Médicale - FMP Fès',
     descriptionCourte: 'Développement d’algorithmes de segmentation d’IRM avec le CHU Hassan II de Fès pour une assistance temps réel.',
+    statutValidation: 'publie',
+    dateValidation: '2026-10-15',
   },
   {
     id: 'suj-03',
@@ -85,6 +89,8 @@ export const INITIAL_SUJETS: Sujet[] = [
     enseignantId: 'ens-3',
     structure: 'Économie et Management Durable - FSJES Fès',
     descriptionCourte: 'Analyse comparative du cadre prudentiel bancaire marocain face aux obligations durables européennes et africaines.',
+    statutValidation: 'publie',
+    dateValidation: '2026-10-15',
   },
   {
     id: 'suj-04',
@@ -94,6 +100,8 @@ export const INITIAL_SUJETS: Sujet[] = [
     enseignantId: 'ens-2',
     structure: 'Génie Industriel & IA - FST Fès',
     descriptionCourte: 'Application aux chaînes d’assemblage automobile de la zone franche de Fès Shore.',
+    statutValidation: 'publie',
+    dateValidation: '2026-10-15',
   },
   {
     id: 'suj-05',
@@ -103,6 +111,8 @@ export const INITIAL_SUJETS: Sujet[] = [
     enseignantId: 'ens-5',
     structure: 'Patrimoine Fassi et Humanités Numériques - FLSH Saïs',
     descriptionCourte: 'Reconnaissance optique (OCR historique) et catalogage automatisé des documents de la bibliothèque Al Quaraouiyine.',
+    statutValidation: 'publie',
+    dateValidation: '2026-10-15',
   },
   {
     id: 'suj-06',
@@ -112,6 +122,8 @@ export const INITIAL_SUJETS: Sujet[] = [
     enseignantId: 'ens-6',
     structure: 'Énergies Renouvelables - ENSA Fès',
     descriptionCourte: 'Synthèse et tests de stabilité thermique sous le climat continental de l’arrière-pays fassi.',
+    statutValidation: 'publie',
+    dateValidation: '2026-10-15',
   },
   {
     id: 'suj-07',
@@ -121,6 +133,8 @@ export const INITIAL_SUJETS: Sujet[] = [
     enseignantId: 'ens-1',
     structure: 'LISAC - FSDM Fès',
     descriptionCourte: 'Sécurisation des échanges sans fil entre véhicules et infrastructures routières avec tolérance aux pannes.',
+    statutValidation: 'publie',
+    dateValidation: '2026-10-15',
   },
   {
     id: 'suj-08',
@@ -130,6 +144,8 @@ export const INITIAL_SUJETS: Sujet[] = [
     enseignantId: 'ens-3',
     structure: 'Économie et Management Durable - FSJES Fès',
     descriptionCourte: 'Mesure économétrique empirique sur les commerçants et artisans de la région Fès-Meknès.',
+    statutValidation: 'publie',
+    dateValidation: '2026-10-15',
   },
   {
     id: 'suj-09',
@@ -139,6 +155,8 @@ export const INITIAL_SUJETS: Sujet[] = [
     enseignantId: 'ens-2',
     structure: 'Génie Industriel & Environnement - FST Fès',
     descriptionCourte: 'Dépollution éco-responsable des rejets d’huileries traditionnelles et industrielles autour de Fès et Moulay Yacoub.',
+    statutValidation: 'publie',
+    dateValidation: '2026-10-15',
   },
   {
     id: 'suj-10',
@@ -148,6 +166,8 @@ export const INITIAL_SUJETS: Sujet[] = [
     enseignantId: 'ens-4',
     structure: 'Biotechnologie et Pharmacologie Médicale - FMP Fès',
     descriptionCourte: 'Utilisation des réseaux de neurones sur graphes pour prédire l’affinité de liaison ligand-récepteur.',
+    statutValidation: 'publie',
+    dateValidation: '2026-10-15',
   },
   {
     id: 'suj-11',
@@ -157,6 +177,8 @@ export const INITIAL_SUJETS: Sujet[] = [
     enseignantId: 'ens-5',
     structure: 'Patrimoine Fassi et Humanités Numériques - FLSH Saïs',
     descriptionCourte: 'Création d’un corpus annoté pour la transcription phonétique et l’analyse sémantique des échanges digitaux.',
+    statutValidation: 'publie',
+    dateValidation: '2026-10-15',
   },
   {
     id: 'suj-12',
@@ -166,6 +188,8 @@ export const INITIAL_SUJETS: Sujet[] = [
     enseignantId: 'ens-6',
     structure: 'Énergies Renouvelables - ENSA Fès',
     descriptionCourte: 'Optimisation des matériaux de confinement pour supporter les cycles thermiques extrêmes.',
+    statutValidation: 'publie',
+    dateValidation: '2026-10-15',
   },
   {
     id: 'suj-13',
@@ -175,6 +199,8 @@ export const INITIAL_SUJETS: Sujet[] = [
     enseignantId: 'ens-1',
     structure: 'LISAC - FSDM Fès',
     descriptionCourte: 'Label numérique certifié sur blockchain pour la céramique et la dinanderie authentiques de Fès.',
+    statutValidation: 'publie',
+    dateValidation: '2026-10-15',
   },
   {
     id: 'suj-14',
@@ -184,6 +210,8 @@ export const INITIAL_SUJETS: Sujet[] = [
     enseignantId: 'ens-4',
     structure: 'Biotechnologie Médicale - FMP Fès',
     descriptionCourte: 'Suivi génomique des eaux urbaines de l’Oued Sebou pour anticiper les foyers infectieux.',
+    statutValidation: 'publie',
+    dateValidation: '2026-10-15',
   },
   {
     id: 'suj-15',
@@ -193,6 +221,8 @@ export const INITIAL_SUJETS: Sujet[] = [
     enseignantId: 'ens-3',
     structure: 'Économie et Management Durable - FSJES Fès',
     descriptionCourte: 'Stratégies d’atténuation des risques d’approvisionnement des cultures céréalières et maraîchères de la plaine du Saïs.',
+    statutValidation: 'publie',
+    dateValidation: '2026-10-15',
   },
 ];
 
@@ -810,6 +840,24 @@ export function enrichirPVLecture(pv: import('../types').PV): import('../types')
     structure: fallbackStructure,
   };
 }
+
+export function formatDateJJMM(d?: string): string {
+  if (!d) return '';
+  if (d.includes('/')) {
+    const parts = d.split('/');
+    if (parts.length >= 2) return `${parts[0].padStart(2, '0')}/${parts[1].padStart(2, '0')}`;
+  }
+  try {
+    const dt = new Date(d);
+    if (!isNaN(dt.getTime())) {
+      const day = String(dt.getDate()).padStart(2, '0');
+      const month = String(dt.getMonth() + 1).padStart(2, '0');
+      return `${day}/${month}`;
+    }
+  } catch {}
+  return d;
+}
+
 
 export function getComptes(): Compte[] {
   try {

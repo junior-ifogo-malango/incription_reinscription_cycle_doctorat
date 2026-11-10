@@ -30,6 +30,7 @@ import {
   Calendar,
   Plus,
   Archive,
+  Edit3,
 } from 'lucide-react';
 import { Sujet, Candidat, Enseignant, UserRole, Notification, dossierComplet, Periode, QUOTA_SUJETS } from '../types';
 import { fr } from '../i18n/fr';
@@ -37,9 +38,10 @@ import { storageService } from '../services/storage';
 import { StatusBadge } from './StatusBadge';
 import { AdvancedSearchModal, AdvancedFilterCriteria } from './AdvancedSearchModal';
 import { normalizeText } from './Autocomplete';
-import { normaliserTel } from '../utils/messages';
+import { normaliserTel, ajouterNotification } from '../utils/messages';
 import { logEvent } from '../utils/journal';
-import { MOCK_CANDIDATS, getPeriodeCandidature } from '../data/mockData';
+import { MOCK_CANDIDATS, getPeriodeCandidature, formatDateJJMM } from '../data/mockData';
+
 
 const getDisciplineConfig = (discipline?: string) => {
   const norm = (discipline || '')
@@ -201,6 +203,31 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
   const [addError, setAddError] = useState<string | null>(null);
   const [sujetToDelete, setSujetToDelete] = useState<Sujet | null>(null);
 
+  // Édition d'un sujet ('en_validation' ou 'refuse')
+  const [editingSujet, setEditingSujet] = useState<Sujet | null>(null);
+  const [editSujetTitre, setEditSujetTitre] = useState('');
+  const [editSujetDiscipline, setEditSujetDiscipline] = useState('');
+  const [editSujetResume, setEditSujetResume] = useState('');
+  const [editError, setEditError] = useState<string | null>(null);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+
+  // Synchronisation si la Structure valide/refuse un sujet
+  React.useEffect(() => {
+    const handleSujetsUpdated = () => {
+      try {
+        const fresh = storageService.getSujets();
+        onUpdateSujets?.(fresh);
+      } catch {}
+    };
+    window.addEventListener('usmba_sujets_updated', handleSujetsUpdated);
+    window.addEventListener('storage', handleSujetsUpdated);
+    return () => {
+      window.removeEventListener('usmba_sujets_updated', handleSujetsUpdated);
+      window.removeEventListener('storage', handleSujetsUpdated);
+    };
+  }, [onUpdateSujets]);
+
+
   const activeTeacher = useMemo(() => {
     try {
       const rawAcc = localStorage.getItem('usmba_active_account');
@@ -295,6 +322,8 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
       structure: activeTeacher.structure,
       descriptionCourte: newSujetResume.trim() || undefined,
       statut: 'actif',
+      statutValidation: 'en_validation',
+      dateCreation: new Date().toISOString(),
     };
 
     const updated = [created, ...sujets];
@@ -303,18 +332,76 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
 
     logEvent(
       { id: activeTeacher.id, nom: activeTeacher.nom, role: 'enseignant' },
-      'Création sujet de thèse',
+      fr.journalActions.sujetSoumisValidation,
       created.titre
     );
+
+    ajouterNotification({
+      destinataireId: 'dir-ced',
+      texte: `Nouveau sujet soumis pour validation par ${activeTeacher.nom} : "${created.titre}".`,
+      type: 'action',
+    });
 
     setIsAddModalOpen(false);
     setNewSujetTitre('');
     setNewSujetDiscipline('');
     setNewSujetResume('');
     setAddError(null);
-    setActionFeedback(fr.mesSujets.sujetCreeSucces);
-    setTimeout(() => setActionFeedback(null), 3000);
+    setActionFeedback(fr.mesSujets.sujetEnvoyeValidation);
+    setTimeout(() => setActionFeedback(null), 3500);
   };
+
+  const handleOpenEdit = (sujet: Sujet) => {
+    setEditingSujet(sujet);
+    setEditSujetTitre(sujet.titre || '');
+    setEditSujetDiscipline(sujet.discipline || '');
+    setEditSujetResume(sujet.descriptionCourte || '');
+    setEditError(null);
+    setIsEditModalOpen(true);
+  };
+
+  const handleSaveEdit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingSujet) return;
+    if (!editSujetTitre.trim() || !editSujetDiscipline.trim()) {
+      setEditError(fr.mesSujets.validationChampsRequis);
+      return;
+    }
+
+    const wasRefuse = editingSujet.statutValidation === 'refuse';
+    const updatedSujet: Sujet = {
+      ...editingSujet,
+      titre: editSujetTitre.trim(),
+      discipline: editSujetDiscipline.trim(),
+      descriptionCourte: editSujetResume.trim() || undefined,
+      statutValidation: 'en_validation',
+      motifRefus: undefined,
+      dateCreation: editingSujet.dateCreation || new Date().toISOString(),
+    };
+
+    const updated = sujets.map((s) => (s.id === editingSujet.id ? updatedSujet : s));
+    onUpdateSujets?.(updated);
+    storageService.setSujets(updated);
+
+    logEvent(
+      { id: activeTeacher.id, nom: activeTeacher.nom, role: 'enseignant' },
+      fr.journalActions.sujetSoumisValidation,
+      updatedSujet.titre,
+      wasRefuse ? 'Renvoyé après modifications' : 'Modifié avant validation'
+    );
+
+    ajouterNotification({
+      destinataireId: 'dir-ced',
+      texte: `Sujet soumis pour validation par ${activeTeacher.nom} : "${updatedSujet.titre}".`,
+      type: 'action',
+    });
+
+    setIsEditModalOpen(false);
+    setEditingSujet(null);
+    setActionFeedback(fr.mesSujets.sujetEnvoyeValidation);
+    setTimeout(() => setActionFeedback(null), 3500);
+  };
+
 
   // Suppression définitive (aucune candidature ni panier)
   const handleConfirmDelete = () => {
@@ -416,6 +503,8 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
         if (!s) return false;
         // Un sujet archivé disparaît du catalogue
         if (s.statut === 'archive') return false;
+        // Catalogue et recherche avancée : n'affichent que les sujets 'publie'
+        if (s.statutValidation !== 'publie') return false;
 
         const ens = getEnseignant(s.enseignantId);
         const ensNomNorm = ens ? normalizeText(ens.nom) : '';
@@ -870,20 +959,22 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
     setView('confirmation');
   };
 
-  // Sujets du panier (sécurisé contre les sujets introuvables / supprimés)
+  // Sujets du panier (sécurisé contre les sujets introuvables / supprimés / non publiés)
   const cartItems = useMemo(() => {
     const panierIds = Array.isArray(candidat?.panier) ? candidat.panier : [];
     return panierIds
       .map((id) => sujets.find((s) => s && s.id === id))
-      .filter((s): s is Sujet => Boolean(s));
+      .filter((s): s is Sujet => Boolean(s && s.statutValidation === 'publie'));
   }, [candidat?.panier, sujets]);
 
   const candidateItems = useMemo(() => {
     const candidaturesIds = Array.isArray(candidat?.candidatures) ? candidat.candidatures : [];
     return candidaturesIds
       .map((id) => sujets.find((s) => s && s.id === id))
-      .filter((s): s is Sujet => Boolean(s));
+      .filter((s): s is Sujet => Boolean(s && s.statutValidation === 'publie'));
   }, [candidat?.candidatures, sujets]);
+
+
 
   // Sujets disponibles dans le panier (non archivés)
   const cartAvailableItems = useMemo(() => {
@@ -1474,13 +1565,94 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
     const restants = Math.max(0, QUOTA_SUJETS - activeCount);
     const quotaAtteint = activeCount >= QUOTA_SUJETS;
 
-    // UN seul bouton d'action selon la règle existante
+    const renderValidationBadge = (sujet: Sujet) => {
+      const vStatut = sujet.statutValidation || 'publie';
+      if (vStatut === 'en_validation') {
+        return (
+          <span className="inline-flex items-center gap-1 text-[10px] sm:text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-900 border border-amber-300">
+            <Clock size={12} className="text-amber-700 shrink-0" />
+            <span>{fr.mesSujets.statutEnValidation}</span>
+          </span>
+        );
+      }
+      if (vStatut === 'refuse') {
+        return (
+          <span className="inline-flex items-center gap-1 text-[10px] sm:text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-800 border border-rose-300">
+            <XCircle size={12} className="text-rose-700 shrink-0" />
+            <span>{fr.mesSujets.statutRefuse}</span>
+          </span>
+        );
+      }
+      const dateJJMM = formatDateJJMM(sujet.dateValidation || sujet.dateCreation) || '15/10';
+      return (
+        <span className="inline-flex items-center gap-1.5 flex-wrap">
+          <span className="inline-flex items-center gap-1 text-[10px] sm:text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-300">
+            <CheckCircle2 size={12} className="text-emerald-700 shrink-0" />
+            <span>{fr.mesSujets.statutPublie}</span>
+          </span>
+          <span className="text-[10px] sm:text-[11px] font-semibold text-slate-500">
+            {fr.mesSujets.valideLe} {dateJJMM}
+          </span>
+        </span>
+      );
+    };
+
     const renderTeacherActionButton = (
       sujet: Sujet,
       candCount: number,
       panierCount: number,
       isArchived: boolean
     ) => {
+      const vStatut = sujet.statutValidation || 'publie';
+
+      // Sujet 'refuse' : motif affiché + bouton "Modifier et renvoyer" (repasse en 'en_validation')
+      if (vStatut === 'refuse') {
+        return (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleOpenEdit(sujet);
+            }}
+            className="px-3 py-1.5 rounded-xl text-xs font-bold text-amber-900 bg-amber-100 hover:bg-amber-200 border border-amber-300 transition cursor-pointer flex items-center gap-1.5 active:scale-98 shrink-0 shadow-xs"
+          >
+            <Edit3 size={13} className="text-amber-800 shrink-0" />
+            <span>{fr.mesSujets.btnModifierRenvoyer}</span>
+          </button>
+        );
+      }
+
+      // Sujet 'en_validation' : modification et suppression autorisées
+      if (vStatut === 'en_validation') {
+        return (
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleOpenEdit(sujet);
+              }}
+              className="px-2.5 py-1.5 rounded-xl text-xs font-bold text-sky-800 bg-sky-50 hover:bg-sky-100 border border-sky-300 transition cursor-pointer flex items-center gap-1 active:scale-98 shrink-0"
+            >
+              <Edit3 size={13} className="text-sky-700 shrink-0" />
+              <span>{fr.mesSujets.btnModifier}</span>
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setSujetToDelete(sujet);
+              }}
+              className="px-2.5 py-1.5 rounded-xl text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-300 transition cursor-pointer flex items-center gap-1 active:scale-98 shrink-0"
+            >
+              <Trash2 size={13} className="text-rose-600 shrink-0" />
+              <span>{fr.mesSujets.btnSupprimer}</span>
+            </button>
+          </div>
+        );
+      }
+
+      // Sujet 'publie' : garde ses règles actuelles (Supprimer / Retirer / Archiver)
       // Cas 1 : Aucune candidature ni panier -> Supprimer
       if (candCount === 0 && panierCount === 0) {
         return (
@@ -1550,6 +1722,7 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
 
       return null;
     };
+
 
     return (
       <div className="space-y-4">
@@ -1729,17 +1902,7 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
                             </span>
                             {/* Pastille d'état sur mobile */}
                             <span className="sm:hidden">
-                              {isArchived ? (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-300">
-                                  <Archive size={11} className="text-slate-600 shrink-0" />
-                                  <span>{fr.mesSujets.statutArchive}</span>
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-300">
-                                  <CheckCircle2 size={11} className="text-emerald-700 shrink-0" />
-                                  <span>{fr.mesSujets.statutActif}</span>
-                                </span>
-                              )}
+                              {renderValidationBadge(sujet)}
                             </span>
                           </div>
 
@@ -1747,6 +1910,17 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
                           <h3 className="text-xs sm:text-sm font-bold text-slate-900 line-clamp-2 leading-snug">
                             {sujet.titre || 'Sans titre'}
                           </h3>
+
+                          {/* Motif si refusé */}
+                          {sujet.statutValidation === 'refuse' && (
+                            <div className="mt-1.5 p-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-800 flex items-start gap-1.5">
+                              <AlertCircle size={14} className="text-rose-600 shrink-0 mt-0.5" />
+                              <div>
+                                <span className="font-bold">{fr.mesSujets.motifRefusLabel} : </span>
+                                <span>{sujet.motifRefus || fr.mesSujets.nonRenseigne}</span>
+                              </div>
+                            </div>
+                          )}
 
                           {/* "N candidatures · N paniers" */}
                           <p className="text-[11px] text-slate-600 font-medium mt-1">
@@ -1769,20 +1943,11 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
                           </div>
                         </div>
 
-                        {/* Droite : pastille d'état et UN seul bouton d'action */}
+                        {/* Droite : pastille d'état et bouton d'action */}
                         <div className="hidden sm:flex items-center gap-3 px-4 py-3 shrink-0 border-l border-slate-100 self-center">
                           {/* Pastille d'état */}
-                          {isArchived ? (
-                            <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-300">
-                              <Archive size={12} className="text-slate-600 shrink-0" />
-                              <span>{fr.mesSujets.statutArchive}</span>
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-300">
-                              <CheckCircle2 size={12} className="text-emerald-700 shrink-0" />
-                              <span>{fr.mesSujets.statutActif}</span>
-                            </span>
-                          )}
+                          {renderValidationBadge(sujet)}
+
 
                           {/* UN seul bouton d'action */}
                           {renderTeacherActionButton(sujet, candCount, panierCount, isArchived)}
@@ -2300,8 +2465,123 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
             </div>
           </div>
         )}
+
+        {/* Modal d'édition / renvoi de sujet */}
+        {isEditModalOpen && editingSujet && (
+          <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-5 sm:p-6 space-y-4">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-200">
+                <div className="flex items-center gap-2">
+                  <Edit3 className="text-emerald-700 shrink-0" size={20} />
+                  <h3 className="text-base font-bold text-slate-900">
+                    {editingSujet.statutValidation === 'refuse'
+                      ? fr.mesSujets.modalRenvoyerTitre
+                      : fr.mesSujets.modalModifTitre}
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsEditModalOpen(false);
+                    setEditingSujet(null);
+                  }}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {editingSujet.statutValidation === 'refuse' && editingSujet.motifRefus && (
+                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800 space-y-1">
+                  <div className="flex items-center gap-1.5 font-bold text-rose-900">
+                    <AlertCircle size={14} className="shrink-0 text-rose-600" />
+                    <span>{fr.mesSujets.motifRefusLabel} :</span>
+                  </div>
+                  <p className="pl-5 leading-relaxed">{editingSujet.motifRefus}</p>
+                </div>
+              )}
+
+              <form onSubmit={handleSaveEdit} className="space-y-3.5">
+                {editError && (
+                  <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-300 text-rose-800 text-xs flex items-center gap-2 font-medium">
+                    <AlertTriangle size={14} className="text-rose-600 shrink-0" />
+                    <span>{editError}</span>
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-800 mb-1">
+                    {fr.mesSujets.champTitre} <span className="text-rose-600">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editSujetTitre}
+                    onChange={(e) => setEditSujetTitre(e.target.value)}
+                    placeholder={fr.mesSujets.champTitrePlaceholder}
+                    className="w-full px-3 py-2 text-xs bg-white rounded-xl border border-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-600"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-800 mb-1">
+                    {fr.mesSujets.champDiscipline} <span className="text-rose-600">*</span>
+                  </label>
+                  <select
+                    value={editSujetDiscipline}
+                    onChange={(e) => setEditSujetDiscipline(e.target.value)}
+                    required
+                    className="w-full px-3 py-2 text-xs bg-white rounded-xl border border-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-600"
+                  >
+                    <option value="">Sélectionnez une discipline...</option>
+                    {DISCIPLINES_DISPONIBLES.map((d) => (
+                      <option key={d} value={d}>
+                        {d}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-800 mb-1">
+                    {fr.mesSujets.champResume}
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={editSujetResume}
+                    onChange={(e) => setEditSujetResume(e.target.value)}
+                    placeholder={fr.mesSujets.champResumePlaceholder}
+                    className="w-full px-3 py-2 text-xs bg-white rounded-xl border border-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-600 resize-none"
+                  />
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsEditModalOpen(false);
+                      setEditingSujet(null);
+                    }}
+                    className="px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-100 transition cursor-pointer"
+                  >
+                    {fr.mesSujets.btnAnnuler}
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-700 hover:bg-emerald-800 text-white shadow-xs transition cursor-pointer active:scale-98"
+                  >
+                    {editingSujet.statutValidation === 'refuse'
+                      ? fr.mesSujets.btnRenvoyer
+                      : fr.mesSujets.btnEnregistrer}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
       </div>
     );
+
   }
 
   return (

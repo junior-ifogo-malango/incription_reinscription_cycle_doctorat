@@ -87,7 +87,12 @@ export interface Sujet {
   structure: string; // Ex: Laboratoire LISAC, FST Fès / FS Dhar El Mehraz
   descriptionCourte?: string;
   statut?: 'actif' | 'archive';
+  statutValidation: 'en_validation' | 'publie' | 'refuse';
+  motifRefus?: string;
+  dateValidation?: string;
+  dateCreation?: string;
 }
+
 
 export interface Enseignant {
   id: string;

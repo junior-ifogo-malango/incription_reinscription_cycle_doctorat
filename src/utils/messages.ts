@@ -118,3 +118,33 @@ export const trouverCandidat = (
 
   return { nom: fallbackNoms[candidatId] || `Candidat (${candidatId})` };
 };
+
+/**
+ * Enregistre une notification dans le stockage local et avertit les observateurs
+ */
+export const ajouterNotification = (notif: {
+  destinataireId: string;
+  texte: string;
+  type?: 'info' | 'action';
+}): void => {
+  try {
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('usmba_notifications') : null;
+    const list = raw ? JSON.parse(raw) : [];
+    const newNotif = {
+      id: `notif-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      destinataireId: notif.destinataireId,
+      texte: notif.texte,
+      date: new Date().toISOString(),
+      lue: false,
+      type: notif.type || 'info',
+    };
+    const updated = [newNotif, ...list];
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('usmba_notifications', JSON.stringify(updated));
+    }
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('usmba_notifications_updated'));
+    }
+  } catch {}
+};
+

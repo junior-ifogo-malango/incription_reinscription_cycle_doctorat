@@ -10,9 +10,10 @@ import {
   Clock,
   ChevronDown,
   ChevronUp,
+  AlertTriangle,
 } from 'lucide-react';
 import { Rapport } from '../types';
-import { INITIAL_RAPPORTS } from '../data/mockData';
+import { INITIAL_RAPPORTS, getConnectedDirecteurId } from '../data/mockData';
 import { fr } from '../i18n/fr';
 
 const STORAGE_KEY_RAPPORTS = 'usmba_doctorat_rapports';
@@ -137,6 +138,47 @@ export const CedReinscriptions: React.FC = () => {
     saveList(updated, fr.reinscription.cedRectificationToast);
   };
 
+  const SEUIL_HEURES = 48;
+  const now = Date.now();
+  const connectedDirecteurId = getConnectedDirecteurId();
+
+  // Filtrer les rapports de réinscription en retard (> 48h sans action)
+  const rapportsEnRetard = rapports.filter((r) => {
+    if (r.statut !== 'soumis' && r.statut !== 'avis_comite') return false;
+    if (!r.soumisLe) return false;
+    const resTime = new Date(r.soumisLe).getTime();
+    const diffHours = (now - resTime) / (1000 * 60 * 60);
+    return diffHours > SEUIL_HEURES;
+  });
+
+  const handleRelancerRapport = (reportId: string) => {
+    const rTarget = rapports.find((r) => r.id === reportId);
+    if (connectedDirecteurId && rTarget?.encadrantId === connectedDirecteurId) {
+      setErrorMsg(fr.exceptions.conflitDirecteur);
+      setTimeout(() => setErrorMsg(null), 4000);
+      return;
+    }
+    const todayStr = new Date().toLocaleDateString('fr-FR');
+    const updated = rapports.map((r) => {
+      if (r.id === reportId) {
+        return {
+          ...r,
+          relanceLe: new Date().toISOString(),
+          chronologie: [
+            ...(r.chronologie || []),
+            {
+              date: todayStr,
+              acteur: 'Direction CED',
+              action: 'Relance administrative simulée transmise',
+            },
+          ],
+        };
+      }
+      return r;
+    });
+    saveList(updated, fr.reinscription.relanceReportToast);
+  };
+
   // Filtrer les rapports à traiter par le CED : statut 'avis_comite' (ou 'valide_ced')
   const comiteReports = rapports.filter((r) => r.statut === 'avis_comite' || r.statut === 'valide_ced');
 
@@ -170,6 +212,98 @@ export const CedReinscriptions: React.FC = () => {
           <span>{errorMsg}</span>
         </div>
       )}
+
+      {/* Section : En retard (> 48 h sans action) */}
+      <section className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3">
+        <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+          <div>
+            <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wide flex items-center gap-2">
+              <Clock size={16} className="text-amber-600" />
+              <span>{fr.reinscription.lateReportsSectionTitle}</span>
+            </h3>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              Dossiers 'soumis' ou 'avis_comite' sans décision après {SEUIL_HEURES}h.
+            </p>
+          </div>
+          <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
+            {rapportsEnRetard.length}
+          </span>
+        </div>
+
+        {rapportsEnRetard.length === 0 ? (
+          <div className="py-6 text-center text-xs text-slate-500">
+            {fr.reinscription.lateReportsEmpty}
+          </div>
+        ) : (
+          <div className="space-y-2.5">
+            {rapportsEnRetard.map((r) => {
+              const diffHours = r.soumisLe
+                ? Math.max(0, Math.floor((now - new Date(r.soumisLe).getTime()) / (1000 * 60 * 60)))
+                : 0;
+
+              const waitingWho =
+                r.statut === 'soumis'
+                  ? fr.reinscription.waitingEncadrant
+                  : fr.reinscription.waitingComite;
+
+              const isDirecteurOfRapport = Boolean(
+                connectedDirecteurId && r.encadrantId && connectedDirecteurId === r.encadrantId
+              );
+
+              return (
+                <div
+                  key={r.id}
+                  className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-bold text-slate-900">{r.titre}</span>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-white border border-slate-200 text-slate-700">
+                        {r.annee}ᵉ année
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      Doctorant : <span className="font-semibold text-slate-700">{r.doctorantId}</span> • {fr.reinscription.waitingPrefix} <span className="font-bold text-amber-800">{waitingWho}</span>
+                    </p>
+                    <div className="flex items-center gap-2 pt-0.5">
+                      <span className="text-[11px] font-semibold text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded">
+                        {fr.reinscription.timeElapsed} {diffHours} h
+                      </span>
+                      {r.relanceLe && (
+                        <span className="text-[10px] text-emerald-700 font-medium">
+                          Relancé le {new Date(r.relanceLe).toLocaleDateString('fr-FR')}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col items-end gap-1 shrink-0">
+                    <button
+                      type="button"
+                      disabled={isDirecteurOfRapport}
+                      onClick={() => !isDirecteurOfRapport && handleRelancerRapport(r.id)}
+                      className={`self-end sm:self-center px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-xs shrink-0 ${
+                        isDirecteurOfRapport
+                          ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
+                          : 'bg-amber-600 hover:bg-amber-700 text-white cursor-pointer active:scale-98'
+                      }`}
+                    >
+                      <Send size={13} />
+                      <span>{fr.reinscription.btnRelancerReport}</span>
+                    </button>
+                    {isDirecteurOfRapport && (
+                      <p className="text-[11px] font-semibold text-amber-800 flex items-center gap-1 text-right max-w-[200px]">
+                        <AlertTriangle size={12} className="shrink-0 text-amber-600" />
+                        <span>{fr.exceptions.conflitDirecteur}</span>
+                      </p>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
 
       {comiteReports.length === 0 ? (
         <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-xs text-slate-500">

@@ -43,6 +43,7 @@ interface MobileNavProps {
   roles?: Role[];
   isLoggedIn: boolean;
   userName?: string;
+  userEmail?: string;
   onOpenLogin: () => void;
   onLogout: () => void;
   onReset: () => void;
@@ -70,6 +71,7 @@ export const MobileNav: React.FC<MobileNavProps> = ({
   roles = [],
   isLoggedIn,
   userName,
+  userEmail,
   onOpenLogin,
   onLogout,
   onReset,
@@ -310,20 +312,7 @@ export const MobileNav: React.FC<MobileNavProps> = ({
                   <User size={16} />
                 </div>
                 <div>
-                  <p className="font-bold text-xs text-slate-900">{userName || fr.auth.accountMenu}</p>
-                  <span className="text-[10px] font-bold uppercase text-emerald-700">
-                    {normalizedRoles
-                      .map((r) =>
-                        r === 'candidat'
-                          ? fr.auth.roleCandidatBadge
-                          : r === 'enseignant'
-                          ? fr.auth.roleEnseignantBadge
-                          : r === 'admin'
-                          ? fr.auth.roleAdminBadge
-                          : fr.auth.roleCedBadge
-                      )
-                      .join(' • ')}
-                  </span>
+                  <p className="font-bold text-xs text-slate-900 break-all">{userEmail || userName || fr.auth.accountMenu}</p>
                 </div>
               </div>
               <button

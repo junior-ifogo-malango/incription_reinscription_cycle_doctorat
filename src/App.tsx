@@ -924,6 +924,23 @@ export default function App() {
       : fr.app.cedName
     : undefined;
 
+  const currentUserEmail = isLoggedIn
+    ? activeCompte?.email ||
+      (role === 'candidat'
+        ? (candidat.email || 'yassine@demo.ma')
+        : role === 'enseignant'
+        ? (activeEnseignant.email || 'prof@demo.ma')
+        : role === 'directeur_ced'
+        ? 'ced@demo.ma'
+        : role === 'admin'
+        ? 'admin@demo.ma'
+        : role === 'doctorant'
+        ? (DEMO_DOCTORANT_NADIA.email || 'nadia.alaoui@usmba.ac.ma')
+        : role === 'agent'
+        ? 'karima.tazi@usmba.ac.ma'
+        : 'compte@demo.ma')
+    : undefined;
+
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-800 antialiased selection:bg-emerald-200">
       {/* Conteneur sobre centré max ~1100px */}
@@ -947,8 +964,9 @@ export default function App() {
             {/* Droite : Menu desktop + Icône panier */}
             <div className="flex items-center gap-2 sm:gap-3">
               {/* Menu horizontal sur tablette et PC (≥768px) */}
-              <nav className="hidden md:flex items-center gap-1">
+              <nav className="flex items-center gap-1">
                 {/* Onglets selon l'union des rôles du compte (sans doublon, sans sélecteur) */}
+                <div className="hidden md:flex items-center gap-1">
                 {isLoggedIn && (
                   <>
                     {/* Menu ENSEIGNANT (Directeur) : Candidatures, Créneaux, Commission, Sujets, puis Réinscriptions */}
@@ -1164,6 +1182,7 @@ export default function App() {
                     <span>{fr.nav.sujets}</span>
                   </button>
                 )}
+                </div>
 
                 {/* Se connecter ou Mon compte */}
                 {!isLoggedIn ? (
@@ -1173,21 +1192,21 @@ export default function App() {
                       className="px-3 py-1.5 rounded-lg text-xs font-semibold transition text-emerald-100 hover:text-white hover:bg-emerald-900/60 flex items-center gap-1.5 cursor-pointer"
                     >
                       <LogIn size={14} />
-                      <span>{fr.auth.login}</span>
+                      <span className="hidden sm:inline">{fr.auth.login}</span>
                     </button>
                     <div className="relative">
                       <button
                         onClick={() => setAccountMenuOpen(!accountMenuOpen)}
-                        className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                        className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
                           accountMenuOpen
                             ? 'bg-emerald-800 text-amber-300'
                             : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
                         }`}
                         title={fr.auth.accountMenu}
                       >
-                        <User size={14} className="text-emerald-300" />
-                        <span>{fr.nav.court.compte}</span>
-                        <ChevronDown size={13} className="text-emerald-400" />
+                        <User size={14} className="text-emerald-300 shrink-0" />
+                        <span className="hidden sm:inline">{fr.nav.court.compte}</span>
+                        <ChevronDown size={13} className="hidden sm:inline text-emerald-400 shrink-0" />
                       </button>
 
                       {accountMenuOpen && (
@@ -1256,15 +1275,16 @@ export default function App() {
                   <div className="relative">
                     <button
                       onClick={() => setAccountMenuOpen(!accountMenuOpen)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                      className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
                         accountMenuOpen
                           ? 'bg-emerald-800 text-amber-300'
                           : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
                       }`}
+                      title={currentUserEmail || fr.auth.accountMenu}
                     >
-                      <User size={14} className="text-emerald-300" />
-                      <span className="max-w-[120px] truncate">{currentUserName || fr.auth.accountMenu}</span>
-                      <ChevronDown size={13} className="text-emerald-400" />
+                      <User size={14} className="text-emerald-300 shrink-0" />
+                      <span className="hidden sm:inline max-w-[140px] truncate">{currentUserEmail}</span>
+                      <ChevronDown size={13} className="hidden sm:inline text-emerald-400 shrink-0" />
                     </button>
 
                     {accountMenuOpen && (
@@ -1272,28 +1292,7 @@ export default function App() {
                         className="absolute right-0 top-full mt-1.5 w-60 bg-white text-slate-800 rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 text-xs"
                       >
                         <div className="px-3 py-2 border-b border-slate-100">
-                          <p className="font-bold text-slate-900 truncate">{currentUserName || fr.auth.accountMenu}</p>
-                          <span className="text-[10px] font-semibold uppercase text-emerald-700">
-                            {userRoles
-                              .map((r) =>
-                                r === 'candidat'
-                                  ? fr.auth.roleCandidatBadge
-                                  : r === 'enseignant'
-                                  ? fr.auth.roleEnseignantBadge
-                                  : r === 'admin'
-                                  ? fr.auth.roleAdminBadge
-                                  : r === 'directeur'
-                                  ? fr.auth.rolesLabels.directeur
-                                  : r === 'structure'
-                                  ? fr.auth.rolesLabels.structure
-                                  : r === 'directeur_ced'
-                                  ? fr.auth.rolesLabels.directeur_ced
-                                  : r === 'doctorant'
-                                  ? fr.auth.rolesLabels.doctorant
-                                  : fr.auth.roleCedBadge
-                              )
-                              .join(' • ')}
-                          </span>
+                          <p className="font-bold text-slate-900 break-all">{currentUserEmail}</p>
                           {role === 'enseignant' && (
                             <div className="mt-1.5 pt-1.5 border-t border-slate-100">
                               <span className="text-[9px] uppercase font-bold text-slate-400 block tracking-wider">
@@ -1825,6 +1824,7 @@ export default function App() {
           role={role}
           roles={userRoles}
           userName={currentUserName}
+          userEmail={currentUserEmail}
           onOpenLogin={() => setIsLoginOpen(true)}
           onLogout={handleLogout}
           onReset={handleResetData}
@@ -1852,32 +1852,12 @@ export default function App() {
                     <User size={16} />
                   </div>
                   <div>
-                    <p className="font-bold text-xs text-slate-900">
-                      {isLoggedIn ? (currentUserName || fr.auth.accountMenu) : 'Visiteur démo'}
+                    <p className="font-bold text-xs text-slate-900 break-all">
+                      {isLoggedIn ? (currentUserEmail || fr.auth.accountMenu) : 'Visiteur démo'}
                     </p>
-                    <span className="text-[10px] font-bold uppercase text-emerald-700">
-                      {isLoggedIn
-                        ? userRoles
-                            .map((r) =>
-                              r === 'candidat'
-                                ? fr.auth.roleCandidatBadge
-                                : r === 'enseignant'
-                                ? fr.auth.roleEnseignantBadge
-                                : r === 'admin'
-                                ? fr.auth.roleAdminBadge
-                                : r === 'directeur'
-                                ? fr.auth.rolesLabels.directeur
-                                : r === 'structure'
-                                ? fr.auth.rolesLabels.structure
-                                : r === 'directeur_ced'
-                                ? fr.auth.rolesLabels.directeur_ced
-                                : r === 'doctorant'
-                                ? fr.auth.rolesLabels.doctorant
-                                : fr.auth.roleCedBadge
-                            )
-                            .join(' • ')
-                        : 'Non connecté'}
-                    </span>
+                    {!isLoggedIn && (
+                      <span className="text-[10px] font-semibold text-slate-500">Non connecté</span>
+                    )}
                     {isLoggedIn && role === 'enseignant' && (
                       <div className="mt-1 pt-1 border-t border-slate-100">
                         <span className="text-[9px] uppercase font-bold text-slate-400 block tracking-wider">

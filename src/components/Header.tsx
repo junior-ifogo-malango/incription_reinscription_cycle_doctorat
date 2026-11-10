@@ -8,6 +8,7 @@ interface HeaderProps {
   role: UserRole;
   isLoggedIn: boolean;
   userName?: string;
+  userEmail?: string;
   currentTab: TabType;
   onTabChange: (tab: TabType) => void;
   onOpenLogin: () => void;
@@ -20,6 +21,7 @@ export const Header: React.FC<HeaderProps> = ({
   role,
   isLoggedIn,
   userName,
+  userEmail,
   currentTab,
   onTabChange,
   onOpenLogin,
@@ -115,31 +117,25 @@ export const Header: React.FC<HeaderProps> = ({
               <div className="relative">
                 <button
                   onClick={() => setAccountMenuOpen(!accountMenuOpen)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                  className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
                     accountMenuOpen
                       ? 'bg-emerald-800 text-amber-300'
                       : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
                   }`}
+                  title={userEmail || userName || fr.auth.accountMenu}
                 >
-                  <User size={14} className="text-emerald-300" />
-                  <span className="max-w-[120px] truncate">{userName || fr.auth.accountMenu}</span>
-                  <ChevronDown size={13} className="text-emerald-400" />
+                  <User size={14} className="text-emerald-300 shrink-0" />
+                  <span className="hidden sm:inline max-w-[140px] truncate">{userEmail || userName || fr.auth.accountMenu}</span>
+                  <ChevronDown size={13} className="hidden sm:inline text-emerald-400 shrink-0" />
                 </button>
 
                 {accountMenuOpen && (
                   <div
-                    className="absolute right-0 top-full mt-1.5 w-48 bg-white text-slate-800 rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 text-xs"
+                    className="absolute right-0 top-full mt-1.5 w-56 bg-white text-slate-800 rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 text-xs"
                     onClick={() => setAccountMenuOpen(false)}
                   >
                     <div className="px-3 py-2 border-b border-slate-100">
-                      <p className="font-bold text-slate-900 truncate">{userName || fr.auth.accountMenu}</p>
-                      <span className="text-[10px] font-semibold uppercase text-emerald-700">
-                        {role === 'candidat'
-                          ? fr.auth.roleCandidatBadge
-                          : role === 'enseignant'
-                          ? fr.auth.roleEnseignantBadge
-                          : fr.auth.roleCedBadge}
-                      </span>
+                      <p className="font-bold text-slate-900 break-all">{userEmail || userName || fr.auth.accountMenu}</p>
                     </div>
 
                     <button

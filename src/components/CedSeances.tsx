@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Send, CheckCircle2, Clock, AlertCircle, FileText, Award, MessageCircle, Mail, Upload, FileCheck, XCircle, Calendar, CalendarCheck2, AlertTriangle, Eye } from 'lucide-react';
-import { PV, Notification, Resultat, Periode, HistoriqueFinPeriode } from '../types';
-import { getPeriodeCandidature, savePeriodeCandidature, aujourdhui, getConnectedDirecteurId, getDirectorStructure, enrichirPVLecture, getComptes } from '../data/mockData';
+import { Send, CheckCircle2, Clock, AlertCircle, FileText, Award, MessageCircle, Mail, Upload, FileCheck, XCircle, Calendar, CalendarCheck2, AlertTriangle, Eye, BookOpen } from 'lucide-react';
+import { PV, Notification, Resultat, Periode, HistoriqueFinPeriode, Sujet } from '../types';
+import { getPeriodeCandidature, savePeriodeCandidature, aujourdhui, getConnectedDirecteurId, getDirectorStructure, enrichirPVLecture, getComptes, INITIAL_ENSEIGNANTS, formatDateJJMM } from '../data/mockData';
 import { fr } from '../i18n/fr';
 import { logEvent } from '../utils/journal';
+import { storageService } from '../services/storage';
 import {
   normaliserTel,
   lienWhatsApp,
@@ -12,7 +13,9 @@ import {
   isEmailValide,
   messageResultat,
   trouverCandidat,
+  ajouterNotification,
 } from '../utils/messages';
+
 
 /**
  * Action de publication des résultats d'un PV par le CED.
@@ -84,17 +87,39 @@ export const CedSeances: React.FC = () => {
   const [refusMotif, setRefusMotif] = useState('');
   const [refusError, setRefusError] = useState<string | null>(null);
 
+  // Gestion des Sujets à valider par la Structure
+  const [sujets, setSujets] = useState<Sujet[]>(() => {
+    try {
+      return storageService.getSujets();
+    } catch {
+      return [];
+    }
+  });
+  const [refusModalSujetId, setRefusModalSujetId] = useState<string | null>(null);
+  const [refusSujetMotif, setRefusSujetMotif] = useState('');
+  const [refusSujetError, setRefusSujetError] = useState<string | null>(null);
+
   useEffect(() => {
     const handlePeriodeUpdate = () => {
       setPeriode(getPeriodeCandidature());
     };
+    const handleSujetsUpdate = () => {
+      try {
+        setSujets(storageService.getSujets());
+      } catch {}
+    };
     window.addEventListener('usmba_periode_updated', handlePeriodeUpdate);
+    window.addEventListener('usmba_sujets_updated', handleSujetsUpdate);
     window.addEventListener('storage', handlePeriodeUpdate);
+    window.addEventListener('storage', handleSujetsUpdate);
     return () => {
       window.removeEventListener('usmba_periode_updated', handlePeriodeUpdate);
+      window.removeEventListener('usmba_sujets_updated', handleSujetsUpdate);
       window.removeEventListener('storage', handlePeriodeUpdate);
+      window.removeEventListener('storage', handleSujetsUpdate);
     };
   }, []);
+
 
   const handleSaveNouvelleFin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -317,6 +342,141 @@ export const CedSeances: React.FC = () => {
 
   const structureName = getConnectedStructureName();
 
+  const matchStructure = (s1?: string, s2?: string) => {
+    if (!s1 || !s2) return false;
+    const n1 = s1.trim().toLowerCase();
+    const n2 = s2.trim().toLowerCase();
+    return n1 === n2 || n1.includes(n2) || n2.includes(n1);
+  };
+
+  const getDirectorName = (enseignantId?: string): string => {
+    if (!enseignantId) return fr.cedSeances.nonRenseigne;
+    const ens = INITIAL_ENSEIGNANTS.find((e) => e.id === enseignantId);
+    if (ens?.nom) return ens.nom;
+    const comptes = getComptes();
+    const cpt = comptes.find((c) => c.enseignantId === enseignantId || c.id === enseignantId);
+    if (cpt?.nom) return cpt.nom;
+    return fr.cedSeances.nonRenseigne;
+  };
+
+  const getStructureActeur = () => {
+    try {
+      const raw = localStorage.getItem('usmba_active_account');
+      if (raw) {
+        const acc = JSON.parse(raw);
+        if (acc) {
+          return {
+            id: acc.id || 'dir-ced',
+            nom: acc.nom || 'Structure CED',
+            role: 'directeur_ced' as const,
+          };
+        }
+      }
+    } catch {}
+    return { id: 'dir-ced', nom: 'Structure CED', role: 'directeur_ced' as const };
+  };
+
+  const sujetsAValider = sujets.filter((s) => {
+    if (!s) return false;
+    if (s.statutValidation !== 'en_validation') return false;
+    const authorStructure = getDirectorStructure(s.enseignantId) || s.structure || '';
+    return matchStructure(authorStructure, structureName);
+  });
+
+  const handleValiderSujet = (sujetId: string) => {
+    const target = sujets.find((s) => s.id === sujetId);
+    if (!target) return;
+
+    const nowIso = new Date().toISOString();
+    const updatedSujets: Sujet[] = sujets.map((s) =>
+      s.id === sujetId
+        ? {
+            ...s,
+            statutValidation: 'publie' as const,
+            dateValidation: nowIso,
+            motifRefus: undefined,
+          }
+        : s
+    );
+
+    setSujets(updatedSujets);
+    storageService.setSujets(updatedSujets);
+
+    logEvent(
+      getStructureActeur(),
+      fr.journalActions.sujetValide,
+      target.titre || fr.cedSeances.nonRenseigne
+    );
+
+    if (target.enseignantId) {
+      ajouterNotification({
+        destinataireId: target.enseignantId,
+        texte: `Votre sujet "${target.titre || fr.cedSeances.nonRenseigne}" a été validé et publié.`,
+        type: 'info',
+      });
+    }
+
+    window.dispatchEvent(new CustomEvent('usmba_sujets_updated'));
+    setMessage({ type: 'success', text: fr.cedSeances.sujetValideToast });
+    setTimeout(() => setMessage(null), 4000);
+  };
+
+  const handleOpenRefusSujet = (sujetId: string) => {
+    setRefusModalSujetId(sujetId);
+    setRefusSujetMotif('');
+    setRefusSujetError(null);
+  };
+
+  const handleConfirmerRefusSujet = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!refusModalSujetId) return;
+
+    const cleanMotif = refusSujetMotif.trim();
+    if (cleanMotif.length < 5) {
+      setRefusSujetError(fr.cedSeances.refusSujetMotifError);
+      return;
+    }
+
+    const target = sujets.find((s) => s.id === refusModalSujetId);
+    if (!target) return;
+
+    const updatedSujets: Sujet[] = sujets.map((s) =>
+      s.id === refusModalSujetId
+        ? {
+            ...s,
+            statutValidation: 'refuse' as const,
+            motifRefus: cleanMotif,
+          }
+        : s
+    );
+
+    setSujets(updatedSujets);
+    storageService.setSujets(updatedSujets);
+
+    logEvent(
+      getStructureActeur(),
+      fr.journalActions.sujetRefuse,
+      target.titre || fr.cedSeances.nonRenseigne,
+      cleanMotif
+    );
+
+    if (target.enseignantId) {
+      ajouterNotification({
+        destinataireId: target.enseignantId,
+        texte: `Votre sujet "${target.titre || fr.cedSeances.nonRenseigne}" a été refusé par la Structure : ${cleanMotif}`,
+        type: 'info',
+      });
+    }
+
+    window.dispatchEvent(new CustomEvent('usmba_sujets_updated'));
+    setRefusModalSujetId(null);
+    setRefusSujetMotif('');
+    setRefusSujetError(null);
+    setMessage({ type: 'success', text: fr.cedSeances.sujetRefuseToast });
+    setTimeout(() => setMessage(null), 4000);
+  };
+
+
   const pvsStructure = pvs.filter((pv) => {
     if (pv.remplaceePar) return false;
     // Déterminer la structure à la lecture
@@ -503,6 +663,105 @@ export const CedSeances: React.FC = () => {
             </p>
           )}
         </div>
+      </div>
+
+      {/* SECTION : Sujets à valider par la Structure */}
+      <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs space-y-3">
+        <div className="flex items-center justify-between gap-2 flex-wrap pb-2 border-b border-slate-100">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+              <BookOpen size={16} className="text-emerald-700 shrink-0" />
+              <span>{fr.cedSeances.sectionSujetsAValider}</span>
+              {sujetsAValider.length > 0 && (
+                <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                  {sujetsAValider.length}
+                </span>
+              )}
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              {fr.cedSeances.sectionSujetsAValiderSub}
+            </p>
+          </div>
+          <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-lg">
+            {structureName}
+          </span>
+        </div>
+
+        {sujetsAValider.length === 0 ? (
+          <div className="p-6 text-center text-xs text-slate-400 italic">
+            {fr.cedSeances.aucunSujetAValider}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-3">
+            {sujetsAValider.map((sujet) => {
+              const titre = sujet.titre?.trim() ? sujet.titre : fr.cedSeances.nonRenseigne;
+              const dirNom = getDirectorName(sujet.enseignantId);
+              const dateRaw = sujet.dateCreation || sujet.dateValidation;
+              const dateFormatted = dateRaw ? formatDateJJMM(dateRaw) : fr.cedSeances.nonRenseigne;
+
+              return (
+                <div
+                  key={sujet.id}
+                  className="bg-slate-50/70 border border-slate-200 hover:border-slate-300 rounded-xl p-3.5 space-y-2.5 transition shadow-2xs"
+                >
+                  <div className="flex items-start justify-between gap-3 flex-wrap">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-amber-900 bg-amber-100 border border-amber-200 px-2 py-0.5 rounded-full flex items-center gap-1">
+                          <Clock size={10} />
+                          <span>{fr.mesSujets.statutEnValidation}</span>
+                        </span>
+                        {sujet.discipline && (
+                          <span className="text-[10px] font-bold text-slate-600 bg-white border border-slate-200 px-2 py-0.5 rounded-md">
+                            {sujet.discipline}
+                          </span>
+                        )}
+                      </div>
+                      <h4 className="text-xs sm:text-sm font-bold text-slate-900 leading-snug">
+                        {titre}
+                      </h4>
+                      <div className="mt-1 flex items-center gap-3 text-xs text-slate-600 flex-wrap">
+                        <span>
+                          <strong className="text-slate-700">{fr.cedSeances.titreDirecteur} :</strong>{' '}
+                          {dirNom}
+                        </span>
+                        <span>•</span>
+                        <span>
+                          <strong className="text-slate-700">{fr.cedSeances.titreDate} :</strong>{' '}
+                          {dateFormatted}
+                        </span>
+                      </div>
+                      {sujet.descriptionCourte && (
+                        <p className="mt-2 text-xs text-slate-500 italic bg-white p-2 rounded-lg border border-slate-200/70">
+                          {sujet.descriptionCourte}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0 self-start sm:self-center">
+                      <button
+                        type="button"
+                        onClick={() => handleValiderSujet(sujet.id)}
+                        className="px-3 py-1.5 rounded-xl text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 transition cursor-pointer flex items-center gap-1.5 shadow-xs active:scale-98"
+                      >
+                        <CheckCircle2 size={13} />
+                        <span>{fr.cedSeances.btnValider}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenRefusSujet(sujet.id)}
+                        className="px-3 py-1.5 rounded-xl text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-300 transition cursor-pointer flex items-center gap-1.5 active:scale-98"
+                      >
+                        <XCircle size={13} />
+                        <span>{fr.cedSeances.btnRefuser}</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {pvsStructure.length === 0 ? (
@@ -915,6 +1174,78 @@ export const CedSeances: React.FC = () => {
                 {fr.cedSeances.btnConfirmerRefus}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de refus de sujet avec validation de motif >= 5 caractères */}
+      {refusModalSujetId && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-5 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200">
+              <div className="flex items-center gap-2">
+                <XCircle className="text-rose-600 shrink-0" size={20} />
+                <h3 className="text-sm font-bold text-slate-900">
+                  {fr.cedSeances.refuserSujetModalTitle}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setRefusModalSujetId(null);
+                  setRefusSujetMotif('');
+                  setRefusSujetError(null);
+                }}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+              >
+                <XCircle size={16} />
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmerRefusSujet} className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  {fr.cedSeances.refusSujetMotifLabel} <span className="text-rose-600">*</span>
+                </label>
+                <textarea
+                  rows={3}
+                  value={refusSujetMotif}
+                  onChange={(e) => {
+                    setRefusSujetMotif(e.target.value);
+                    if (refusSujetError && e.target.value.trim().length >= 5) {
+                      setRefusSujetError(null);
+                    }
+                  }}
+                  placeholder={fr.cedSeances.refusSujetMotifPlaceholder}
+                  className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-600"
+                />
+                {refusSujetError && (
+                  <p className="text-xs text-rose-600 font-semibold mt-1">
+                    {refusSujetError}
+                  </p>
+                )}
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRefusModalSujetId(null);
+                    setRefusSujetMotif('');
+                    setRefusSujetError(null);
+                  }}
+                  className="px-3.5 py-1.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-100 transition cursor-pointer"
+                >
+                  {fr.mesSujets.btnAnnuler}
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-1.5 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white shadow-xs transition cursor-pointer active:scale-98"
+                >
+                  {fr.cedSeances.btnRefuser}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
