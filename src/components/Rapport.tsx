@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   FileText,
   Save,
@@ -14,12 +14,42 @@ import {
   User,
   ShieldCheck,
   RotateCcw,
+  Upload,
+  Download,
+  Eye,
+  ExternalLink,
+  X,
+  Printer,
 } from 'lucide-react';
 import { Rapport, RapportStatut } from '../types';
 import { INITIAL_RAPPORTS, DEMO_DOCTORANT_NADIA } from '../data/mockData';
 import { fr } from '../i18n/fr';
 
 const STORAGE_KEY_RAPPORTS = 'usmba_doctorat_rapports';
+
+function isPdfData(data?: string): boolean {
+  if (!data || typeof data !== 'string') return false;
+  return data.startsWith('data:application/pdf') || data.toLowerCase().endsWith('.pdf');
+}
+
+function openPdfInNewTab(dataUrl: string): void {
+  try {
+    const arr = dataUrl.split(',');
+    const mimeMatch = arr[0].match(/:(.*?);/);
+    const mime = mimeMatch ? mimeMatch[1] : 'application/pdf';
+    const bstr = atob(arr[1]);
+    let n = bstr.length;
+    const u8arr = new Uint8Array(n);
+    while (n--) {
+      u8arr[n] = bstr.charCodeAt(n);
+    }
+    const blob = new Blob([u8arr], { type: mime });
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank');
+  } catch {
+    // Échec sans plantage
+  }
+}
 
 interface RapportComponentProps {
   doctorantId?: string;
@@ -35,7 +65,7 @@ export const RapportComponent: React.FC<RapportComponentProps> = ({
   const [rapport, setRapport] = useState<Rapport | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
-  // Form states
+  // Form & File states
   const [titre, setTitre] = useState('');
   const [avancement, setAvancement] = useState('');
   const [publications, setPublications] = useState<{ titre: string; doi?: string }[]>([]);
@@ -43,19 +73,19 @@ export const RapportComponent: React.FC<RapportComponentProps> = ({
   const [formationsHeures, setFormationsHeures] = useState<number>(0);
   const [perspectives, setPerspectives] = useState('');
   const [aucuneActivite, setAucuneActivite] = useState(false);
-
-  // New item inputs
-  const [newPubTitre, setNewPubTitre] = useState('');
-  const [newPubDoi, setNewPubDoi] = useState('');
-  const [newCommTitre, setNewCommTitre] = useState('');
-  const [newCommLieu, setNewCommLieu] = useState('');
+  const [fichierPdf, setFichierPdf] = useState<string | null>(null);
+  const [nomFichier, setNomFichier] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [viewingRapport, setViewingRapport] = useState<boolean>(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const loadData = () => {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY_RAPPORTS);
+      const raw = localStorage.getItem(STORAGE_KEY_RAPPORTS) || localStorage.getItem('usmba_rapports');
       let list: Rapport[] = raw ? JSON.parse(raw) : INITIAL_RAPPORTS;
       if (!raw) {
         localStorage.setItem(STORAGE_KEY_RAPPORTS, JSON.stringify(INITIAL_RAPPORTS));
+        localStorage.setItem('usmba_rapports', JSON.stringify(INITIAL_RAPPORTS));
       }
       setAllRapports(list);
 
@@ -86,6 +116,7 @@ export const RapportComponent: React.FC<RapportComponentProps> = ({
         };
         list = [current, ...list];
         localStorage.setItem(STORAGE_KEY_RAPPORTS, JSON.stringify(list));
+        localStorage.setItem('usmba_rapports', JSON.stringify(list));
       }
 
       setRapport(current);
@@ -96,6 +127,8 @@ export const RapportComponent: React.FC<RapportComponentProps> = ({
       setFormationsHeures(current.formationsHeures || 0);
       setPerspectives(current.perspectives || '');
       setAucuneActivite(Boolean(current.aucuneActivite));
+      setFichierPdf(current.fichierPdf || null);
+      setNomFichier(current.nomFichier || null);
     } catch {
       // safe fallback
     }
@@ -121,6 +154,7 @@ export const RapportComponent: React.FC<RapportComponentProps> = ({
         updatedList.push(updatedRapport);
       }
       localStorage.setItem(STORAGE_KEY_RAPPORTS, JSON.stringify(updatedList));
+      localStorage.setItem('usmba_rapports', JSON.stringify(updatedList));
       setAllRapports(updatedList);
       setRapport(updatedRapport);
       if (toast) {
@@ -128,6 +162,7 @@ export const RapportComponent: React.FC<RapportComponentProps> = ({
         setTimeout(() => setToastMsg(null), 3500);
       }
       window.dispatchEvent(new CustomEvent('usmba_rapports_updated'));
+      window.dispatchEvent(new CustomEvent('storage'));
       return true;
     } catch {
       return false;
@@ -138,83 +173,79 @@ export const RapportComponent: React.FC<RapportComponentProps> = ({
 
   // Verrouillage : modifiable uniquement si 'brouillon' ou 'a_corriger'
   const isEditable = rapport.statut === 'brouillon' || rapport.statut === 'a_corriger';
-  const canSubmit = Boolean(titre.trim() && avancement.trim());
+  const canSubmit = isEditable && Boolean(fichierPdf);
 
-  // Ajout de publication
-  const handleAddPublication = () => {
-    if (!newPubTitre.trim()) return;
-    const updated = [
-      ...publications,
-      { titre: newPubTitre.trim(), doi: newPubDoi.trim() || undefined },
-    ];
-    setPublications(updated);
-    setNewPubTitre('');
-    setNewPubDoi('');
-  };
-
-  const handleRemovePublication = (idx: number) => {
-    setPublications(publications.filter((_, i) => i !== idx));
-  };
-
-  // Ajout de communication
-  const handleAddCommunication = () => {
-    if (!newCommTitre.trim()) return;
-    const updated = [
-      ...communications,
-      { titre: newCommTitre.trim(), lieu: newCommLieu.trim() || undefined },
-    ];
-    setCommunications(updated);
-    setNewCommTitre('');
-    setNewCommLieu('');
-  };
-
-  const handleRemoveCommunication = (idx: number) => {
-    setCommunications(communications.filter((_, i) => i !== idx));
-  };
-
-  // Enregistrement brouillon
-  const handleSaveDraft = () => {
-    const updated: Rapport = {
-      ...rapport,
-      titre: titre.trim(),
-      avancement: avancement.trim(),
-      publications,
-      communications,
-      formationsHeures: Math.max(0, formationsHeures),
-      perspectives: perspectives.trim(),
-      aucuneActivite,
-      statut: rapport.statut === 'a_corriger' ? 'a_corriger' : 'brouillon',
+  const handleFileUpload = (file: File) => {
+    setUploadError(null);
+    const MAX_SIZE = 1.5 * 1024 * 1024; // 1.5 Mo max
+    if (file.size > MAX_SIZE) {
+      setUploadError(fr.reinscription.fichierTropLourd);
+      return;
+    }
+    if (!file.type.includes('pdf') && !file.name.toLowerCase().endsWith('.pdf')) {
+      setUploadError('Le fichier doit être au format PDF.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      setFichierPdf(dataUrl);
+      setNomFichier(file.name);
+      setUploadError(null);
+      if (rapport) {
+        const draft: Rapport = {
+          ...rapport,
+          fichierPdf: dataUrl,
+          nomFichier: file.name,
+        };
+        saveRapportToStorage(draft);
+      }
     };
-    saveRapportToStorage(updated, fr.reinscription.draftSavedToast);
+    reader.onerror = () => {
+      setUploadError('Erreur de lecture du fichier PDF.');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemoveFile = () => {
+    setFichierPdf(null);
+    setNomFichier(null);
+    setUploadError(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+    if (rapport) {
+      const draft: Rapport = {
+        ...rapport,
+        fichierPdf: undefined,
+        nomFichier: undefined,
+      };
+      saveRapportToStorage(draft);
+    }
   };
 
   // Soumission
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!canSubmit) return;
+    if (!canSubmit || !fichierPdf) return;
 
     const todayStr = new Date().toLocaleDateString('fr-FR');
     const newChrono = [
       ...(rapport.chronologie || []),
       {
         date: todayStr,
-        acteur: 'Doctorante (Nadia Alaoui)',
+        acteur: `Doctorante (${DEMO_DOCTORANT_NADIA.nom})`,
         action:
           rapport.statut === 'a_corriger'
-            ? 'Nouvelle soumission après corrections'
-            : 'Dépôt et soumission du rapport d’avancement annuel',
+            ? 'Nouvelle soumission du rapport PDF après corrections'
+            : 'Téléversement et soumission du rapport annuel de réinscription (PDF)',
       },
     ];
 
     const updated: Rapport = {
       ...rapport,
-      titre: titre.trim(),
-      avancement: avancement.trim(),
-      publications,
-      communications,
-      formationsHeures: Math.max(0, formationsHeures),
-      perspectives: perspectives.trim(),
-      aucuneActivite,
+      fichierPdf,
+      nomFichier: nomFichier || 'rapport_reinscription.pdf',
       statut: 'soumis',
       soumisLe: new Date().toISOString(),
       chronologie: newChrono,
@@ -245,7 +276,8 @@ export const RapportComponent: React.FC<RapportComponentProps> = ({
   const waitingInfo = getWaitingActor();
 
   return (
-    <div className="space-y-4">
+    <>
+      <div className="space-y-4 print:hidden">
       {/* En-tête sobre doctorant */}
       <div className="bg-slate-900 text-white rounded-xl p-4 shadow-xs">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -265,7 +297,17 @@ export const RapportComponent: React.FC<RapportComponentProps> = ({
             </p>
           </div>
 
-          <div className="flex items-center gap-1.5 self-start sm:self-center">
+          <div className="flex items-center gap-2 self-start sm:self-center flex-wrap">
+            <button
+              type="button"
+              onClick={() => window.print()}
+              className="px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-400 hover:bg-amber-300 text-slate-950 transition flex items-center gap-1.5 cursor-pointer shadow-xs active:scale-98"
+              title={fr.reinscription.btnTelechargerModele}
+            >
+              <Download size={13} />
+              <span>{fr.reinscription.btnTelechargerModele}</span>
+            </button>
+
             <span
               className={`text-xs font-bold px-3 py-1 rounded-full border ${
                 rapport.statut === 'valide_ced'
@@ -349,285 +391,161 @@ export const RapportComponent: React.FC<RapportComponentProps> = ({
       {/* CONTENU ONGLETS */}
       {activeTab === 'rapport' ? (
         <div className="space-y-4">
-          {/* INDICATEURS D'ACTIVITÉ CALCULÉS AUTOMATIQUEMENT (Pas de pourcentage) */}
-          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
-            <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider mb-3">
-              {fr.reinscription.indicatorsTitle}
-            </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold text-base shrink-0">
-                  {publications.length}
-                </div>
-                <div>
-                  <span className="text-xs font-bold text-slate-900">{fr.reinscription.publicationsCount}</span>
-                  <p className="text-[11px] text-slate-500">Revues et articles</p>
-                </div>
+          {/* Étape 1 : Téléchargement du modèle vierge pour remplissage hors ligne */}
+          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                  1. Modèle officiel de réinscription
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Téléchargez ou imprimez le modèle officiel vierge à remplir hors ligne.
+                </p>
               </div>
-
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-sky-100 text-sky-800 flex items-center justify-center font-bold text-base shrink-0">
-                  {communications.length}
-                </div>
-                <div>
-                  <span className="text-xs font-bold text-slate-900">{fr.reinscription.communicationsCount}</span>
-                  <p className="text-[11px] text-slate-500">Conférences et séminaires</p>
-                </div>
-              </div>
-
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-amber-100 text-amber-900 flex items-center justify-center font-bold text-base shrink-0">
-                  {formationsHeures} h
-                </div>
-                <div>
-                  <span className="text-xs font-bold text-slate-900">{fr.reinscription.formationsCount}</span>
-                  <p className="text-[11px] text-slate-500">Formations transversales</p>
-                </div>
-              </div>
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="px-4 py-2 rounded-lg text-xs font-bold bg-slate-800 hover:bg-slate-900 text-white transition flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-98 shrink-0"
+              >
+                <Printer size={14} />
+                <span>{fr.reinscription.btnTelechargerModele}</span>
+              </button>
             </div>
           </div>
 
-          {/* FORMULAIRE STRUCTURÉ DU RAPPORT */}
-          <form onSubmit={handleSubmit} className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs space-y-4">
-            {/* Titre */}
+          {/* Étape 2 : Dépôt du rapport PDF (1,5 Mo max) */}
+          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs space-y-4">
             <div>
-              <label className="block text-xs font-bold text-slate-800 mb-1">
-                {fr.reinscription.titreLabel} *
-              </label>
-              <input
-                type="text"
-                disabled={!isEditable}
-                value={titre}
-                onChange={(e) => setTitre(e.target.value)}
-                className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-700 disabled:bg-slate-50 disabled:text-slate-700"
-                required
-              />
+              <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                2. Dépôt de votre rapport rempli (PDF)
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {fr.reinscription.glisserOuCliquerPdf}
+              </p>
             </div>
 
-            {/* Avancement */}
-            <div>
-              <label className="block text-xs font-bold text-slate-800 mb-1">
-                {fr.reinscription.avancementLabel}
-              </label>
-              <textarea
-                rows={4}
-                disabled={!isEditable}
-                value={avancement}
-                onChange={(e) => setAvancement(e.target.value)}
-                placeholder={fr.reinscription.avancementPlaceholder}
-                className="w-full text-xs p-3 border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-700 disabled:bg-slate-50 disabled:text-slate-700 leading-relaxed"
-                required
-              />
-            </div>
-
-            {/* Case "Aucune activité" */}
-            <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
-              <label className="flex items-center gap-2 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  disabled={!isEditable}
-                  checked={aucuneActivite}
-                  onChange={(e) => setAucuneActivite(e.target.checked)}
-                  className="w-4 h-4 rounded text-emerald-700 focus:ring-emerald-600"
-                />
-                <span className="text-xs font-medium text-slate-700">
-                  {fr.reinscription.aucuneActiviteLabel}
-                </span>
-              </label>
-            </div>
-
-            {/* Section Publications */}
-            <div className="space-y-2 pt-2 border-t border-slate-100">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-bold text-slate-800 uppercase tracking-wide">
-                  {fr.reinscription.publicationsSectionTitle} ({publications.length})
-                </label>
-              </div>
-
-              {publications.length === 0 ? (
-                <p className="text-xs text-slate-400 italic">Aucune publication enregistrée.</p>
-              ) : (
-                <div className="space-y-1.5">
-                  {publications.map((pub, idx) => (
-                    <div
-                      key={idx}
-                      className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs"
-                    >
-                      <div>
-                        <p className="font-semibold text-slate-900">{pub.titre}</p>
-                        {pub.doi && <p className="text-[11px] text-slate-500 font-mono">DOI: {pub.doi}</p>}
-                      </div>
-                      {isEditable && (
-                        <button
-                          type="button"
-                          onClick={() => handleRemovePublication(idx)}
-                          className="text-slate-400 hover:text-rose-600 p-1 cursor-pointer"
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {isEditable && (
-                <div className="flex flex-col sm:flex-row gap-2 pt-1">
-                  <input
-                    type="text"
-                    value={newPubTitre}
-                    onChange={(e) => setNewPubTitre(e.target.value)}
-                    placeholder={fr.reinscription.pubTitrePlaceholder}
-                    className="flex-1 text-xs px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white"
-                  />
-                  <input
-                    type="text"
-                    value={newPubDoi}
-                    onChange={(e) => setNewPubDoi(e.target.value)}
-                    placeholder={fr.reinscription.pubDoiPlaceholder}
-                    className="w-full sm:w-44 text-xs px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleAddPublication}
-                    className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 text-white hover:bg-slate-900 flex items-center justify-center gap-1 cursor-pointer"
-                  >
-                    <Plus size={13} />
-                    <span>Ajouter</span>
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* Section Communications */}
-            <div className="space-y-2 pt-2 border-t border-slate-100">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-bold text-slate-800 uppercase tracking-wide">
-                  {fr.reinscription.communicationsSectionTitle} ({communications.length})
-                </label>
-              </div>
-
-              {communications.length === 0 ? (
-                <p className="text-xs text-slate-400 italic">Aucune communication enregistrée.</p>
-              ) : (
-                <div className="space-y-1.5">
-                  {communications.map((comm, idx) => (
-                    <div
-                      key={idx}
-                      className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs"
-                    >
-                      <div>
-                        <p className="font-semibold text-slate-900">{comm.titre}</p>
-                        {comm.lieu && <p className="text-[11px] text-slate-500">Lieu : {comm.lieu}</p>}
-                      </div>
-                      {isEditable && (
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveCommunication(idx)}
-                          className="text-slate-400 hover:text-rose-600 p-1 cursor-pointer"
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {isEditable && (
-                <div className="flex flex-col sm:flex-row gap-2 pt-1">
-                  <input
-                    type="text"
-                    value={newCommTitre}
-                    onChange={(e) => setNewCommTitre(e.target.value)}
-                    placeholder={fr.reinscription.commTitrePlaceholder}
-                    className="flex-1 text-xs px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white"
-                  />
-                  <input
-                    type="text"
-                    value={newCommLieu}
-                    onChange={(e) => setNewCommLieu(e.target.value)}
-                    placeholder={fr.reinscription.commLieuPlaceholder}
-                    className="w-full sm:w-44 text-xs px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleAddCommunication}
-                    className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 text-white hover:bg-slate-900 flex items-center justify-center gap-1 cursor-pointer"
-                  >
-                    <Plus size={13} />
-                    <span>Ajouter</span>
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* Heures de formation */}
-            <div className="pt-2 border-t border-slate-100">
-              <label className="block text-xs font-bold text-slate-800 mb-1">
-                {fr.reinscription.formationsHoursLabel}
-              </label>
-              <input
-                type="number"
-                min={0}
-                disabled={!isEditable}
-                value={formationsHeures}
-                onChange={(e) => setFormationsHeures(Number(e.target.value))}
-                className="w-32 text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-700 disabled:bg-slate-50"
-              />
-            </div>
-
-            {/* Perspectives */}
-            <div className="pt-2 border-t border-slate-100">
-              <label className="block text-xs font-bold text-slate-800 mb-1">
-                {fr.reinscription.perspectivesLabel}
-              </label>
-              <textarea
-                rows={3}
-                disabled={!isEditable}
-                value={perspectives}
-                onChange={(e) => setPerspectives(e.target.value)}
-                placeholder={fr.reinscription.perspectivesPlaceholder}
-                className="w-full text-xs p-3 border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-700 disabled:bg-slate-50 disabled:text-slate-700 leading-relaxed"
-              />
-            </div>
-
-            {/* BOUTONS D'ACTION (Brouillon & Soumettre) */}
+            {/* Input fichier et zone de téléversement */}
             {isEditable && (
-              <div className="pt-3 border-t border-slate-200 space-y-2">
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+              <div className="space-y-2">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="application/pdf,.pdf"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) handleFileUpload(file);
+                  }}
+                  className="hidden"
+                  id="pdf-upload-input"
+                />
+
+                {!fichierPdf && (
+                  <label
+                    htmlFor="pdf-upload-input"
+                    className="border-2 border-dashed border-slate-300 hover:border-emerald-600 rounded-xl p-6 flex flex-col items-center justify-center text-center cursor-pointer transition bg-slate-50/50 hover:bg-emerald-50/30 group"
+                  >
+                    <Upload size={28} className="text-slate-400 group-hover:text-emerald-600 mb-2 transition" />
+                    <span className="text-xs font-bold text-slate-800 group-hover:text-emerald-800">
+                      {fr.reinscription.btnTeleverserPdf}
+                    </span>
+                    <span className="text-[11px] text-slate-500 mt-1">
+                      {fr.reinscription.glisserOuCliquerPdf}
+                    </span>
+                  </label>
+                )}
+
+                {uploadError && (
+                  <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2">
+                    <AlertCircle size={15} className="text-rose-600 shrink-0" />
+                    <span>{uploadError}</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Fichier PDF présent */}
+            {fichierPdf && (
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center justify-between gap-3 flex-wrap">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-9 h-9 rounded-lg bg-rose-100 text-rose-700 flex items-center justify-center shrink-0">
+                    <FileText size={18} />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-slate-900 truncate">
+                      {nomFichier || 'rapport_reinscription.pdf'}
+                    </p>
+                    <span className="text-[10px] text-emerald-700 font-semibold flex items-center gap-1">
+                      <CheckCircle2 size={11} /> Document PDF prêt
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={handleSaveDraft}
-                    className="px-4 py-2 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                    onClick={() => setViewingRapport(true)}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-100 transition cursor-pointer flex items-center gap-1 shadow-2xs"
                   >
-                    <Save size={14} />
-                    <span>{fr.reinscription.btnSaveDraft}</span>
+                    <Eye size={13} />
+                    <span>{fr.reinscription.btnVoir}</span>
                   </button>
 
-                  <div className="flex-1 flex flex-col items-end">
+                  {isEditable && (
                     <button
-                      type="submit"
-                      disabled={!canSubmit}
-                      className={`w-full sm:w-auto px-5 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-colors ${
-                        canSubmit
-                          ? 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer shadow-xs active:scale-98'
-                          : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
-                      }`}
+                      type="button"
+                      onClick={handleRemoveFile}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer"
+                      title={fr.reinscription.supprimerFichier}
                     >
-                      <Send size={14} />
-                      <span>{fr.reinscription.btnSubmit}</span>
+                      <Trash2 size={14} />
                     </button>
-                    {!canSubmit && (
-                      <span className="text-[10px] text-rose-600 font-medium mt-1">
-                        {fr.reinscription.submitDisabledReason}
-                      </span>
-                    )}
-                  </div>
+                  )}
                 </div>
               </div>
             )}
-          </form>
+
+            {/* Compatibilité anciens rapports saisis en ligne */}
+            {!fichierPdf && (rapport.avancement || rapport.publications?.length || rapport.communications?.length) && (
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <FileText size={16} className="text-slate-500" />
+                  <span className="text-xs font-medium text-slate-700">Données de rapport enregistrées en ligne</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setViewingRapport(true)}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-100 transition cursor-pointer flex items-center gap-1 shadow-2xs"
+                >
+                  <Eye size={13} />
+                  <span>{fr.reinscription.btnVoir}</span>
+                </button>
+              </div>
+            )}
+
+            {/* Étape 3 : Soumission */}
+            {isEditable && (
+              <div className="pt-3 border-t border-slate-200 flex flex-col items-end">
+                <button
+                  type="button"
+                  disabled={!canSubmit}
+                  onClick={handleSubmit}
+                  className={`w-full sm:w-auto px-5 py-2.5 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-colors ${
+                    canSubmit
+                      ? 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer shadow-xs active:scale-98'
+                      : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
+                  }`}
+                >
+                  <Send size={14} />
+                  <span>{fr.reinscription.btnSubmit}</span>
+                </button>
+                {!canSubmit && (
+                  <span className="text-[11px] text-rose-600 font-semibold mt-1.5">
+                    {fr.reinscription.televerseDabord}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       ) : (
         /* ONGLET SUIVI & CHRONOLOGIE */
@@ -729,6 +647,188 @@ export const RapportComponent: React.FC<RapportComponentProps> = ({
           </div>
         </div>
       )}
-    </div>
+      </div>
+
+      {/* Visionneuse de document (PDF en iframe + Ouvrir dans un nouvel onglet, ou ancien rapport) */}
+      {viewingRapport && (
+        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-xs flex flex-col p-3 sm:p-6 overflow-hidden print:hidden">
+          <div className="flex items-center justify-between pb-3 text-white border-b border-slate-800 shrink-0">
+            <div className="flex items-center gap-3 min-w-0">
+              <h3 className="text-sm sm:text-base font-bold truncate">
+                {fr.reinscription.apercuRapport} — {DEMO_DOCTORANT_NADIA.nom}
+              </h3>
+              {fichierPdf && isPdfData(fichierPdf) && (
+                <button
+                  type="button"
+                  onClick={() => openPdfInNewTab(fichierPdf)}
+                  className="px-3 py-1.5 text-xs font-semibold rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1.5 cursor-pointer shadow-xs shrink-0"
+                >
+                  <ExternalLink size={13} />
+                  <span>{fr.dossierDirecteur.ouvrirNouvelOnglet}</span>
+                </button>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setViewingRapport(false)}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer ml-2"
+              aria-label={fr.dossierDirecteur.fermerApercu}
+            >
+              <X size={20} />
+            </button>
+          </div>
+
+          <div className="flex-1 flex items-center justify-center p-2 sm:p-4 overflow-auto">
+            {fichierPdf && isPdfData(fichierPdf) ? (
+              <iframe
+                src={fichierPdf}
+                title={nomFichier || 'Rapport PDF'}
+                className="w-full h-full min-h-[75vh] rounded-xl bg-white border border-slate-800 shadow-xl"
+              />
+            ) : (rapport.avancement || rapport.titre || (rapport.publications && rapport.publications.length > 0)) ? (
+              <div className="w-full max-w-2xl bg-white text-slate-800 rounded-xl p-6 shadow-xl max-h-[80vh] overflow-y-auto space-y-4">
+                <div className="border-b border-slate-200 pb-3">
+                  <span className="text-[10px] font-bold uppercase text-emerald-700">{rapport.annee}ᵉ année de doctorat</span>
+                  <h4 className="text-sm font-bold text-slate-900 mt-1">{rapport.titre}</h4>
+                </div>
+                {rapport.avancement && (
+                  <div>
+                    <span className="text-xs font-bold text-slate-900">{fr.reinscription.avancementLabel} :</span>
+                    <p className="text-xs text-slate-600 mt-1 whitespace-pre-line leading-relaxed">{rapport.avancement}</p>
+                  </div>
+                )}
+                {rapport.publications && rapport.publications.length > 0 && (
+                  <div>
+                    <span className="text-xs font-bold text-slate-900">{fr.reinscription.publicationsSectionTitle} :</span>
+                    <ul className="list-disc list-inside text-xs text-slate-600 mt-1 space-y-1">
+                      {rapport.publications.map((p, i) => (
+                        <li key={i}>{p.titre} {p.doi && <span className="text-[11px] text-slate-400 font-mono">({p.doi})</span>}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {rapport.communications && rapport.communications.length > 0 && (
+                  <div>
+                    <span className="text-xs font-bold text-slate-900">{fr.reinscription.communicationsSectionTitle} :</span>
+                    <ul className="list-disc list-inside text-xs text-slate-600 mt-1 space-y-1">
+                      {rapport.communications.map((c, i) => (
+                        <li key={i}>{c.titre} {c.lieu && <span className="text-[11px] text-slate-400">({c.lieu})</span>}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {rapport.formationsHeures > 0 && (
+                  <div>
+                    <span className="text-xs font-bold text-slate-900">{fr.reinscription.formationsHoursLabel} :</span>
+                    <p className="text-xs text-slate-600 mt-0.5">{rapport.formationsHeures} h</p>
+                  </div>
+                )}
+                {rapport.perspectives && (
+                  <div>
+                    <span className="text-xs font-bold text-slate-900">{fr.reinscription.perspectivesLabel} :</span>
+                    <p className="text-xs text-slate-600 mt-1 whitespace-pre-line leading-relaxed">{rapport.perspectives}</p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="text-center p-8 bg-slate-900 rounded-2xl text-slate-400 font-medium border border-slate-800">
+                <p>{fr.dossierDirecteur.aucuneDonnee}</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Modèle officiel vierge pour impression CSS */}
+      <div id="modele-impression-vierge" className="hidden print:block text-slate-900 bg-white p-6 font-sans">
+        <div className="border-b-2 border-slate-900 pb-4 mb-6 text-center">
+          <h1 className="text-base font-bold uppercase tracking-wider">{fr.reinscription.modeleImpressionTitre}</h1>
+          <h2 className="text-xs font-semibold text-slate-700 mt-1">{fr.reinscription.modeleImpressionSousTitre}</h2>
+          <p className="text-[11px] text-slate-500 mt-1 italic">{fr.reinscription.modeleAnneeUniversitaire}</p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4 border border-slate-300 rounded-lg p-3 text-xs mb-6 bg-slate-50/50">
+          <div>
+            <span className="font-bold">{fr.reinscription.modeleDoctorantNom}</span> {DEMO_DOCTORANT_NADIA.nom}
+          </div>
+          <div>
+            <span className="font-bold">{fr.reinscription.modeleDoctorantAnnee}</span> {DEMO_DOCTORANT_NADIA.annee}ᵉ année
+          </div>
+          <div>
+            <span className="font-bold">{fr.reinscription.modeleDirecteurNom}</span> Pr. Karim El Amrani
+          </div>
+          <div>
+            <span className="font-bold">{fr.reinscription.modeleStructure}</span> {DEMO_DOCTORANT_NADIA.structure}
+          </div>
+        </div>
+
+        <div className="space-y-4 text-xs">
+          <div>
+            <h3 className="font-bold uppercase tracking-wide text-slate-900 mb-1">
+              1. {fr.reinscription.titreLabel}
+            </h3>
+            <div className="border border-slate-300 rounded-lg p-3 min-h-[48px] bg-white">
+              {titre || DEMO_DOCTORANT_NADIA.sujetTitre}
+            </div>
+          </div>
+
+          <div>
+            <h3 className="font-bold uppercase tracking-wide text-slate-900 mb-1">
+              2. {fr.reinscription.publicationsSectionTitle}
+            </h3>
+            <div className="border border-slate-300 rounded-lg p-3 min-h-[75px] bg-white text-slate-400 italic">
+              (Revues, articles acceptés ou parus, DOI...)
+            </div>
+          </div>
+
+          <div>
+            <h3 className="font-bold uppercase tracking-wide text-slate-900 mb-1">
+              3. {fr.reinscription.communicationsSectionTitle}
+            </h3>
+            <div className="border border-slate-300 rounded-lg p-3 min-h-[75px] bg-white text-slate-400 italic">
+              (Conférences, congrès, séminaires avec dates et lieux...)
+            </div>
+          </div>
+
+          <div>
+            <h3 className="font-bold uppercase tracking-wide text-slate-900 mb-1">
+              4. {fr.reinscription.formationsHoursLabel}
+            </h3>
+            <div className="border border-slate-300 rounded-lg p-3 min-h-[48px] bg-white text-slate-400 italic">
+              Nombre d’heures suivies et intitulés des formations :
+            </div>
+          </div>
+
+          <div>
+            <h3 className="font-bold uppercase tracking-wide text-slate-900 mb-1">
+              5. {fr.reinscription.avancementLabel}
+            </h3>
+            <div className="border border-slate-300 rounded-lg p-3 min-h-[160px] bg-white text-slate-400 italic">
+              (État d’avancement des travaux de recherche, résultats obtenus, méthodologies...)
+            </div>
+          </div>
+
+          <div>
+            <h3 className="font-bold uppercase tracking-wide text-slate-900 mb-1">
+              6. {fr.reinscription.perspectivesLabel}
+            </h3>
+            <div className="border border-slate-300 rounded-lg p-3 min-h-[100px] bg-white text-slate-400 italic">
+              (Programme prévisionnel de l’année à venir, rédaction d’articles ou de manuscrit...)
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-8 pt-8 mt-6 border-t border-slate-300">
+            <div className="border border-slate-300 rounded-lg p-4 h-28 flex flex-col justify-between">
+              <span className="font-bold text-[11px]">{fr.reinscription.modeleSignatureDoctorant}</span>
+              <span className="text-[10px] text-slate-400">Date et signature :</span>
+            </div>
+            <div className="border border-slate-300 rounded-lg p-4 h-28 flex flex-col justify-between">
+              <span className="font-bold text-[11px]">{fr.reinscription.modeleSignatureDirecteur}</span>
+              <span className="text-[10px] text-slate-400">Date, avis et signature :</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
   );
 };

@@ -51,6 +51,7 @@ interface MobileNavProps {
     candidaturesCount?: number;
     piecesPretes?: number;
     alertesCed?: number;
+    reinscriptionsCount?: number;
   };
 }
 
@@ -379,6 +380,32 @@ export const MobileNav: React.FC<MobileNavProps> = ({
                   })}
                 </div>
               </div>
+            )}
+
+            {/* Entrée Réinscriptions pour le directeur dans le menu Compte */}
+            {normalizedRoles.includes('enseignant') && (
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  onTabChange('reinscriptions');
+                }}
+                className={`w-full text-left py-2.5 px-3 rounded-xl flex items-center justify-between text-xs font-semibold cursor-pointer transition ${
+                  currentTab === 'reinscriptions'
+                    ? 'bg-emerald-50 text-emerald-800 border border-emerald-200 shadow-xs'
+                    : 'bg-slate-50 hover:bg-slate-100 text-slate-700'
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <Award size={16} className={currentTab === 'reinscriptions' ? 'text-emerald-700' : 'text-slate-500'} />
+                  <span>{fr.nav.reinscriptions}</span>
+                </div>
+                {Boolean(badgeCounts?.reinscriptionsCount && badgeCounts.reinscriptionsCount > 0) && (
+                  <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-full bg-emerald-600 text-white shadow-xs">
+                    {badgeCounts.reinscriptionsCount}
+                  </span>
+                )}
+              </button>
             )}
 
             <button

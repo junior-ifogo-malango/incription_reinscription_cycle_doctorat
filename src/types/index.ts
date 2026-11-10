@@ -365,6 +365,8 @@ export interface Rapport {
   chronologie: { date: string; acteur: string; action: string }[];
   soumisLe?: string;
   relanceLe?: string;
+  fichierPdf?: string;
+  nomFichier?: string;
 }
 
 export interface Doctorant {

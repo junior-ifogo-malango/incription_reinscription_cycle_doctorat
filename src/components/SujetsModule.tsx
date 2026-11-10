@@ -41,8 +41,8 @@ import { normaliserTel } from '../utils/messages';
 import { logEvent } from '../utils/journal';
 import { MOCK_CANDIDATS, getPeriodeCandidature } from '../data/mockData';
 
-const getDisciplineConfig = (discipline: string) => {
-  const norm = discipline
+const getDisciplineConfig = (discipline?: string) => {
+  const norm = (discipline || '')
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
@@ -161,6 +161,8 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
 
   // Dépliage accordéon sur place (sans pop-up)
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [teacherSubView, setTeacherSubView] = useState<'mes_sujets' | 'catalogue'>('mes_sujets');
+  const [expandedTeacherSujetId, setExpandedTeacherSujetId] = useState<string | null>(null);
 
   // Alerte 4e sujet refusé
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -235,7 +237,8 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
     return Array.from(map.values());
   }, [candidat]);
 
-  const getCandidaturesCount = (sujetId: string): number => {
+  const getCandidaturesCount = (sujetId?: string): number => {
+    if (!sujetId) return 0;
     let count = 0;
     allCandidates.forEach((c) => {
       if (Array.isArray(c?.candidatures) && c.candidatures.includes(sujetId)) {
@@ -245,7 +248,8 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
     return count;
   };
 
-  const getPaniersCount = (sujetId: string): number => {
+  const getPaniersCount = (sujetId?: string): number => {
+    if (!sujetId) return 0;
     let count = 0;
     allCandidates.forEach((c) => {
       if (Array.isArray(c?.panier) && c.panier.includes(sujetId)) {
@@ -1464,237 +1468,697 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
 
   // 1. DIRECTEUR : ONGLET "MES SUJETS"
   if (role === 'enseignant') {
-    const teacherSubjects = sujets.filter((s) => s.enseignantId === activeTeacher.id);
+    const teacherSubjects = (sujets || []).filter((s) => s && s.enseignantId === activeTeacher.id);
     const activeTeacherSubjects = teacherSubjects.filter((s) => s.statut !== 'archive');
     const activeCount = activeTeacherSubjects.length;
     const restants = Math.max(0, QUOTA_SUJETS - activeCount);
     const quotaAtteint = activeCount >= QUOTA_SUJETS;
 
+    // UN seul bouton d'action selon la règle existante
+    const renderTeacherActionButton = (
+      sujet: Sujet,
+      candCount: number,
+      panierCount: number,
+      isArchived: boolean
+    ) => {
+      // Cas 1 : Aucune candidature ni panier -> Supprimer
+      if (candCount === 0 && panierCount === 0) {
+        return (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setSujetToDelete(sujet);
+            }}
+            className="px-3 py-1.5 rounded-xl text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-300 transition cursor-pointer flex items-center gap-1.5 active:scale-98 shrink-0"
+          >
+            <Trash2 size={13} className="text-rose-600 shrink-0" />
+            <span>{fr.mesSujets.btnSupprimer}</span>
+          </button>
+        );
+      }
+
+      // Cas 2 : Paniers seulement -> Retirer
+      if (candCount === 0 && panierCount > 0) {
+        if (isArchived) {
+          return (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs font-semibold text-slate-500 bg-slate-100 border border-slate-200 shrink-0">
+              <Archive size={12} className="text-slate-400 shrink-0" />
+              <span>{fr.mesSujets.statutArchive}</span>
+            </span>
+          );
+        }
+        return (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleRetirerSujet(sujet);
+            }}
+            className="px-3 py-1.5 rounded-xl text-xs font-bold text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-300 transition cursor-pointer flex items-center gap-1.5 active:scale-98 shrink-0"
+          >
+            <Archive size={13} className="text-amber-700 shrink-0" />
+            <span>{fr.mesSujets.btnRetirer}</span>
+          </button>
+        );
+      }
+
+      // Cas 3 : Au moins une candidature -> Archiver
+      if (candCount > 0) {
+        if (isArchived) {
+          return (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs font-semibold text-slate-500 bg-slate-100 border border-slate-200 shrink-0">
+              <Archive size={12} className="text-slate-400 shrink-0" />
+              <span>{fr.mesSujets.statutArchive}</span>
+            </span>
+          );
+        }
+        return (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleArchiverSujet(sujet);
+            }}
+            className="px-3 py-1.5 rounded-xl text-xs font-bold text-slate-800 bg-slate-100 hover:bg-slate-200 border border-slate-300 transition cursor-pointer flex items-center gap-1.5 active:scale-98 shrink-0"
+          >
+            <Archive size={13} className="text-slate-700 shrink-0" />
+            <span>{fr.mesSujets.btnArchiver}</span>
+          </button>
+        );
+      }
+
+      return null;
+    };
+
     return (
       <div className="space-y-4">
-        {/* En-tête Mes sujets avec compteur de quota */}
-        <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs space-y-3">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
-              <div className="flex items-center gap-2">
-                <GraduationCap className="text-emerald-700 shrink-0" size={22} />
-                <h1 className="text-base sm:text-lg font-bold text-slate-900">
-                  {fr.mesSujets.title}
-                </h1>
-              </div>
-              <p className="text-xs text-slate-500 mt-0.5">
-                {activeTeacher.nom} ({activeTeacher.structure}) — {fr.mesSujets.subtitle}
-              </p>
-            </div>
+        {/* Sous-vues en haut de "Mes sujets" : "Mes sujets" et "Catalogue" */}
+        <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
+          <button
+            type="button"
+            onClick={() => setTeacherSubView('mes_sujets')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+              teacherSubView === 'mes_sujets'
+                ? 'bg-emerald-700 text-white shadow-xs'
+                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+            }`}
+          >
+            <GraduationCap size={14} />
+            <span>{fr.mesSujets.sousVueMesSujets}</span>
+            <span
+              className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
+                teacherSubView === 'mes_sujets'
+                  ? 'bg-emerald-800 text-emerald-100'
+                  : 'bg-slate-100 text-slate-600'
+              }`}
+            >
+              {teacherSubjects.length}
+            </span>
+          </button>
 
-            <div className="flex items-center gap-2.5 flex-wrap">
-              {/* Compteur "N/5 sujets, R restants" (sujets non archivés) */}
-              <div
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border ${
-                  quotaAtteint
-                    ? 'bg-amber-50 text-amber-900 border-amber-300'
-                    : 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                }`}
-              >
-                {quotaAtteint ? (
-                  <AlertCircle size={14} className="text-amber-700 shrink-0" />
-                ) : (
-                  <CheckCircle2 size={14} className="text-emerald-700 shrink-0" />
-                )}
-                <span>
-                  {activeCount}/{QUOTA_SUJETS} sujets, {restants} restant{restants > 1 ? 's' : ''}
-                </span>
-              </div>
-
-              {/* Bouton Ajouter un sujet */}
-              {quotaAtteint ? (
-                <div className="relative group">
-                  <button
-                    type="button"
-                    disabled
-                    className="px-3.5 py-2 rounded-xl text-xs font-bold bg-slate-100 text-slate-400 border border-slate-200 flex items-center gap-1.5 cursor-not-allowed select-none"
-                  >
-                    <Plus size={15} />
-                    <span>{fr.mesSujets.btnAjouterSujet}</span>
-                  </button>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAddError(null);
-                    setIsAddModalOpen(true);
-                  }}
-                  className="px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-700 hover:bg-emerald-800 text-white shadow-xs flex items-center gap-1.5 cursor-pointer active:scale-98 transition"
-                >
-                  <Plus size={15} />
-                  <span>{fr.mesSujets.btnAjouterSujet}</span>
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Indication quota atteint si 5/5 */}
-          {quotaAtteint && (
-            <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-800 bg-amber-50/80 border border-amber-200 px-3 py-2 rounded-xl">
-              <AlertCircle size={14} className="text-amber-700 shrink-0" />
-              <span>{fr.mesSujets.quotaAtteint}</span>
-            </div>
-          )}
-
-          {actionFeedback && (
-            <div className="bg-emerald-50 border border-emerald-300 text-emerald-900 rounded-xl p-3 text-xs flex items-center gap-2">
-              <CheckCircle2 size={16} className="text-emerald-700 shrink-0" />
-              <span>{actionFeedback}</span>
-            </div>
-          )}
+          <button
+            type="button"
+            onClick={() => setTeacherSubView('catalogue')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+              teacherSubView === 'catalogue'
+                ? 'bg-emerald-700 text-white shadow-xs'
+                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+            }`}
+          >
+            <Search size={14} />
+            <span>{fr.mesSujets.sousVueCatalogue}</span>
+            <span
+              className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
+                teacherSubView === 'catalogue'
+                  ? 'bg-emerald-800 text-emerald-100'
+                  : 'bg-slate-100 text-slate-600'
+              }`}
+            >
+              {filteredSujets.length}
+            </span>
+          </button>
         </div>
 
-        {/* Grille des sujets de l'enseignant */}
-        {teacherSubjects.length === 0 ? (
-          <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center space-y-2">
-            <BookOpen size={28} className="text-slate-300 mx-auto" />
-            <p className="text-xs text-slate-600">{fr.mesSujets.aucunSujet}</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {teacherSubjects.map((sujet) => {
-              const { Icon: DisciplineIcon, barColor, iconPill, badge: badgeColor, cardBg, cardBorder } = getDisciplineConfig(sujet.discipline);
-              const candCount = getCandidaturesCount(sujet.id);
-              const panierCount = getPaniersCount(sujet.id);
-              const isArchived = sujet.statut === 'archive';
+        {/* SOUS-VUE 1 : MES SUJETS */}
+        {teacherSubView === 'mes_sujets' && (
+          <div className="space-y-4">
+            {/* En-tête Mes sujets avec compteur de quota */}
+            <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <GraduationCap className="text-emerald-700 shrink-0" size={22} />
+                    <h1 className="text-base sm:text-lg font-bold text-slate-900">
+                      {fr.mesSujets.title}
+                    </h1>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    {activeTeacher.nom} ({activeTeacher.structure}) — {fr.mesSujets.subtitle}
+                  </p>
+                </div>
 
-              return (
-                <div
-                  key={sujet.id}
-                  className={`group ${cardBg} border ${cardBorder} rounded-2xl shadow-xs flex flex-col justify-between overflow-hidden`}
-                >
-                  <div className={`h-1.5 w-full ${barColor}`} />
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  {/* Compteur "N/5 sujets, R restants" (sujets non archivés) */}
+                  <div
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border ${
+                      quotaAtteint
+                        ? 'bg-amber-50 text-amber-900 border-amber-300'
+                        : 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                    }`}
+                  >
+                    {quotaAtteint ? (
+                      <AlertCircle size={14} className="text-amber-700 shrink-0" />
+                    ) : (
+                      <CheckCircle2 size={14} className="text-emerald-700 shrink-0" />
+                    )}
+                    <span>
+                      {activeCount}/{QUOTA_SUJETS} sujets, {restants} restant{restants > 1 ? 's' : ''}
+                    </span>
+                  </div>
 
-                  <div className="p-4 space-y-3 flex-1 flex flex-col justify-between">
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between gap-2 flex-wrap">
-                        <div className="flex items-center gap-1.5">
-                          <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${iconPill}`}>
-                            <DisciplineIcon size={13} />
+                  {/* Bouton Ajouter un sujet */}
+                  {quotaAtteint ? (
+                    <div className="relative group">
+                      <button
+                        type="button"
+                        disabled
+                        className="px-3.5 py-2 rounded-xl text-xs font-bold bg-slate-100 text-slate-400 border border-slate-200 flex items-center gap-1.5 cursor-not-allowed select-none"
+                      >
+                        <Plus size={15} />
+                        <span>{fr.mesSujets.btnAjouterSujet}</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAddError(null);
+                        setIsAddModalOpen(true);
+                      }}
+                      className="px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-700 hover:bg-emerald-800 text-white shadow-xs flex items-center gap-1.5 cursor-pointer active:scale-98 transition"
+                    >
+                      <Plus size={15} />
+                      <span>{fr.mesSujets.btnAjouterSujet}</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Indication quota atteint si 5/5 */}
+              {quotaAtteint && (
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-800 bg-amber-50/80 border border-amber-200 px-3 py-2 rounded-xl">
+                  <AlertCircle size={14} className="text-amber-700 shrink-0" />
+                  <span>{fr.mesSujets.quotaAtteint}</span>
+                </div>
+              )}
+
+              {actionFeedback && (
+                <div className="bg-emerald-50 border border-emerald-300 text-emerald-900 rounded-xl p-3 text-xs flex items-center gap-2">
+                  <CheckCircle2 size={16} className="text-emerald-700 shrink-0" />
+                  <span>{actionFeedback}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Liste de cartes horizontales pleine largeur, une par ligne */}
+            {teacherSubjects.length === 0 ? (
+              <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center space-y-2">
+                <BookOpen size={28} className="text-slate-300 mx-auto" />
+                <p className="text-xs text-slate-600 font-semibold">{fr.mesSujets.aucunSujet}</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {teacherSubjects.map((sujet) => {
+                  if (!sujet) return null;
+                  const { Icon: DisciplineIcon, barColor, iconPill, badge: badgeColor } = getDisciplineConfig(sujet.discipline);
+                  const candCount = sujet.id ? getCandidaturesCount(sujet.id) : 0;
+                  const panierCount = sujet.id ? getPaniersCount(sujet.id) : 0;
+                  const isArchived = sujet.statut === 'archive';
+                  const isExpanded = expandedTeacherSujetId === sujet.id;
+
+                  return (
+                    <div
+                      key={sujet.id}
+                      className="w-full bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden flex flex-col transition hover:border-slate-300"
+                    >
+                      {/* Ligne principale horizontale */}
+                      <div className="flex items-stretch">
+                        {/* Gauche : icône de discipline et bande couleur 4 px */}
+                        <div className="flex items-center shrink-0">
+                          {/* Bande couleur 4 px */}
+                          <div className={`w-1 self-stretch ${barColor}`} aria-hidden="true" />
+                          {/* Icône de discipline */}
+                          <div className="px-3 sm:px-4 py-3 flex items-center justify-center">
+                            <div
+                              className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${iconPill}`}
+                              aria-hidden="true"
+                            >
+                              <DisciplineIcon size={18} />
+                            </div>
                           </div>
-                          <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-md border ${badgeColor}`}>
-                            {sujet.discipline}
-                          </span>
                         </div>
 
-                        {/* Statut du sujet : Actif ou Archivé */}
-                        {isArchived ? (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-slate-200 text-slate-800 border border-slate-300">
-                            <Archive size={12} className="text-slate-600 shrink-0" />
-                            <span>{fr.mesSujets.statutArchive}</span>
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
-                            <CheckCircle2 size={12} className="text-emerald-700 shrink-0" />
-                            <span>{fr.mesSujets.statutActif}</span>
-                          </span>
-                        )}
-                      </div>
+                        {/* Centre : titre (2 lignes max), discipline, "N candidatures · N paniers" */}
+                        <div className="flex-1 min-w-0 py-3 pr-3 sm:pr-0 flex flex-col justify-center">
+                          <div className="flex items-center gap-2 flex-wrap mb-1">
+                            <span
+                              className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-md border leading-tight ${badgeColor}`}
+                            >
+                              {sujet.discipline || 'Discipline'}
+                            </span>
+                            {/* Pastille d'état sur mobile */}
+                            <span className="sm:hidden">
+                              {isArchived ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-300">
+                                  <Archive size={11} className="text-slate-600 shrink-0" />
+                                  <span>{fr.mesSujets.statutArchive}</span>
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-300">
+                                  <CheckCircle2 size={11} className="text-emerald-700 shrink-0" />
+                                  <span>{fr.mesSujets.statutActif}</span>
+                                </span>
+                              )}
+                            </span>
+                          </div>
 
-                      <h3 className="text-sm font-bold text-slate-900 leading-snug">
-                        {sujet.titre}
-                      </h3>
+                          {/* Titre (2 lignes max) */}
+                          <h3 className="text-xs sm:text-sm font-bold text-slate-900 line-clamp-2 leading-snug">
+                            {sujet.titre || 'Sans titre'}
+                          </h3>
 
-                      <p className="text-[11px] text-slate-600 font-medium">
-                        {sujet.structure}
-                      </p>
+                          {/* "N candidatures · N paniers" */}
+                          <p className="text-[11px] text-slate-600 font-medium mt-1">
+                            {candCount} candidature{candCount > 1 ? 's' : ''} · {panierCount} panier{panierCount > 1 ? 's' : ''}
+                          </p>
 
-                      {sujet.descriptionCourte && (
-                        <p className="text-xs text-slate-600 italic bg-white/70 p-2.5 rounded-xl border border-slate-200/60 leading-relaxed">
-                          {sujet.descriptionCourte}
-                        </p>
-                      )}
+                          {/* Mobile : le bouton d'action passe sous le titre */}
+                          <div className="sm:hidden mt-2 pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+                            {renderTeacherActionButton(sujet, candCount, panierCount, isArchived)}
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setExpandedTeacherSujetId(isExpanded ? null : sujet.id)
+                              }
+                              className="text-[11px] text-slate-500 hover:text-slate-800 flex items-center gap-0.5 font-medium cursor-pointer"
+                            >
+                              <span>{isExpanded ? fr.mesSujets.replierDetails : fr.mesSujets.voirDetails}</span>
+                              {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                            </button>
+                          </div>
+                        </div>
 
-                      {/* Indicateurs de candidatures et paniers */}
-                      <div className="flex items-center gap-3 text-xs text-slate-600 font-medium pt-1">
-                        <span className="inline-flex items-center gap-1 bg-white/80 px-2 py-0.5 rounded-md border border-slate-200/70">
-                          <FileText size={13} className="text-slate-500 shrink-0" />
-                          <span>{candCount} candidature{candCount > 1 ? 's' : ''}</span>
-                        </span>
-                        <span className="inline-flex items-center gap-1 bg-white/80 px-2 py-0.5 rounded-md border border-slate-200/70">
-                          <Heart size={13} className="text-slate-500 shrink-0" />
-                          <span>{panierCount} panier{panierCount > 1 ? 's' : ''}</span>
-                        </span>
-                      </div>
-                    </div>
+                        {/* Droite : pastille d'état et UN seul bouton d'action */}
+                        <div className="hidden sm:flex items-center gap-3 px-4 py-3 shrink-0 border-l border-slate-100 self-center">
+                          {/* Pastille d'état */}
+                          {isArchived ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-300">
+                              <Archive size={12} className="text-slate-600 shrink-0" />
+                              <span>{fr.mesSujets.statutArchive}</span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-300">
+                              <CheckCircle2 size={12} className="text-emerald-700 shrink-0" />
+                              <span>{fr.mesSujets.statutActif}</span>
+                            </span>
+                          )}
 
-                    {/* Zone d'action et effet en une ligne */}
-                    <div className="pt-3 border-t border-slate-200/80 space-y-1.5">
-                      {/* Cas 1 : Aucune candidature ni panier -> Supprimer */}
-                      {candCount === 0 && panierCount === 0 && (
-                        <div>
+                          {/* UN seul bouton d'action */}
+                          {renderTeacherActionButton(sujet, candCount, panierCount, isArchived)}
+
+                          {/* Bouton déplier/replier détail */}
                           <button
                             type="button"
-                            onClick={() => setSujetToDelete(sujet)}
-                            className="px-3 py-1.5 rounded-xl text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-300 transition cursor-pointer flex items-center gap-1.5 active:scale-98"
+                            onClick={() =>
+                              setExpandedTeacherSujetId(isExpanded ? null : sujet.id)
+                            }
+                            aria-label={isExpanded ? fr.mesSujets.replierDetails : fr.mesSujets.voirDetails}
+                            className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition cursor-pointer"
                           >
-                            <Trash2 size={13} className="text-rose-600 shrink-0" />
-                            <span>{fr.mesSujets.btnSupprimer}</span>
+                            {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                           </button>
-                          <p className="text-[11px] text-slate-500 italic mt-1 leading-tight">
-                            {fr.mesSujets.effetSupprimer}
-                          </p>
                         </div>
-                      )}
+                      </div>
 
-                      {/* Cas 2 : Paniers seulement -> Retirer (statut archive, paniers affichent "Plus disponible") */}
-                      {candCount === 0 && panierCount > 0 && (
-                        <div>
-                          {isArchived ? (
-                            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-600 bg-slate-100 border border-slate-300">
-                              <Archive size={13} className="text-slate-500 shrink-0" />
-                              <span>{fr.mesSujets.statutArchive}</span>
-                            </span>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => handleRetirerSujet(sujet)}
-                              className="px-3 py-1.5 rounded-xl text-xs font-bold text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-300 transition cursor-pointer flex items-center gap-1.5 active:scale-98"
-                            >
-                              <Archive size={13} className="text-amber-700 shrink-0" />
-                              <span>{fr.mesSujets.btnRetirer}</span>
-                            </button>
+                      {/* Le résumé et l'effet de l'action s'affichent dans un détail dépliable */}
+                      {isExpanded && (
+                        <div className="px-4 py-3 bg-slate-50 border-t border-slate-100 text-xs space-y-2">
+                          {sujet.descriptionCourte && (
+                            <div>
+                              <span className="font-semibold text-slate-800 block mb-0.5">
+                                {fr.mesSujets.champResume} :
+                              </span>
+                              <p className="italic text-slate-600 bg-white p-2.5 rounded-lg border border-slate-200/70 leading-relaxed">
+                                {sujet.descriptionCourte}
+                              </p>
+                            </div>
                           )}
-                          <p className="text-[11px] text-slate-500 italic mt-1 leading-tight">
-                            {fr.mesSujets.effetRetirer}
-                          </p>
-                        </div>
-                      )}
 
-                      {/* Cas 3 : Au moins une candidature -> Archiver (candidatures conservées) */}
-                      {candCount > 0 && (
-                        <div>
-                          {isArchived ? (
-                            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-600 bg-slate-100 border border-slate-300">
-                              <Archive size={13} className="text-slate-500 shrink-0" />
-                              <span>{fr.mesSujets.statutArchive}</span>
+                          <div>
+                            <span className="font-semibold text-slate-800 block mb-0.5">
+                              {fr.mesSujets.effetActionLabel} :
                             </span>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => handleArchiverSujet(sujet)}
-                              className="px-3 py-1.5 rounded-xl text-xs font-bold text-slate-800 bg-slate-100 hover:bg-slate-200 border border-slate-300 transition cursor-pointer flex items-center gap-1.5 active:scale-98"
-                            >
-                              <Archive size={13} className="text-slate-700 shrink-0" />
-                              <span>{fr.mesSujets.btnArchiver}</span>
-                            </button>
+                            <p className="text-[11px] text-slate-600">
+                              {candCount === 0 && panierCount === 0 && fr.mesSujets.effetSupprimer}
+                              {candCount === 0 && panierCount > 0 && fr.mesSujets.effetRetirer}
+                              {candCount > 0 && fr.mesSujets.effetArchiver}
+                            </p>
+                          </div>
+
+                          {sujet.structure && (
+                            <p className="text-[11px] text-slate-500">
+                              <span className="font-medium text-slate-700">Structure :</span>{' '}
+                              {sujet.structure}
+                            </p>
                           )}
-                          <p className="text-[11px] text-slate-500 italic mt-1 leading-tight">
-                            {fr.mesSujets.effetArchiver}
-                          </p>
                         </div>
                       )}
                     </div>
-                  </div>
-                </div>
-              );
-            })}
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* SOUS-VUE 2 : CATALOGUE (LECTURE SEULE, RECHERCHE, SANS ARCHIVÉS, BADGE "MON SUJET") */}
+        {teacherSubView === 'catalogue' && (
+          <div className="space-y-3">
+            {/* Barre de recherche globale instantanée avec icône filtre à droite */}
+            <div className="relative flex items-center">
+              <Search size={15} className="absolute left-3 text-slate-400 pointer-events-none" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setCurrentPage(1);
+                }}
+                placeholder={fr.sujetsModule.searchPlaceholder}
+                className="w-full pl-9 pr-20 py-2.5 text-xs bg-white rounded-xl border border-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-600 shadow-xs"
+              />
+
+              <div className="absolute right-2 flex items-center gap-1.5">
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchQuery('');
+                      setCurrentPage(1);
+                    }}
+                    className="p-1 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100 cursor-pointer"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setIsFilterModalOpen(true)}
+                  aria-label={fr.sujetsModule.btnFilterModal}
+                  className={`relative p-1.5 rounded-lg border transition ${
+                    activeCriteriaCount > 0
+                      ? 'bg-emerald-50 border-emerald-400 text-emerald-800'
+                      : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  <SlidersHorizontal size={15} />
+                  {activeCriteriaCount > 0 && (
+                    <span className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-emerald-600 text-white font-bold text-[9px] flex items-center justify-center shadow-xs">
+                      {activeCriteriaCount}
+                    </span>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Puces de critères actifs retirables (✕) sous la barre */}
+            {activeCriteriaCount > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                {advancedCriteria.encadrant && (
+                  <span className="inline-flex items-center gap-1 text-[11px] font-medium bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-full">
+                    <span>{advancedCriteria.encadrant}</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setAdvancedCriteria({ ...advancedCriteria, encadrant: '' })
+                      }
+                      className="text-emerald-700 hover:text-emerald-950"
+                    >
+                      <X size={11} />
+                    </button>
+                  </span>
+                )}
+
+                {advancedCriteria.discipline && (
+                  <span className="inline-flex items-center gap-1 text-[11px] font-medium bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-full">
+                    <span>{advancedCriteria.discipline}</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setAdvancedCriteria({ ...advancedCriteria, discipline: '' })
+                      }
+                      className="text-emerald-700 hover:text-emerald-950"
+                    >
+                      <X size={11} />
+                    </button>
+                  </span>
+                )}
+
+                {advancedCriteria.structure && (
+                  <span className="inline-flex items-center gap-1 text-[11px] font-medium bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-full">
+                    <span>{advancedCriteria.structure}</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setAdvancedCriteria({ ...advancedCriteria, structure: '' })
+                      }
+                      className="text-emerald-700 hover:text-emerald-950"
+                    >
+                      <X size={11} />
+                    </button>
+                  </span>
+                )}
+
+                {advancedCriteria.keywords.map((kw) => (
+                  <span
+                    key={kw}
+                    className="inline-flex items-center gap-1 text-[11px] font-medium bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-full"
+                  >
+                    <span>#{kw}</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setAdvancedCriteria({
+                          ...advancedCriteria,
+                          keywords: advancedCriteria.keywords.filter((k) => k !== kw),
+                        })
+                      }
+                      className="text-emerald-700 hover:text-emerald-950"
+                    >
+                      <X size={11} />
+                    </button>
+                  </span>
+                ))}
+
+                <button
+                  onClick={handleResetFilters}
+                  className="text-[11px] text-slate-500 hover:text-slate-800 underline ml-1 font-medium cursor-pointer"
+                >
+                  {fr.sujetsModule.btnReset}
+                </button>
+              </div>
+            )}
+
+            {/* Ligne compteur et tri */}
+            <div className="flex items-center justify-between text-[11px] text-slate-600 px-0.5">
+              <span className="font-semibold text-slate-700">
+                {fr.sujetsModule.countSujets.replace('{count}', String(filteredSujets.length))}
+              </span>
+
+              <div className="flex items-center gap-1.5">
+                <span className="text-slate-500">{fr.sujetsModule.sortLabel}</span>
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as 'titre' | 'structure')}
+                  className="bg-white border border-slate-200 text-slate-700 rounded px-1.5 py-0.5 text-[11px] focus:outline-none"
+                >
+                  <option value="titre">{fr.sujetsModule.sortTitleAZ}</option>
+                  <option value="structure">{fr.sujetsModule.sortStructure}</option>
+                </select>
+
+                {(searchQuery || activeCriteriaCount > 0) && (
+                  <button
+                    onClick={handleResetFilters}
+                    className="text-emerald-700 font-semibold hover:underline flex items-center gap-0.5 ml-1 cursor-pointer"
+                  >
+                    <RotateCcw size={11} />
+                    <span>{fr.sujetsModule.btnReset}</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Modal Popup de Recherche Avancée */}
+            <AdvancedSearchModal
+              isOpen={isFilterModalOpen}
+              onClose={() => setIsFilterModalOpen(false)}
+              criteria={advancedCriteria}
+              onApply={(crit) => {
+                setAdvancedCriteria(crit);
+                setCurrentPage(1);
+              }}
+              onReset={handleResetFilters}
+              encadrantOptions={encadrantOptions}
+              disciplineOptions={disciplineOptions}
+              structureOptions={structureOptions}
+              keywordOptions={keywordOptions}
+            />
+
+            {/* Grille des sujets en LECTURE SEULE */}
+            {paginatedSujets.length === 0 ? (
+              <div className="bg-white border border-slate-200 rounded-xl p-8 text-center space-y-2">
+                <p className="text-xs text-slate-600 font-semibold">{fr.mesSujets.aucunSujet}</p>
+                {(searchQuery || activeCriteriaCount > 0) && (
+                  <button
+                    onClick={handleResetFilters}
+                    className="text-xs font-bold text-emerald-700 hover:underline cursor-pointer"
+                  >
+                    {fr.sujetsModule.btnReset}
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                {paginatedSujets.map((sujet) => {
+                  if (!sujet) return null;
+                  const isExpanded = expandedId === sujet.id;
+                  const isOwnSubject = sujet.enseignantId === activeTeacher.id;
+                  const ens = getEnseignant(sujet.enseignantId);
+                  const { Icon: DisciplineIcon, barColor, iconPill, badge: badgeColor, cardBg, cardBorder } = getDisciplineConfig(sujet.discipline);
+
+                  return (
+                    <div
+                      key={sujet.id}
+                      className={`group ${cardBg} border ${cardBorder} rounded-xl shadow-xs hover:shadow-md transition-all duration-150 flex flex-col justify-between overflow-hidden`}
+                    >
+                      {/* Bande colorée de 4 px en haut */}
+                      <div className={`h-1 w-full ${barColor}`} aria-hidden="true" />
+
+                      <div className="p-3.5 flex flex-col flex-1 justify-between space-y-3">
+                        <div
+                          onClick={() => setExpandedId(isExpanded ? null : sujet.id)}
+                          className="cursor-pointer space-y-2"
+                        >
+                          {/* Discipline + Badge "Mon sujet" */}
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <div
+                              className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${iconPill}`}
+                              aria-hidden="true"
+                            >
+                              <DisciplineIcon size={13} />
+                            </div>
+                            <span className={`inline-block text-[10px] font-bold uppercase px-2 py-0.5 rounded-md border leading-tight line-clamp-1 ${badgeColor}`}>
+                              {sujet.discipline || 'Discipline'}
+                            </span>
+                            {isOwnSubject && (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                <GraduationCap size={11} className="text-emerald-700 shrink-0" />
+                                <span>{fr.mesSujets.badgeMonSujet}</span>
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Titre */}
+                          <h3 className="text-sm font-bold text-slate-900 leading-snug line-clamp-2 min-h-[2.5rem]">
+                            {sujet.titre || 'Sans titre'}
+                          </h3>
+
+                          {/* Encadrant et structure */}
+                          <div className="space-y-0.5 text-[11px] text-slate-600">
+                            <p className="truncate font-medium text-slate-700">{sujet.structure}</p>
+                            {ens && <p className="truncate text-slate-500">{ens.nom}</p>}
+                          </div>
+
+                          {/* Détail dépliable */}
+                          {isExpanded && (
+                            <div className="pt-2 mt-2 border-t border-slate-100 text-xs text-slate-600 space-y-1.5">
+                              {sujet.descriptionCourte && (
+                                <p className="italic bg-white/80 p-2 rounded-lg text-[11px] leading-relaxed text-slate-700 border border-slate-200/60">
+                                  {sujet.descriptionCourte}
+                                </p>
+                              )}
+                              {Array.isArray(sujet.motsCles) && sujet.motsCles.length > 0 && (
+                                <div className="flex flex-wrap gap-1">
+                                  {sujet.motsCles.map((k) => (
+                                    <span key={k} className="text-[10px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-700 font-medium">
+                                      #{k}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                              {ens && (
+                                <div className="text-[11px] text-slate-600 pt-0.5">
+                                  <span className="font-semibold text-slate-800">{ens.nom}</span> • {ens.email}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Pied de carte : Lecture seule (pas de bouton d'action) */}
+                        <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                          <button
+                            type="button"
+                            onClick={() => setExpandedId(isExpanded ? null : sujet.id)}
+                            className="text-[11px] text-slate-500 hover:text-slate-800 cursor-pointer flex items-center gap-1 font-medium"
+                          >
+                            <span>{isExpanded ? fr.mesSujets.replierDetails : fr.mesSujets.voirDetails}</span>
+                            {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between bg-white border border-slate-200 rounded-xl p-2 text-xs">
+                <button
+                  type="button"
+                  disabled={currentPage === 1}
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  className={`px-2.5 py-1 rounded-lg font-semibold flex items-center gap-1 ${
+                    currentPage === 1 ? 'text-slate-300 cursor-not-allowed' : 'text-slate-700 hover:bg-slate-100 cursor-pointer'
+                  }`}
+                >
+                  <ChevronLeft size={14} />
+                  <span>{fr.sujetsModule.btnPrevPage}</span>
+                </button>
+
+                <span className="text-slate-500 font-mono text-[11px]">
+                  {fr.sujetsModule.pageIndicator
+                    .replace('{page}', String(currentPage))
+                    .replace('{total}', String(totalPages))}
+                </span>
+
+                <button
+                  type="button"
+                  disabled={currentPage === totalPages}
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  className={`px-2.5 py-1 rounded-lg font-semibold flex items-center gap-1 ${
+                    currentPage === totalPages ? 'text-slate-300 cursor-not-allowed' : 'text-slate-700 hover:bg-slate-100 cursor-pointer'
+                  }`}
+                >
+                  <span>{fr.sujetsModule.btnNextPage}</span>
+                  <ChevronRight size={14} />
+                </button>
+              </div>
+            )}
           </div>
         )}
 

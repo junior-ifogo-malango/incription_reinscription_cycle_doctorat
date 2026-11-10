@@ -25,6 +25,7 @@ import {
   UserCog,
   Users,
   Eye,
+  ExternalLink,
 } from 'lucide-react';
 import { UserRole, Role, Compte, Candidat, Enseignant, Sujet, Piece, Creneau, Notification, type Dossier as DossierData, Rapport, Vote, CandidatureStatut, normaliserRole, getCompteRoles, dossierComplet } from './types';
 import { storageService } from './services/storage';
@@ -126,6 +127,38 @@ function formatDateJJMM(d?: string): string {
   return d;
 }
 
+function isPdfData(data?: string): boolean {
+  if (!data || typeof data !== 'string') return false;
+  return data.startsWith('data:application/pdf') || data.toLowerCase().endsWith('.pdf');
+}
+
+function openPdfInNewTab(dataUrl: string): void {
+  try {
+    const arr = dataUrl.split(',');
+    const mimeMatch = arr[0].match(/:(.*?);/);
+    const mime = mimeMatch ? mimeMatch[1] : 'application/pdf';
+    const bstr = atob(arr[1]);
+    let n = bstr.length;
+    const u8arr = new Uint8Array(n);
+    while (n--) {
+      u8arr[n] = bstr.charCodeAt(n);
+    }
+    const blob = new Blob([u8arr], { type: mime });
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank');
+  } catch {
+    // Échec sans plantage
+  }
+}
+
+function getDoctorantNom(docId: string): string {
+  if (docId === 'doc-nadia') return DEMO_DOCTORANT_NADIA.nom;
+  if (docId === 'doc-tariq') return 'Tariq Mansouri';
+  const cand = MOCK_CANDIDATS.find((c) => c.id === docId);
+  if (cand) return cand.nom;
+  return docId;
+}
+
 export default function App() {
   const estMobile = useEstMobile();
   const [role, setRole] = useState<UserRole>('candidat');
@@ -163,9 +196,10 @@ export default function App() {
   const [creneaux, setCreneaux] = useState<Creneau[]>([]);
   const [rapports, setRapports] = useState<Rapport[]>(() => {
     try {
-      const raw = localStorage.getItem('usmba_rapports');
+      const raw = localStorage.getItem('usmba_doctorat_rapports') || localStorage.getItem('usmba_rapports');
       if (raw) return JSON.parse(raw);
       localStorage.setItem('usmba_rapports', JSON.stringify(INITIAL_RAPPORTS));
+      localStorage.setItem('usmba_doctorat_rapports', JSON.stringify(INITIAL_RAPPORTS));
       return INITIAL_RAPPORTS;
     } catch {
       return INITIAL_RAPPORTS;
@@ -176,6 +210,7 @@ export default function App() {
   const [showToast, setShowToast] = useState(false);
   const [simulatedStatuts, setSimulatedStatuts] = useState<Record<string, 'deposee' | 'retenue'>>({});
   const [selectedCandidatForDossier, setSelectedCandidatForDossier] = useState<{ id: string; nom: string } | null>(null);
+  const [viewingRapport, setViewingRapport] = useState<Rapport | null>(null);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [demoDateInput, setDemoDateInput] = useState<string>(() => {
@@ -268,7 +303,7 @@ export default function App() {
     setDossier(storageService.getDossier());
     setCreneaux(storageService.getCreneaux());
     try {
-      const raw = localStorage.getItem('usmba_rapports');
+      const raw = localStorage.getItem('usmba_doctorat_rapports') || localStorage.getItem('usmba_rapports');
       if (raw) setRapports(JSON.parse(raw));
     } catch {
       // safe fallback
@@ -435,8 +470,18 @@ export default function App() {
     }
 
     if (
-      (targetTab === 'ced' || targetTab === 'seances' || targetTab === 'reinscriptions') &&
+      (targetTab === 'ced' || targetTab === 'seances') &&
       !normalizedRoles.includes('directeur_ced')
+    ) {
+      setRestrictionMsg(fr.auth.accessRestricted);
+      setIsLoginOpen(true);
+      return;
+    }
+
+    if (
+      targetTab === 'reinscriptions' &&
+      !normalizedRoles.includes('directeur_ced') &&
+      !normalizedRoles.includes('enseignant')
     ) {
       setRestrictionMsg(fr.auth.accessRestricted);
       setIsLoginOpen(true);
@@ -708,9 +753,15 @@ export default function App() {
     );
   }, [rapports, activeEnseignant]);
 
+  const rapportsDirecteur = useMemo(() => {
+    return rapports.filter(
+      (r) => r.encadrantId === activeEnseignant.id || activeEnseignant.id === 'ens-1'
+    );
+  }, [rapports, activeEnseignant]);
+
   const handleTeacherValiderRapport = (rapportId: string) => {
     try {
-      const raw = localStorage.getItem('usmba_rapports');
+      const raw = localStorage.getItem('usmba_doctorat_rapports') || localStorage.getItem('usmba_rapports');
       const list: Rapport[] = raw ? JSON.parse(raw) : rapports;
       const index = list.findIndex((r) => r.id === rapportId);
       if (index === -1) return;
@@ -755,7 +806,12 @@ export default function App() {
         chronologie: updatedChronologie,
       };
 
-      localStorage.setItem('usmba_rapports', JSON.stringify(list));
+      try {
+        localStorage.setItem('usmba_rapports', JSON.stringify(list));
+        localStorage.setItem('usmba_doctorat_rapports', JSON.stringify(list));
+      } catch (err) {
+        console.error(err);
+      }
       window.dispatchEvent(new CustomEvent('usmba_rapports_updated'));
       setRapports(list);
       setTeacherFeedbackMsg(fr.reinscription.encadrantValidatedToast);
@@ -770,7 +826,7 @@ export default function App() {
     if (commentText.length < 5) return;
 
     try {
-      const raw = localStorage.getItem('usmba_rapports');
+      const raw = localStorage.getItem('usmba_doctorat_rapports') || localStorage.getItem('usmba_rapports');
       const list: Rapport[] = raw ? JSON.parse(raw) : rapports;
       const index = list.findIndex((r) => r.id === rapportId);
       if (index === -1) return;
@@ -801,7 +857,12 @@ export default function App() {
         chronologie: updatedChronologie,
       };
 
-      localStorage.setItem('usmba_rapports', JSON.stringify(list));
+      try {
+        localStorage.setItem('usmba_rapports', JSON.stringify(list));
+        localStorage.setItem('usmba_doctorat_rapports', JSON.stringify(list));
+      } catch (err) {
+        console.error(err);
+      }
       window.dispatchEvent(new CustomEvent('usmba_rapports_updated'));
       setRapports(list);
       setTeacherFeedbackMsg(fr.reinscription.encadrantCorrectionToast);
@@ -934,6 +995,25 @@ export default function App() {
                       >
                         <Award size={14} />
                         <span>{fr.commission.tabTitle}</span>
+                      </button>
+                    )}
+
+                    {/* Réinscriptions : enseignant (Directeur) */}
+                    {normalizedRoles.includes('enseignant') && (
+                      <button
+                        onClick={() => handleTabChange('reinscriptions')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                          tab === 'reinscriptions'
+                            ? 'bg-emerald-800 text-amber-300'
+                            : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
+                        }`}
+                      >
+                        <span>{fr.nav.reinscriptions}</span>
+                        {rapportsAValider.length > 0 && (
+                          <span className="px-1.5 py-0.2 rounded-full bg-emerald-600 text-white font-bold text-[10px]">
+                            {rapportsAValider.length}
+                          </span>
+                        )}
                       </button>
                     )}
 
@@ -1464,155 +1544,6 @@ export default function App() {
                   })}
                 </div>
               )}
-
-              {/* MODULE R : Section Rapports de réinscription à valider par l'encadrant */}
-              <div className="pt-4 border-t border-slate-200 space-y-3">
-                <div className="bg-emerald-950 text-white rounded-xl p-3 flex items-center justify-between">
-                  <div>
-                    <h2 className="text-xs font-bold uppercase text-amber-300">
-                      {fr.reinscription.teacherSectionTitle}
-                    </h2>
-                    <p className="text-[11px] text-emerald-200">
-                      {fr.reinscription.teacherSectionSubtitle}
-                    </p>
-                  </div>
-                  <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-emerald-800 text-amber-300">
-                    {rapportsAValider.length}
-                  </span>
-                </div>
-
-                {teacherFeedbackMsg && (
-                  <div className="bg-emerald-50 border border-emerald-300 text-emerald-900 rounded-xl p-3 text-xs flex items-center gap-2">
-                    <CheckCircle2 size={16} className="text-emerald-700 shrink-0" />
-                    <span>{teacherFeedbackMsg}</span>
-                  </div>
-                )}
-
-                {rapportsAValider.length === 0 ? (
-                  <div className="bg-white border border-slate-200 rounded-xl p-6 text-center text-xs text-slate-500">
-                    {fr.reinscription.teacherEmptyReports}
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {rapportsAValider.map((r) => {
-                      const commVal = teacherComments[r.id] || '';
-                      const canCorriger = commVal.trim().length >= 5;
-
-                      return (
-                        <div key={r.id} className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs space-y-3">
-                          <div className="flex items-start justify-between gap-2 flex-wrap">
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <h3 className="text-sm font-bold text-slate-900">{r.titre}</h3>
-                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-100 text-amber-900 border border-amber-200">
-                                  {r.annee}ᵉ année
-                                </span>
-                              </div>
-                              <p className="text-xs text-slate-500 mt-0.5">
-                                Doctorant : {r.doctorantId === 'doc-nadia' ? 'Nadia Alaoui' : r.doctorantId}
-                              </p>
-                            </div>
-                            <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-blue-100 text-blue-800 border border-blue-200">
-                              {fr.reinscription.statuts.soumis}
-                            </span>
-                          </div>
-
-                          {/* Indicateurs calculés automatiquement */}
-                          <div className="grid grid-cols-3 gap-2 bg-slate-50 p-2.5 rounded-lg text-center">
-                            <div>
-                              <span className="text-xs font-bold text-slate-900">{r.publications?.length || 0}</span>
-                              <p className="text-[10px] text-slate-500">{fr.reinscription.publicationsCount}</p>
-                            </div>
-                            <div>
-                              <span className="text-xs font-bold text-slate-900">{r.communications?.length || 0}</span>
-                              <p className="text-[10px] text-slate-500">{fr.reinscription.communicationsCount}</p>
-                            </div>
-                            <div>
-                              <span className="text-xs font-bold text-slate-900">{r.formationsHeures || 0}h</span>
-                              <p className="text-[10px] text-slate-500">{fr.reinscription.formationsCount}</p>
-                            </div>
-                          </div>
-
-                          {/* Contenu du rapport */}
-                          <div className="space-y-1.5 text-xs text-slate-700 bg-slate-50/70 p-3 rounded-lg border border-slate-100">
-                            <div>
-                              <span className="font-semibold text-slate-900">{fr.reinscription.avancementLabel} :</span>
-                              <p className="text-slate-600 mt-0.5 whitespace-pre-line">{r.avancement}</p>
-                            </div>
-                            {r.perspectives && (
-                              <div className="pt-1.5 border-t border-slate-200/60 mt-1.5">
-                                <span className="font-semibold text-slate-900">{fr.reinscription.perspectivesLabel} :</span>
-                                <p className="text-slate-600 mt-0.5 whitespace-pre-line">{r.perspectives}</p>
-                              </div>
-                            )}
-                            {r.aucuneActivite && (
-                              <div className="pt-1 text-[11px] text-amber-700 font-semibold">
-                                ℹ {fr.reinscription.aucuneActiviteLabel}
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Champ commentaire */}
-                          <div className="space-y-1">
-                            <label className="block text-[11px] font-semibold text-slate-700">
-                              {fr.reinscription.commentEncadrantLabel}
-                            </label>
-                            <textarea
-                              rows={2}
-                              value={commVal}
-                              onChange={(e) =>
-                                setTeacherComments((prev) => ({
-                                  ...prev,
-                                  [r.id]: e.target.value,
-                                }))
-                              }
-                              placeholder={fr.reinscription.commentEncadrantPlaceholder}
-                              className="w-full text-xs p-2 rounded-lg border border-slate-300 focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 bg-white"
-                            />
-                          </div>
-
-                          {/* Boutons validation / correction */}
-                          <div className="pt-1 space-y-1.5">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <button
-                                type="button"
-                                onClick={() => handleTeacherValiderRapport(r.id)}
-                                className="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-700 hover:bg-emerald-800 active:scale-98 text-white transition-all shadow-xs cursor-pointer flex items-center gap-1.5"
-                              >
-                                <CheckCircle2 size={13} />
-                                <span>{fr.reinscription.btnValiderEncadrant}</span>
-                              </button>
-
-                              <button
-                                type="button"
-                                disabled={!canCorriger}
-                                onClick={() => handleTeacherCorrigerRapport(r.id)}
-                                className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all shadow-xs cursor-pointer flex items-center gap-1.5 ${
-                                  canCorriger
-                                    ? 'bg-amber-600 hover:bg-amber-700 text-white'
-                                    : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
-                                }`}
-                              >
-                                <span>{fr.reinscription.btnCorrigerEncadrant}</span>
-                              </button>
-                            </div>
-
-                            {!canCorriger && (
-                              <p className="text-[11px] text-slate-500 italic">
-                                {fr.reinscription.commentRequiredCorriger}
-                              </p>
-                            )}
-
-                            <p className="text-[10px] text-slate-400 italic pt-0.5">
-                              {fr.reinscription.signatureDisclaimer}
-                            </p>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
             </div>
             )
           )}
@@ -1653,6 +1584,145 @@ export default function App() {
           {/* Onglet Séances (Directeur CED) */}
           {tab === 'seances' && role === 'directeur_ced' && (
             <CedSeances />
+          )}
+
+          {/* Onglet Réinscriptions (Directeur de thèse / Enseignant) */}
+          {tab === 'reinscriptions' && (role === 'enseignant' || (!normalizedRoles.includes('directeur_ced') && normalizedRoles.includes('enseignant'))) && (
+            <div className="space-y-6">
+              <div className="border-b border-slate-200 pb-4">
+                <h1 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
+                  <FileText className="text-emerald-700" size={24} />
+                  <span>{fr.nav.reinscriptions}</span>
+                </h1>
+                <p className="text-xs text-slate-500 mt-1">
+                  Validation des rapports d’activité des doctorants encadrés
+                </p>
+              </div>
+
+              {teacherFeedbackMsg && (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 text-xs font-semibold flex items-center gap-2 animate-in fade-in duration-200">
+                  <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+                  <span>{teacherFeedbackMsg}</span>
+                </div>
+              )}
+
+              {rapportsDirecteur.length === 0 ? (
+                <div className="text-center py-12 bg-white rounded-2xl border border-slate-200 p-6">
+                  <FileText size={40} className="mx-auto text-slate-300 mb-3" />
+                  <p className="text-sm font-semibold text-slate-700">{fr.dossierDirecteur.aucuneDonnee}</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {rapportsDirecteur.map((r) => {
+                    const comment = (teacherComments[r.id] || '').trim();
+                    const isCommentValid = comment.length >= 5;
+                    const canActionner = r.statut === 'soumis';
+
+                    return (
+                      <div
+                        key={r.id}
+                        className="bg-white rounded-xl border border-slate-200 p-4 sm:p-5 shadow-xs space-y-3.5"
+                      >
+                        {/* En-tête : Nom, Année, Date JJ/MM, UNE pastille d'état */}
+                        <div className="flex flex-wrap items-start justify-between gap-2 border-b border-slate-100 pb-3">
+                          <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h3 className="font-bold text-slate-900 text-sm sm:text-base">
+                                {getDoctorantNom(r.doctorantId)}
+                              </h3>
+                              <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
+                                {r.annee}ᵉ année
+                              </span>
+                            </div>
+                            {r.soumisLe && (
+                              <p className="text-xs text-slate-500 mt-1">
+                                {fr.reinscription.dateSoumission} <span className="font-medium text-slate-700">{formatDateJJMM(r.soumisLe)}</span>
+                              </p>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            {/* UNE SEULE pastille d'état */}
+                            <span
+                              className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold border ${
+                                r.statut === 'valide_ced' || r.statut === 'valide_encadrant'
+                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                  : r.statut === 'a_corriger'
+                                  ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                  : r.statut === 'avis_comite'
+                                  ? 'bg-blue-50 text-blue-800 border-blue-200'
+                                  : 'bg-amber-50 text-amber-900 border-amber-300'
+                              }`}
+                            >
+                              {fr.reinscription.statuts[r.statut] || fr.reinscription.statuts.soumis}
+                            </span>
+
+                            {/* Bouton Voir */}
+                            <button
+                              type="button"
+                              onClick={() => setViewingRapport(r)}
+                              className="px-3 py-1.5 rounded-lg border border-slate-200 hover:border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+                            >
+                              <Eye size={13} className="text-slate-600" />
+                              <span>{fr.reinscription.btnVoir}</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Champ commentaire */}
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 mb-1">
+                            {fr.reinscription.commentEncadrantLabel}
+                          </label>
+                          <textarea
+                            value={teacherComments[r.id] ?? ''}
+                            onChange={(e) =>
+                              setTeacherComments((prev) => ({ ...prev, [r.id]: e.target.value }))
+                            }
+                            placeholder={fr.reinscription.commentEncadrantPlaceholder}
+                            rows={2}
+                            disabled={!canActionner}
+                            className="w-full text-xs p-2.5 rounded-lg border border-slate-200 bg-white focus:outline-hidden focus:ring-2 focus:ring-emerald-700/20 focus:border-emerald-700 disabled:bg-slate-50 disabled:text-slate-500"
+                          />
+                        </div>
+
+                        {/* Boutons Valider et À corriger */}
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1">
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleTeacherValiderRapport(r.id)}
+                              disabled={!canActionner}
+                              className="px-3.5 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+                            >
+                              <CheckCircle2 size={13} />
+                              <span>{fr.reinscription.btnValider}</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleTeacherCorrigerRapport(r.id)}
+                              disabled={!canActionner || !isCommentValid}
+                              className="px-3.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+                            >
+                              <RotateCcw size={13} />
+                              <span>{fr.reinscription.btnAcorriger}</span>
+                            </button>
+                          </div>
+
+                          {/* Raison écrite si À corriger est grisé pour commentaire insuffisant */}
+                          {canActionner && !isCommentValid && (
+                            <p className="text-[11px] text-amber-700 font-medium">
+                              {fr.reinscription.commentMinLengthReason}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           )}
 
           {/* Onglet Réinscriptions (Directeur CED) */}
@@ -1705,6 +1775,7 @@ export default function App() {
             candidaturesCount: candidaturesEnseignant.length,
             piecesPretes: piecesAProverCount,
             alertesCed: alertesCreneaux.length,
+            reinscriptionsCount: rapportsAValider.length,
           }}
         />
 
@@ -1814,6 +1885,31 @@ export default function App() {
                 </button>
               )}
 
+              {isLoggedIn && normalizedRoles.includes('enseignant') && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    handleTabChange('reinscriptions');
+                  }}
+                  className={`w-full text-left py-2.5 px-3 rounded-xl flex items-center justify-between text-xs font-semibold cursor-pointer transition ${
+                    tab === 'reinscriptions'
+                      ? 'bg-emerald-50 text-emerald-800 border border-emerald-200 shadow-xs'
+                      : 'bg-slate-50 hover:bg-slate-100 text-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Award size={15} className={tab === 'reinscriptions' ? 'text-emerald-700' : 'text-slate-500'} />
+                    <span>{fr.nav.reinscriptions}</span>
+                  </div>
+                  {rapportsAValider.length > 0 && (
+                    <span className="px-1.5 py-0.2 rounded-full bg-emerald-600 text-white font-bold text-[10px]">
+                      {rapportsAValider.length}
+                    </span>
+                  )}
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => {
@@ -1868,6 +1964,96 @@ export default function App() {
             setTab('vote_comite');
           }}
         />
+
+        {/* Visionneuse de document (PDF en iframe + Ouvrir dans un nouvel onglet, ou ancien rapport) */}
+        {viewingRapport && (
+          <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-xs flex flex-col p-3 sm:p-6 overflow-hidden">
+            <div className="flex items-center justify-between pb-3 text-white border-b border-slate-800 shrink-0">
+              <div className="flex items-center gap-3 min-w-0">
+                <h3 className="text-sm sm:text-base font-bold truncate">
+                  {fr.reinscription.apercuRapport} — {getDoctorantNom(viewingRapport.doctorantId)} ({viewingRapport.annee}ᵉ année)
+                </h3>
+                {viewingRapport.fichierPdf && isPdfData(viewingRapport.fichierPdf) && (
+                  <button
+                    type="button"
+                    onClick={() => openPdfInNewTab(viewingRapport.fichierPdf!)}
+                    className="px-3 py-1.5 text-xs font-semibold rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1.5 cursor-pointer shadow-xs shrink-0"
+                  >
+                    <ExternalLink size={13} />
+                    <span>{fr.dossierDirecteur.ouvrirNouvelOnglet}</span>
+                  </button>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setViewingRapport(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer ml-2"
+                aria-label={fr.dossierDirecteur.fermerApercu}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="flex-1 flex items-center justify-center p-2 sm:p-4 overflow-auto">
+              {viewingRapport.fichierPdf && isPdfData(viewingRapport.fichierPdf) ? (
+                <iframe
+                  src={viewingRapport.fichierPdf}
+                  title={viewingRapport.nomFichier || 'Rapport PDF'}
+                  className="w-full h-full min-h-[75vh] rounded-xl bg-white border border-slate-800 shadow-xl"
+                />
+              ) : (viewingRapport.avancement || viewingRapport.titre || (viewingRapport.publications && viewingRapport.publications.length > 0)) ? (
+                <div className="w-full max-w-2xl bg-white text-slate-800 rounded-xl p-6 shadow-xl max-h-[80vh] overflow-y-auto space-y-4">
+                  <div className="border-b border-slate-200 pb-3">
+                    <span className="text-[10px] font-bold uppercase text-emerald-700">{viewingRapport.annee}ᵉ année de doctorat</span>
+                    <h4 className="text-sm font-bold text-slate-900 mt-1">{viewingRapport.titre}</h4>
+                  </div>
+                  {viewingRapport.avancement && (
+                    <div>
+                      <span className="text-xs font-bold text-slate-900">{fr.reinscription.avancementLabel} :</span>
+                      <p className="text-xs text-slate-600 mt-1 whitespace-pre-line leading-relaxed">{viewingRapport.avancement}</p>
+                    </div>
+                  )}
+                  {viewingRapport.publications && viewingRapport.publications.length > 0 && (
+                    <div>
+                      <span className="text-xs font-bold text-slate-900">{fr.reinscription.publicationsSectionTitle} :</span>
+                      <ul className="list-disc list-inside text-xs text-slate-600 mt-1 space-y-1">
+                        {viewingRapport.publications.map((p, i) => (
+                          <li key={i}>{p.titre} {p.doi && <span className="text-[11px] text-slate-400 font-mono">({p.doi})</span>}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {viewingRapport.communications && viewingRapport.communications.length > 0 && (
+                    <div>
+                      <span className="text-xs font-bold text-slate-900">{fr.reinscription.communicationsSectionTitle} :</span>
+                      <ul className="list-disc list-inside text-xs text-slate-600 mt-1 space-y-1">
+                        {viewingRapport.communications.map((c, i) => (
+                          <li key={i}>{c.titre} {c.lieu && <span className="text-[11px] text-slate-400">({c.lieu})</span>}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {viewingRapport.formationsHeures > 0 && (
+                    <div>
+                      <span className="text-xs font-bold text-slate-900">{fr.reinscription.formationsHoursLabel} :</span>
+                      <p className="text-xs text-slate-600 mt-0.5">{viewingRapport.formationsHeures} h</p>
+                    </div>
+                  )}
+                  {viewingRapport.perspectives && (
+                    <div>
+                      <span className="text-xs font-bold text-slate-900">{fr.reinscription.perspectivesLabel} :</span>
+                      <p className="text-xs text-slate-600 mt-1 whitespace-pre-line leading-relaxed">{viewingRapport.perspectives}</p>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="text-center p-8 bg-slate-900 rounded-2xl text-slate-400 font-medium border border-slate-800">
+                  <p>{fr.dossierDirecteur.aucuneDonnee}</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
