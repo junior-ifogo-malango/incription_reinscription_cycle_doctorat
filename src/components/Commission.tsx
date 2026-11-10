@@ -3,6 +3,7 @@ import {
   Award,
   CheckCircle2,
   Clock,
+  Circle,
   XCircle,
   FileSignature,
   FileCheck2,
@@ -30,6 +31,19 @@ interface CommissionProps {
   enseignantNom: string;
 }
 
+function formatJJMM(dateStr?: string): string {
+  if (!dateStr) return '';
+  if (dateStr.includes('/')) {
+    const parts = dateStr.split('/');
+    if (parts.length >= 2) return `${parts[0].padStart(2, '0')}/${parts[1].padStart(2, '0')}`;
+  }
+  const parts = dateStr.split('-');
+  if (parts.length >= 3) {
+    return `${parts[2]}/${parts[1]}`;
+  }
+  return dateStr;
+}
+
 function generatePVCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   const buffer = new Uint8Array(12);
@@ -45,6 +59,14 @@ export const Commission: React.FC<CommissionProps> = ({
   const [resultats, setResultats] = useState<Resultat[]>([]);
   const [pvs, setPvs] = useState<PV[]>([]);
   const [activePV, setActivePV] = useState<PV | null>(null);
+  const [pvDownloaded, setPvDownloaded] = useState<Record<string, boolean>>(() => {
+    try {
+      const raw = localStorage.getItem('usmba_commission_pv_downloaded');
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  });
 
   // Formulaire d'évaluation en cours par créneau
   const [editForms, setEditForms] = useState<
@@ -371,6 +393,13 @@ export const Commission: React.FC<CommissionProps> = ({
 
   const handleDownloadPV = (pv: PV) => {
     setActivePV(pv);
+    setPvDownloaded((prev) => {
+      const next = { ...prev, [pv.date]: true, [pv.id]: true };
+      try {
+        localStorage.setItem('usmba_commission_pv_downloaded', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
     setTimeout(() => {
       window.print();
     }, 250);
@@ -524,659 +553,566 @@ export const Commission: React.FC<CommissionProps> = ({
         </div>
       </div>
 
-      {/* SECTION 1 : ENTRETIENS À ÉVALUER */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-600 flex items-center gap-2">
-            <span>{fr.commission.evalSectionTitle}</span>
-            <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700">
-              {creneauxConfirmes.length}
-            </span>
-          </h3>
+      {/* Toast de feedback */}
+      {feedback && (
+        <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold flex items-center gap-2">
+          <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+          <span>{feedback.text}</span>
         </div>
+      )}
 
-        {creneauxConfirmes.length === 0 ? (
-          <div className="bg-white border border-dashed border-slate-200 rounded-2xl p-6 text-center text-xs text-slate-400">
-            {fr.commission.evalSectionEmpty}
+      {/* Cas d'erreur : aucune séance */}
+      {datesSeances.length === 0 ? (
+        <div className="bg-white border border-dashed border-slate-200 rounded-2xl p-10 text-center space-y-3">
+          <div className="w-12 h-12 mx-auto rounded-full bg-slate-100 text-slate-400 flex items-center justify-center">
+            <Calendar size={24} />
           </div>
-        ) : (
-          <div className="space-y-3">
-            {creneauxConfirmes.map((c) => {
-              const res = getResultatForCreneau(c.id);
-              const pvSeance = getPVForDate(c.date);
-              const isLocked = Boolean(pvSeance && !pvSeance.rouvertLe);
-              const isFormOpen = openForms[c.id] || (!res && !isLocked);
-              const form = editForms[c.id] || {
-                note: res ? String(res.note) : '',
-                resultat: res ? res.resultat : 'ADMIS',
-                motif: res?.motif || '',
-              };
-              const candidatNom = getCandidatNom(c.candidatId);
+          <div className="space-y-1">
+            <h3 className="text-sm font-bold text-slate-800">Aucun entretien confirmé</h3>
+            <p className="text-xs text-slate-500">Les séances apparaîtront ici dès que des créneaux d'entretien seront confirmés.</p>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-5">
+          {datesSeances.map((date) => {
+            const creneauxDate = seancesParDate[date] || [];
+            const existingPV = getLatestPVForDate(date);
+            const totalCount = creneauxDate.length;
+            const evaluatedCount = creneauxDate.filter((c) => Boolean(getResultatForCreneau(c.id))).length;
+            const allEvaluated = totalCount > 0 && evaluatedCount === totalCount;
+            const isDownloaded = Boolean(existingPV && (pvDownloaded[existingPV.id] || pvDownloaded[date] || existingPV.scanDeposeLe));
+            const isScanDepose = Boolean(
+              existingPV &&
+                (existingPV.statut === 'signe' ||
+                  existingPV.statut === 'envoye' ||
+                  existingPV.statut === 'publie' ||
+                  existingPV.scanDeposeLe) &&
+                existingPV.scanStatut !== 'refuse'
+            );
+            const isEnvoye = Boolean(
+              existingPV && (existingPV.statut === 'envoye' || existingPV.statut === 'publie' || existingPV.publieLe)
+            );
+            const lieu = creneauxDate[0]?.lieu || 'CED';
 
-              return (
-                <div
-                  key={c.id}
-                  className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3 transition"
-                >
-                  {/* Ligne En-tête du créneau */}
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-slate-100 pb-2.5">
-                    <div>
-                      <h4 className="text-xs font-bold text-slate-900 flex items-center gap-2">
-                        <span>{candidatNom}</span>
-                        {isLocked ? (
-                          <span
-                            className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full"
-                            title={fr.commission.resultsLocked}
-                          >
-                            <Lock size={10} />
-                            <span>{fr.commission.resultsLocked}</span>
-                          </span>
-                        ) : pvSeance?.rouvertLe ? (
-                          <span
-                            className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full"
-                            title={fr.commission.reopenedBadge}
-                          >
-                            <RotateCcw size={10} />
-                            <span>{fr.commission.reopenedBadge}</span>
-                          </span>
-                        ) : null}
-                      </h4>
-                      <p className="text-[11px] text-slate-500 mt-0.5">
-                        {c.date} à {c.heure} — {c.lieu}
-                      </p>
+            // Suivi en 4 étapes
+            const step1Done = allEvaluated;
+            const step1Current = !allEvaluated;
+
+            const step2Done = Boolean(existingPV && !existingPV.rouvertLe);
+            const step2Current = !step2Done && step1Done;
+            const step2Upcoming = !step2Done && !step1Done;
+
+            const step3Done = isScanDepose;
+            const step3Current = !step3Done && step2Done;
+            const step3Upcoming = !step3Done && !step2Done;
+
+            const step4Done = isEnvoye;
+            const step4Current = !step4Done && step3Done;
+            const step4Upcoming = !step4Done && !step3Done;
+
+            const steps = [
+              {
+                id: 1,
+                label: `Notes (${evaluatedCount}/${totalCount})`,
+                done: step1Done,
+                current: step1Current,
+                upcoming: false,
+              },
+              {
+                id: 2,
+                label: 'PV généré',
+                done: step2Done,
+                current: step2Current,
+                upcoming: step2Upcoming,
+              },
+              {
+                id: 3,
+                label: 'Scan déposé',
+                done: step3Done,
+                current: step3Current,
+                upcoming: step3Upcoming,
+              },
+              {
+                id: 4,
+                label: 'Envoyé à la Structure',
+                done: step4Done,
+                current: step4Current,
+                upcoming: step4Upcoming,
+              },
+            ];
+
+            return (
+              <div
+                key={date}
+                className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs space-y-4 transition"
+              >
+                {/* 1. En-tête : "Séance du JJ/MM · lieu" + pastille d'état */}
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 border-b border-slate-100 pb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-800 flex items-center justify-center shrink-0">
+                      <Calendar size={16} />
                     </div>
-
-                    <div className="flex items-center gap-2 self-start sm:self-auto">
-                      {res && renderStatusBadgeResultat(res.resultat)}
-                      {res && !isLocked && !isFormOpen && (
-                        <button
-                          type="button"
-                          onClick={() => initFormForCreneau(c)}
-                          className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600 hover:text-emerald-700 bg-slate-100 hover:bg-slate-200 px-2.5 py-1 rounded-lg transition cursor-pointer"
-                        >
-                          <Edit2 size={12} />
-                          <span>{fr.commission.btnEditResult}</span>
-                        </button>
-                      )}
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-900">
+                        Séance du {formatJJMM(date)} · {lieu}
+                      </h3>
+                      <p className="text-[11px] text-slate-500">
+                        {totalCount} {totalCount > 1 ? fr.commission.totalEntretiens : 'entretien'}
+                      </p>
                     </div>
                   </div>
 
-                  {/* Résultat existant (mode lecture si formulaire fermé) */}
-                  {res && !isFormOpen && (
-                    <div className="bg-slate-50 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
-                      <div>
-                        <span className="text-slate-500 font-medium">Note attribuée :</span>{' '}
-                        <span className="font-extrabold text-emerald-800 text-sm">
-                          {res.note.toFixed(1)} / 20
-                        </span>
-                        {res.motif && (
-                          <p className="text-[11px] text-slate-600 mt-1">
-                            <span className="font-semibold text-slate-700">Motif :</span> {res.motif}
-                          </p>
-                        )}
-                      </div>
-                      <span className="text-[10px] text-slate-400">
-                        Saisi le {new Date(res.saisiLe).toLocaleDateString('fr-FR')}
+                  {/* Pastille d'état */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {isEnvoye ? (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-sky-50 text-sky-800 border border-sky-300">
+                        <Send size={13} className="text-sky-600 shrink-0" />
+                        <span>{existingPV?.statut === 'publie' ? 'Publié' : 'Envoyé à la Structure'}</span>
                       </span>
-                    </div>
-                  )}
+                    ) : isScanDepose ? (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-indigo-50 text-indigo-800 border border-indigo-300">
+                        <FileCheck size={13} className="text-indigo-600 shrink-0" />
+                        <span>Scan déposé</span>
+                      </span>
+                    ) : existingPV?.scanStatut === 'refuse' ? (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-50 text-rose-800 border border-rose-300">
+                        <XCircle size={13} className="text-rose-600 shrink-0" />
+                        <span>Scan refusé</span>
+                      </span>
+                    ) : existingPV?.rouvertLe ? (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-800 border border-amber-300">
+                        <RotateCcw size={13} className="text-amber-600 shrink-0" />
+                        <span>Séance rouverte</span>
+                      </span>
+                    ) : existingPV ? (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-800 border border-amber-300">
+                        <FileSignature size={13} className="text-amber-600 shrink-0" />
+                        <span>PV généré (à signer)</span>
+                      </span>
+                    ) : allEvaluated ? (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-300">
+                        <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />
+                        <span>Notes complètes</span>
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-700 border border-slate-300">
+                        <Clock size={13} className="text-slate-500 shrink-0" />
+                        <span>Évaluation en cours</span>
+                      </span>
+                    )}
+                  </div>
+                </div>
 
-                  {/* Message de confirmation rapide */}
-                  {feedback && feedback.id === c.id && (
-                    <div className="p-2 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold flex items-center gap-2">
-                      <CheckCircle2 size={14} className="text-emerald-600" />
-                      <span>{feedback.text}</span>
-                    </div>
-                  )}
-
-                  {/* Formulaire d'évaluation (ouvert si non évalué ou si modification) */}
-                  {isFormOpen && !isLocked && (
-                    <div className="pt-2 space-y-3 bg-slate-50/70 p-3.5 rounded-xl border border-slate-200/80">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        {/* Champ Note */}
-                        <div>
-                          <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                            {fr.commission.noteLabel} *
-                          </label>
-                          <input
-                            type="text"
-                            inputMode="decimal"
-                            value={form.note}
-                            onChange={(e) => handleFieldChange(c.id, 'note', e.target.value)}
-                            placeholder={fr.commission.notePlaceholder}
-                            className="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-1 focus:ring-emerald-500 font-mono"
-                          />
+                {/* 2. Suivi en 4 étapes (icône + texte) */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 py-1">
+                  {steps.map((st) => {
+                    if (st.done) {
+                      return (
+                        <div
+                          key={st.id}
+                          className="flex items-center gap-2 p-2.5 rounded-xl bg-emerald-50/80 border border-emerald-200 text-emerald-900"
+                        >
+                          <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+                          <span className="text-xs font-bold leading-tight">{st.label}</span>
                         </div>
-
-                        {/* Liste Résultat */}
-                        <div>
-                          <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                            {fr.commission.resultatLabel} *
-                          </label>
-                          <select
-                            value={form.resultat}
-                            onChange={(e) =>
-                              handleFieldChange(c.id, 'resultat', e.target.value as ResultatType)
-                            }
-                            className="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-1 focus:ring-emerald-500 font-medium"
-                          >
-                            <option value="ADMIS">{fr.commission.resultats.ADMIS}</option>
-                            <option value="LISTE_COMPLEMENTAIRE">
-                              {fr.commission.resultats.LISTE_COMPLEMENTAIRE}
-                            </option>
-                            <option value="REFUSE">{fr.commission.resultats.REFUSE}</option>
-                          </select>
+                      );
+                    }
+                    if (st.current) {
+                      return (
+                        <div
+                          key={st.id}
+                          className="flex items-center gap-2 p-2.5 rounded-xl bg-amber-50/90 border border-amber-300 text-amber-900"
+                        >
+                          <Clock size={16} className="text-amber-600 shrink-0" />
+                          <span className="text-xs font-bold leading-tight">{st.label}</span>
                         </div>
+                      );
+                    }
+                    return (
+                      <div
+                        key={st.id}
+                        className="flex items-center gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-400"
+                      >
+                        <Circle size={16} className="text-slate-300 shrink-0" />
+                        <span className="text-xs font-medium leading-tight">{st.label}</span>
                       </div>
+                    );
+                  })}
+                </div>
 
-                      {/* Champ Motif (obligatoire et affiché seulement si Refusé) */}
-                      {form.resultat === 'REFUSE' && (
-                        <div>
-                          <label className="block text-[11px] font-bold text-rose-700 mb-1">
-                            {fr.commission.motifLabel} *
-                          </label>
-                          <input
-                            type="text"
-                            value={form.motif}
-                            onChange={(e) => handleFieldChange(c.id, 'motif', e.target.value)}
-                            placeholder={fr.commission.motifPlaceholder}
-                            className="w-full text-xs p-2 rounded-lg border border-rose-300 bg-white focus:outline-none focus:ring-1 focus:ring-rose-500"
-                          />
+                {/* Exception : scan refusé */}
+                {existingPV?.scanStatut === 'refuse' && existingPV.scanMotifRefus && (
+                  <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-xs text-rose-900 space-y-1">
+                    <div className="flex items-center gap-1.5 font-bold">
+                      <XCircle size={14} className="text-rose-600" />
+                      <span>Scan refusé par la Structure</span>
+                    </div>
+                    <p className="text-[11px] text-rose-800 italic">
+                      Motif : « {existingPV.scanMotifRefus} ». Déposez un nouveau scan signé.
+                    </p>
+                  </div>
+                )}
+
+                {/* Exception : séance rouverte */}
+                {existingPV?.rouvertLe && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-900 space-y-1">
+                    <div className="flex items-center gap-1.5 font-bold">
+                      <RotateCcw size={13} className="text-amber-700" />
+                      <span>{fr.commission.reopenedNotice}</span>
+                    </div>
+                    {existingPV.motifReouverture && (
+                      <p className="text-[11px] text-amber-800 italic">
+                        Motif : « {existingPV.motifReouverture} »
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* 3. Candidats de la séance : nom, note, résultat (formulaire tant que non enregistré, puis lecture seule) */}
+                <div className="space-y-2">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                    Candidats de la séance ({totalCount})
+                  </h4>
+                  <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white overflow-hidden shadow-2xs">
+                    {creneauxDate.map((c) => {
+                      const res = getResultatForCreneau(c.id);
+                      const candidatNom = getCandidatNom(c.candidatId);
+                      const form = editForms[c.id] || {
+                        note: '',
+                        resultat: 'ADMIS',
+                        motif: '',
+                      };
+
+                      return (
+                        <div key={c.id} className="p-3 space-y-2">
+                          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5">
+                            <div>
+                              <span className="font-bold text-xs text-slate-900">{candidatNom}</span>
+                              <span className="text-[11px] text-slate-400 ml-2 font-mono">({c.heure})</span>
+                            </div>
+                            {res && (
+                              <div className="flex items-center gap-2">
+                                <span className="font-mono font-bold text-xs text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                                  {res.note.toFixed(1)} / 20
+                                </span>
+                                {renderStatusBadgeResultat(res.resultat)}
+                              </div>
+                            )}
+                          </div>
+
+                          {res ? (
+                            /* Mode lecture seule : résultat déjà enregistré */
+                            res.motif ? (
+                              <p className="text-[11px] text-slate-600 italic">
+                                <span className="font-semibold text-slate-700 not-italic">Motif du refus :</span> {res.motif}
+                              </p>
+                            ) : null
+                          ) : (
+                            /* Formulaire note/résultat uniquement tant que non enregistré */
+                            <div className="pt-2 p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2.5">
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                <div>
+                                  <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                                    {fr.commission.noteLabel} *
+                                  </label>
+                                  <input
+                                    type="text"
+                                    inputMode="decimal"
+                                    value={form.note}
+                                    onChange={(e) => handleFieldChange(c.id, 'note', e.target.value)}
+                                    placeholder={fr.commission.notePlaceholder}
+                                    className="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-1 focus:ring-emerald-500 font-mono"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                                    {fr.commission.resultatLabel} *
+                                  </label>
+                                  <select
+                                    value={form.resultat}
+                                    onChange={(e) => handleFieldChange(c.id, 'resultat', e.target.value as ResultatType)}
+                                    className="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-1 focus:ring-emerald-500 font-medium"
+                                  >
+                                    <option value="ADMIS">{fr.commission.resultats.ADMIS}</option>
+                                    <option value="LISTE_COMPLEMENTAIRE">{fr.commission.resultats.LISTE_COMPLEMENTAIRE}</option>
+                                    <option value="REFUSE">{fr.commission.resultats.REFUSE}</option>
+                                  </select>
+                                </div>
+                              </div>
+
+                              {form.resultat === 'REFUSE' && (
+                                <div>
+                                  <label className="block text-[11px] font-bold text-rose-700 mb-1">
+                                    {fr.commission.motifLabel} *
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={form.motif}
+                                    onChange={(e) => handleFieldChange(c.id, 'motif', e.target.value)}
+                                    placeholder={fr.commission.motifPlaceholder}
+                                    className="w-full text-xs p-2 rounded-lg border border-rose-300 bg-white focus:outline-none focus:ring-1 focus:ring-rose-500"
+                                  />
+                                </div>
+                              )}
+
+                              {form.error && (
+                                <div className="p-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold flex items-center gap-1.5">
+                                  <AlertCircle size={14} className="shrink-0" />
+                                  <span>{form.error}</span>
+                                </div>
+                              )}
+
+                              <div className="flex justify-end pt-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleSaveResultat(c)}
+                                  className="px-3.5 py-1.5 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg shadow-xs transition cursor-pointer"
+                                >
+                                  {fr.commission.btnSaveResult}
+                                </button>
+                              </div>
+                            </div>
+                          )}
                         </div>
-                      )}
+                      );
+                    })}
+                  </div>
+                </div>
 
-                      {/* Message d'erreur de validation du formulaire */}
-                      {form.error && (
-                        <div className="p-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold flex items-center gap-1.5">
-                          <AlertCircle size={14} className="shrink-0" />
-                          <span>{form.error}</span>
+                {/* 4. UN seul bouton d'action selon l'étape */}
+                <div className="pt-2 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  {!existingPV || existingPV.rouvertLe ? (
+                    /* Étape 1 / 2 : Générer le PV (ou Régénérer si rouvert) */
+                    !allEvaluated ? (
+                      <>
+                        <div className="text-xs text-amber-800 font-medium flex items-center gap-1.5">
+                          <AlertCircle size={14} className="text-amber-600 shrink-0" />
+                          <span>Notes incomplètes : évaluez les {totalCount - evaluatedCount} candidat(s) restant(s)</span>
                         </div>
-                      )}
-
-                      {/* Boutons d'action */}
-                      <div className="flex items-center justify-end gap-2 pt-1">
-                        {res && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setOpenForms((prev) => ({ ...prev, [c.id]: false }))
-                            }
-                            className="px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-200 rounded-lg transition cursor-pointer"
-                          >
-                            Annuler
-                          </button>
-                        )}
                         <button
                           type="button"
-                          onClick={() => handleSaveResultat(c)}
-                          className="px-4 py-1.5 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg shadow-xs transition cursor-pointer"
+                          disabled
+                          className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-xl bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed"
                         >
-                          {fr.commission.btnSaveResult}
+                          <FileSignature size={14} />
+                          <span>Générer le PV</span>
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <div className="text-xs text-emerald-800 font-medium flex items-center gap-1.5">
+                          <CheckCircle2 size={14} className="text-emerald-600 shrink-0" />
+                          <span>Tous les entretiens sont évalués. Prêt pour la génération du PV.</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleGeneratePV(date, creneauxDate)}
+                          className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl shadow-xs transition cursor-pointer"
+                        >
+                          <FileSignature size={14} />
+                          <span>{existingPV?.rouvertLe ? fr.commission.btnRegeneratePV : 'Générer le PV'}</span>
+                        </button>
+                      </>
+                    )
+                  ) : !isDownloaded ? (
+                    /* Étape 2 : Télécharger le PV */
+                    <>
+                      <div className="text-xs text-slate-600 flex items-center gap-2">
+                        <span className="font-semibold text-slate-800">PV prêt à signer</span>
+                        <span className="text-slate-400">•</span>
+                        <span className="text-[11px] font-mono text-slate-500">Ref {(existingPV.code || '').slice(0, 4)}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadPV(existingPV)}
+                        className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl shadow-xs transition cursor-pointer"
+                      >
+                        <Printer size={14} />
+                        <span>Télécharger le PV</span>
+                      </button>
+                    </>
+                  ) : !isScanDepose ? (
+                    /* Étape 3 : Déposer le scan */
+                    <>
+                      <div className="text-xs text-slate-600 flex items-center gap-2">
+                        <span className="font-semibold text-slate-800">PV téléchargé</span>
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadPV(existingPV)}
+                          className="text-[11px] text-emerald-700 underline hover:text-emerald-800"
+                        >
+                          (Réimprimer)
                         </button>
                       </div>
-                    </div>
+                      <label className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl shadow-xs transition cursor-pointer">
+                        <Upload size={14} />
+                        <span>Déposer le scan</span>
+                        <input
+                          type="file"
+                          accept=".pdf,image/*"
+                          className="hidden"
+                          onChange={() => handleDeposerScanCommission(existingPV.id)}
+                        />
+                      </label>
+                    </>
+                  ) : existingPV.statut === 'signe' ? (
+                    /* Étape 4 : Envoyer à la Structure (actif) */
+                    <>
+                      <div className="text-xs text-indigo-900 font-semibold flex items-center gap-1.5">
+                        <FileCheck size={14} className="text-indigo-600 shrink-0" />
+                        <span>Scan signé déposé · Prêt pour transmission</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleEnvoyerStructure(existingPV.id)}
+                        className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl shadow-xs transition cursor-pointer"
+                      >
+                        <Send size={14} />
+                        <span>Envoyer à la Structure</span>
+                      </button>
+                    </>
+                  ) : (
+                    /* Étape 4 : Déjà envoyé (grisé avec raison écrite) */
+                    <>
+                      <div className="text-xs text-sky-900 font-semibold flex items-center gap-1.5">
+                        <Send size={14} className="text-sky-600 shrink-0" />
+                        <span>
+                          {existingPV.publieLe
+                            ? 'Séance publiée par la Structure'
+                            : `Transmis à la Structure${existingPV.envoyeLe ? ` le ${formatJJMM(existingPV.envoyeLe.split('T')[0])}` : ''}`}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        disabled
+                        className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-xl bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed"
+                      >
+                        <Send size={14} />
+                        <span>Envoyé à la Structure</span>
+                      </button>
+                    </>
                   )}
                 </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
 
-      {/* SECTION 2 : SÉANCES */}
-      <div className="space-y-3 pt-2">
-        <div className="flex items-center justify-between">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-600 flex items-center gap-2">
-            <span>{fr.commission.sessionsSectionTitle}</span>
-            <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700">
-              {datesSeances.length}
-            </span>
-          </h3>
-        </div>
-
-        {datesSeances.length === 0 ? (
-          <div className="bg-white border border-dashed border-slate-200 rounded-2xl p-6 text-center text-xs text-slate-400">
-            {fr.commission.sessionsSectionEmpty}
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {datesSeances.map((date) => {
-              const creneauxDate = seancesParDate[date];
-              const existingPV = getPVForDate(date);
-              const unassessedCount = creneauxDate.filter(
-                (c) => !getResultatForCreneau(c.id)
-              ).length;
-              const allEvaluated = unassessedCount === 0;
-
-              return (
-                <div
-                  key={date}
-                  className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs space-y-3"
-                >
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-slate-100 pb-3">
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-800 flex items-center justify-center font-bold text-xs">
-                        <Calendar size={16} />
-                      </div>
-                      <div>
-                        <h4 className="text-xs font-bold text-slate-900">
-                          {fr.commission.sessionDate} {date}
-                        </h4>
-                        <p className="text-[11px] text-slate-500">
-                          {creneauxDate.length} {fr.commission.totalEntretiens}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {existingPV ? (
-                        <>
-                          {!existingPV.structure && (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-800 border border-amber-300">
-                              <AlertTriangle size={13} className="text-amber-600 shrink-0" />
-                              <span>{fr.commission.structureManquante}</span>
-                            </span>
-                          )}
-                          {existingPV.rouvertLe ? (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-800 border border-amber-300">
-                              <RotateCcw size={13} className="text-amber-600" />
-                              <span>{fr.commission.reopenedBadge}</span>
-                            </span>
-                          ) : existingPV.scanStatut === 'refuse' ? (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-50 text-rose-800 border border-rose-300">
-                              <XCircle size={13} className="text-rose-600" />
-                              <span>Scan refusé</span>
-                            </span>
-                          ) : existingPV.publieLe || existingPV.statut === 'publie' ? (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-300">
-                              <CheckCircle2 size={13} className="text-emerald-600" />
-                              <span>{fr.commission.pvStatuts.publie}</span>
-                            </span>
-                          ) : existingPV.statut === 'envoye' ? (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-sky-50 text-sky-800 border border-sky-300">
-                              <Send size={13} className="text-sky-600" />
-                              <span>{fr.commission.pvStatuts.envoye}</span>
-                            </span>
-                          ) : existingPV.statut === 'signe' ? (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-indigo-50 text-indigo-800 border border-indigo-300">
-                              <FileCheck size={13} className="text-indigo-600" />
-                              <span>{fr.commission.pvStatuts.signe}</span>
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-800 border border-amber-300">
-                              <FileSignature size={13} className="text-amber-600" />
-                              <span>{fr.commission.pvStatuts.a_signer}</span>
-                            </span>
-                          )}
-                        </>
-                      ) : allEvaluated ? (
-                        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                          <CheckCircle2 size={12} />
-                          <span>Prête pour PV</span>
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
-                          <AlertCircle size={12} />
-                          <span>
-                            {unassessedCount}{' '}
-                            {unassessedCount > 1
-                              ? fr.commission.unassessedInterviewsPlural
-                              : fr.commission.unassessedInterviews}
-                          </span>
-                        </span>
-                      )}
-                    </div>
+                {/* Option de réouverture si PV existant non publié */}
+                {existingPV && !existingPV.publieLe && !existingPV.rouvertLe && (
+                  <div className="flex justify-end pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setReopenModalDate(date);
+                        setReopenMotif('');
+                        setReopenError(null);
+                      }}
+                      className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-500 hover:text-amber-800 transition cursor-pointer"
+                    >
+                      <RotateCcw size={12} />
+                      <span>{fr.commission.btnReopenPV}</span>
+                    </button>
                   </div>
+                )}
 
-                  {/* Exception 5 : PV signé non envoyé depuis plus de 48 h (directeur concerné uniquement) */}
-                  {existingPV &&
-                    existingPV.directeurId === enseignantId &&
-                    existingPV.statut === 'signe' &&
-                    existingPV.scanDeposeLe &&
-                    (Date.now() - new Date(existingPV.scanDeposeLe).getTime()) / (1000 * 60 * 60) > 48 && (
-                      <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-xs text-rose-900 flex items-center gap-2 font-semibold">
-                        <Clock size={16} className="text-rose-600 shrink-0" />
-                        <span>{fr.commission.exceptionSigneNonEnvoye}</span>
-                      </div>
-                  )}
-
-                  {/* Alerte si scan refusé par la Structure */}
-                  {existingPV?.scanStatut === 'refuse' && existingPV.scanMotifRefus && (
-                    <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-xs text-rose-900 space-y-1">
-                      <div className="flex items-center gap-1.5 font-bold">
-                        <XCircle size={14} className="text-rose-600" />
-                        <span>Scan refusé par la Structure</span>
-                      </div>
-                      <p className="text-[11px] text-rose-800 italic">
-                        Motif : « {existingPV.scanMotifRefus} ». Merci de déposer un nouveau scan signé.
+                {/* Modal de réouverture */}
+                {reopenModalDate === date && (
+                  <div className="mt-3 p-4 bg-amber-50/70 border border-amber-300 rounded-2xl space-y-3">
+                    <div>
+                      <h5 className="text-xs font-bold text-amber-950 flex items-center gap-1.5">
+                        <RotateCcw size={14} className="text-amber-700" />
+                        <span>{fr.commission.reopenModalTitle}</span>
+                      </h5>
+                      <p className="text-[11px] text-amber-800 mt-0.5">
+                        {fr.commission.reopenModalSubtitle}
                       </p>
                     </div>
-                  )}
 
-                  {/* Liste des candidats de la séance */}
-                  <div className="text-xs text-slate-600 space-y-1">
-                    <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1">
-                      Candidats convoqués :
-                    </span>
-                    <div className="flex flex-wrap gap-1.5">
-                      {creneauxDate.map((c) => {
-                        const hasRes = Boolean(getResultatForCreneau(c.id));
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                        {fr.commission.reopenMotifLabel} *
+                      </label>
+                      <input
+                        type="text"
+                        value={reopenMotif}
+                        onChange={(e) => {
+                          setReopenMotif(e.target.value);
+                          setReopenError(null);
+                        }}
+                        placeholder={fr.commission.reopenMotifPlaceholder}
+                        className="w-full text-xs p-2.5 rounded-xl border border-amber-300 bg-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                      />
+                    </div>
+
+                    {reopenError && (
+                      <div className="p-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold flex items-center gap-1.5">
+                        <AlertCircle size={14} className="shrink-0" />
+                        <span>{reopenError}</span>
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-end gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReopenModalDate(null);
+                          setReopenMotif('');
+                          setReopenError(null);
+                        }}
+                        className="px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-200 rounded-lg transition cursor-pointer"
+                      >
+                        Annuler
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleConfirmReopen(date)}
+                        className="px-4 py-1.5 text-xs font-semibold text-white bg-amber-700 hover:bg-amber-800 rounded-lg shadow-xs transition cursor-pointer"
+                      >
+                        {fr.commission.btnConfirmReopen}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Versions précédentes remplacées (lecture seule) */}
+                {getReplacedPVsForDate(date).length > 0 && (
+                  <div className="pt-3 border-t border-slate-100 space-y-2">
+                    <h5 className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                      <RotateCcw size={12} className="text-slate-400" />
+                      <span>{fr.commission.previousVersionsTitle}</span>
+                    </h5>
+                    <div className="space-y-1.5">
+                      {getReplacedPVsForDate(date).map((oldPv) => {
+                        const oldRef = `PV du ${formatJJMM(oldPv.date)} · ${(oldPv.code || '').slice(0, 4)}`;
+                        const oldVer = oldPv.version ?? 1;
                         return (
-                          <span
-                            key={c.id}
-                            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium border ${
-                              hasRes
-                                ? 'bg-slate-50 border-slate-200 text-slate-800'
-                                : 'bg-amber-50/50 border-amber-200 text-amber-900'
-                            }`}
+                          <div
+                            key={oldPv.id}
+                            className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
                           >
-                            <span>{getCandidatNom(c.candidatId)}</span>
-                            <span className="text-[10px] text-slate-400">({c.heure})</span>
-                            {hasRes && <CheckCircle2 size={12} className="text-emerald-600" />}
-                          </span>
+                            <div className="space-y-0.5">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-bold font-mono text-slate-800">{oldRef}</span>
+                                <span className="text-slate-600 font-medium">Version {oldVer}</span>
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-slate-200 text-slate-700 border border-slate-300">
+                                  <RotateCcw size={10} className="text-slate-500" />
+                                  <span>{fr.commission.replacedBadge}</span>
+                                </span>
+                              </div>
+                              {oldPv.motifReouverture && (
+                                <p className="text-[11px] text-slate-500 italic">
+                                  Motif : « {oldPv.motifReouverture} »
+                                </p>
+                              )}
+                            </div>
+                          </div>
                         );
                       })}
                     </div>
                   </div>
-
-                  {/* Alerte si séance rouverte */}
-                  {existingPV?.rouvertLe && (
-                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-900 space-y-1">
-                      <div className="flex items-center gap-1.5 font-bold">
-                        <RotateCcw size={13} className="text-amber-700" />
-                        <span>{fr.commission.reopenedNotice}</span>
-                      </div>
-                      {existingPV.motifReouverture && (
-                        <p className="text-[11px] text-amber-800 italic">
-                          Motif : « {existingPV.motifReouverture} »
-                        </p>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Action PV : Générer, Consulter, Télécharger, Dépôt scan, Envoyer à la Structure */}
-                  <div className="pt-2 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    {existingPV ? (
-                      <>
-                        <div className="space-y-0.5 text-xs text-slate-500">
-                          <div className="flex items-center gap-2 font-mono flex-wrap">
-                            <span className="font-bold text-slate-900">
-                              PV-{existingPV.date}-{(existingPV.code || '').slice(0, 4)}
-                            </span>
-                            <span className="text-slate-400">•</span>
-                            <span className="font-semibold text-slate-700 font-sans">
-                              Version {existingPV.version ?? 1}
-                            </span>
-                            {existingPV.structure ? (
-                              <span className="text-[11px] font-sans text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
-                                {existingPV.structure}
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-300 font-sans">
-                                <AlertTriangle size={11} className="text-amber-600" />
-                                <span>{fr.commission.structureManquante}</span>
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-[11px] text-slate-400 font-mono">
-                            Code : {existingPV.code}
-                          </p>
-                        </div>
-
-                        <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2 flex-wrap">
-                          {/* Télécharger le PV (Impression CSS avec référence, tableau, signatures, QR) */}
-                          <button
-                            type="button"
-                            onClick={() => handleDownloadPV(existingPV)}
-                            className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition cursor-pointer"
-                          >
-                            <Printer size={14} />
-                            <span>{fr.commission.btnTelechargerPV}</span>
-                          </button>
-
-                          {/* Dépôt du scan signé si non signé ou refusé */}
-                          {(existingPV.statut === 'a_signer' || existingPV.scanStatut === 'refuse') && (
-                            <label className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-sky-800 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-xl transition cursor-pointer">
-                              <Upload size={14} />
-                              <span>{fr.commission.btnDeposerScanSigne}</span>
-                              <input
-                                type="file"
-                                accept=".pdf,image/*"
-                                className="hidden"
-                                onChange={() => handleDeposerScanCommission(existingPV.id)}
-                              />
-                            </label>
-                          )}
-
-                          {/* Bouton Envoyer à la Structure */}
-                          {existingPV.statut === 'signe' ? (
-                            <button
-                              type="button"
-                              onClick={() => handleEnvoyerStructure(existingPV.id)}
-                              className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl shadow-xs transition cursor-pointer active:scale-98"
-                            >
-                              <Send size={14} />
-                              <span>{fr.commission.btnEnvoyerStructure}</span>
-                            </button>
-                          ) : existingPV.statut === 'envoye' ? (
-                            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-sky-50 text-sky-800 border border-sky-200">
-                              <Send size={13} className="text-sky-600" />
-                              <span>
-                                {fr.commission.pvEnvoyeNotice}
-                                {existingPV.envoyeLe ? ` (${new Date(existingPV.envoyeLe).toLocaleDateString('fr-FR')})` : ''}
-                              </span>
-                            </div>
-                          ) : existingPV.statut === 'publie' || Boolean(existingPV.publieLe) ? (
-                            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                              <CheckCircle2 size={13} className="text-emerald-600" />
-                              <span>{fr.cedSeances.alreadyPublished}</span>
-                            </div>
-                          ) : (
-                            /* Statut 'a_signer' sans scan déposé : grisé avec mention */
-                            <div className="flex flex-col items-end">
-                              <button
-                                type="button"
-                                disabled
-                                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed"
-                              >
-                                <Send size={14} />
-                                <span>{fr.commission.btnEnvoyerStructure}</span>
-                              </button>
-                              <span className="text-[10px] text-slate-500 font-medium mt-1">
-                                {fr.commission.deposeScanDabord}
-                              </span>
-                            </div>
-                          )}
-
-                          {/* Si le PV est rouvert : Bouton Régénérer */}
-                          {existingPV.rouvertLe ? (
-                            <button
-                              type="button"
-                              onClick={() => handleGeneratePV(date, creneauxDate)}
-                              className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl shadow-xs transition cursor-pointer"
-                            >
-                              <FileSignature size={14} />
-                              <span>{fr.commission.btnRegeneratePV}</span>
-                            </button>
-                          ) : (
-                            /* Si non rouvert : Bouton Rouvrir */
-                            <div className="flex flex-col items-end">
-                              {existingPV.publieLe ? (
-                                <>
-                                  <button
-                                    type="button"
-                                    disabled
-                                    className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed"
-                                  >
-                                    <RotateCcw size={13} />
-                                    <span>{fr.commission.btnReopenPV}</span>
-                                  </button>
-                                  <span className="text-[10px] text-rose-600 font-medium mt-1">
-                                    {fr.commission.reopenDisabledPublished}
-                                  </span>
-                                </>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setReopenModalDate(date);
-                                    setReopenMotif('');
-                                    setReopenError(null);
-                                  }}
-                                  className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 transition cursor-pointer"
-                                >
-                                  <RotateCcw size={13} />
-                                  <span>{fr.commission.btnReopenPV}</span>
-                                </button>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      </>
-                    ) : (
-                      <>
-                        <div className="text-xs text-slate-500">
-                          {!allEvaluated ? (
-                            <span className="text-amber-700 font-medium flex items-center gap-1.5">
-                              <AlertCircle size={14} />
-                              <span>
-                                {unassessedCount}{' '}
-                                {unassessedCount > 1
-                                  ? fr.commission.unassessedInterviewsPlural
-                                  : fr.commission.unassessedInterviews}
-                              </span>
-                            </span>
-                          ) : (
-                            <span className="text-emerald-700 font-medium flex items-center gap-1.5">
-                              <CheckCircle2 size={14} />
-                              <span>Tous les entretiens de cette séance sont évalués.</span>
-                            </span>
-                          )}
-                        </div>
-
-                        <button
-                          type="button"
-                          disabled={!allEvaluated}
-                          onClick={() => handleGeneratePV(date, creneauxDate)}
-                          className={`inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-xl shadow-xs transition cursor-pointer ${
-                            allEvaluated
-                              ? 'bg-emerald-700 hover:bg-emerald-800 text-white'
-                              : 'bg-slate-200 text-slate-400 cursor-not-allowed'
-                          }`}
-                        >
-                          <FileSignature size={14} />
-                          <span>{fr.commission.btnGeneratePV}</span>
-                        </button>
-                      </>
-                    )}
-                  </div>
-
-                  {/* Formulaire de saisie du motif de réouverture */}
-                  {reopenModalDate === date && (
-                    <div className="mt-3 p-4 bg-amber-50/70 border border-amber-300 rounded-2xl space-y-3">
-                      <div>
-                        <h5 className="text-xs font-bold text-amber-950 flex items-center gap-1.5">
-                          <RotateCcw size={14} className="text-amber-700" />
-                          <span>{fr.commission.reopenModalTitle}</span>
-                        </h5>
-                        <p className="text-[11px] text-amber-800 mt-0.5">
-                          {fr.commission.reopenModalSubtitle}
-                        </p>
-                      </div>
-
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                          {fr.commission.reopenMotifLabel} *
-                        </label>
-                        <input
-                          type="text"
-                          value={reopenMotif}
-                          onChange={(e) => {
-                            setReopenMotif(e.target.value);
-                            setReopenError(null);
-                          }}
-                          placeholder={fr.commission.reopenMotifPlaceholder}
-                          className="w-full text-xs p-2.5 rounded-xl border border-amber-300 bg-white focus:outline-none focus:ring-2 focus:ring-amber-500"
-                        />
-                      </div>
-
-                      {reopenError && (
-                        <div className="p-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold flex items-center gap-1.5">
-                          <AlertCircle size={14} className="shrink-0" />
-                          <span>{reopenError}</span>
-                        </div>
-                      )}
-
-                      <div className="flex items-center justify-end gap-2 pt-1">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setReopenModalDate(null);
-                            setReopenMotif('');
-                            setReopenError(null);
-                          }}
-                          className="px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-200 rounded-lg transition cursor-pointer"
-                        >
-                          Annuler
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleConfirmReopen(date)}
-                          className="px-4 py-1.5 text-xs font-semibold text-white bg-amber-700 hover:bg-amber-800 rounded-lg shadow-xs transition cursor-pointer"
-                        >
-                          {fr.commission.btnConfirmReopen}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Versions précédentes remplacées (lecture seule, sans aucune action) */}
-                  {getReplacedPVsForDate(date).length > 0 && (
-                    <div className="pt-3 border-t border-slate-100 space-y-2">
-                      <h5 className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
-                        <RotateCcw size={12} className="text-slate-400" />
-                        <span>{fr.commission.previousVersionsTitle}</span>
-                      </h5>
-                      <div className="space-y-1.5">
-                        {getReplacedPVsForDate(date).map((oldPv) => {
-                          const oldRef = `PV-${oldPv.date}-${(oldPv.code || '').slice(0, 4)}`;
-                          const oldVer = oldPv.version ?? 1;
-                          return (
-                            <div
-                              key={oldPv.id}
-                              className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
-                            >
-                              <div className="space-y-0.5">
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <span className="font-bold font-mono text-slate-800">{oldRef}</span>
-                                  <span className="text-slate-600 font-medium">Version {oldVer}</span>
-                                  {/* Badge Remplacée (texte + icône + couleur) */}
-                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-slate-200 text-slate-700 border border-slate-300">
-                                    <RotateCcw size={10} className="text-slate-500" />
-                                    <span>{fr.commission.replacedBadge}</span>
-                                  </span>
-                                </div>
-                                {oldPv.motifReouverture && (
-                                  <p className="text-[11px] text-slate-500 italic">
-                                    Motif : « {oldPv.motifReouverture} »
-                                  </p>
-                                )}
-                              </div>
-                              <span className="text-[11px] font-mono text-slate-400 self-start sm:self-auto">
-                                Code : {oldPv.code}
-                              </span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 };

@@ -128,7 +128,7 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
 
   // Modale "Demander de compléter"
   const [showDemandeModal, setShowDemandeModal] = useState<boolean>(false);
-  const [demandePiece, setDemandePiece] = useState<'CURSUS' | 'CIN' | 'CV'>('CIN');
+  const [demandePiece, setDemandePiece] = useState<'CIN' | 'DIPLOME' | 'RELEVES' | 'CV'>('CIN');
   const [demandeMotif, setDemandeMotif] = useState<string>('');
   const [demandeError, setDemandeError] = useState<string | null>(null);
 
@@ -212,15 +212,19 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
     return pieces.find((p) => p && p.type && p.type.toUpperCase() === 'RELEVES');
   }, [pieces]);
 
-  // Statuts des 3 lignes de contrôle
-  const cursusApogeeOk = Boolean(
-    candidat?.cursus ||
-    (diplomePiece && diplomePiece.source === 'apogee' && diplomePiece.statut === 'prouvee') ||
-    (candidat?.dossier?.casParticulier && Boolean(candidat.dossier?.motif))
+  // Statuts des 4 pièces de contrôle
+  const cinOk = Boolean(
+    cinPiece && cinPiece.statut === 'prouvee' && cinPiece.fichier && cinPiece.source !== 'apogee'
   );
-
-  const cinOk = Boolean(cinPiece && (cinPiece.statut === 'prouvee' || cinPiece.fichier));
-  const cvOk = Boolean(cvPiece && (cvPiece.statut === 'prouvee' || cvPiece.fichier));
+  const diplomeOk = Boolean(
+    diplomePiece && diplomePiece.statut === 'prouvee' && diplomePiece.fichier && diplomePiece.source !== 'apogee'
+  );
+  const relevesOk = Boolean(
+    relevesPiece && relevesPiece.statut === 'prouvee' && relevesPiece.fichier && relevesPiece.source !== 'apogee'
+  );
+  const cvOk = Boolean(
+    cvPiece && cvPiece.statut === 'prouvee' && cvPiece.fichier && cvPiece.source !== 'apogee'
+  );
 
   // 5 dernières actions du journal concernant ce candidat
   const historique = useMemo(() => {
@@ -282,12 +286,13 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
     e.preventDefault();
     if (!candidat) return;
 
-    if (demandeMotif.trim().length < 5) {
+    if (demandeMotif.trim().length < 2) {
       setDemandeError(fr.sujetsModule.modalAnomalieMotifError);
       return;
     }
 
     const nowIso = new Date().toISOString();
+    const texteManques = check.manques.length > 0 ? check.manques.join(', ') : 'CIN, Diplôme, Relevés, CV';
     const anomalieObj: AnomalieCandidature = {
       piece: demandePiece,
       nature: 'absente',
@@ -299,10 +304,13 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
       if (demandePiece === 'CIN' && p.type.toUpperCase() === 'CIN') {
         return { ...p, statut: 'absente' as const };
       }
-      if (demandePiece === 'CV' && p.type.toUpperCase() === 'CV') {
+      if (demandePiece === 'DIPLOME' && p.type.toUpperCase() === 'DIPLOME') {
         return { ...p, statut: 'absente' as const };
       }
-      if (demandePiece === 'CURSUS' && p.type.toUpperCase() === 'DIPLOME') {
+      if (demandePiece === 'RELEVES' && p.type.toUpperCase() === 'RELEVES') {
+        return { ...p, statut: 'absente' as const };
+      }
+      if (demandePiece === 'CV' && p.type.toUpperCase() === 'CV') {
         return { ...p, statut: 'absente' as const };
       }
       return p;
@@ -313,7 +321,6 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
     const updatedCand: Candidat = {
       ...candidat,
       pieces: updatedPieces,
-      ...(demandePiece === 'CURSUS' ? { cursus: undefined } : {}),
       candidaturesStatuts: {
         ...(candidat.candidaturesStatuts || {}),
         [targetSujetId]: 'a_corriger',
@@ -341,7 +348,7 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
       notifs.unshift({
         id: `notif-demande-${Date.now()}`,
         destinataireId: candidat.id,
-        texte: `Demande de complétion pour votre dossier (${demandePiece}) : ${demandeMotif.trim()}`,
+        texte: texteManques,
         date: nowIso,
         lue: false,
         type: 'action',
@@ -480,11 +487,12 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
                 type="button"
                 onClick={() => {
                   const firstManque = check.manques[0];
-                  if (firstManque === 'Cursus Apogée') setDemandePiece('CURSUS');
-                  else if (firstManque === 'CIN') setDemandePiece('CIN');
-                  else setDemandePiece('CV');
+                  if (firstManque === 'Diplôme') setDemandePiece('DIPLOME');
+                  else if (firstManque === 'Relevés') setDemandePiece('RELEVES');
+                  else if (firstManque === 'CV') setDemandePiece('CV');
+                  else setDemandePiece('CIN');
                   setShowDemandeModal(true);
-                  setDemandeMotif('');
+                  setDemandeMotif(check.manques.join(', '));
                   setDemandeError(null);
                 }}
                 className="px-3.5 py-2 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white transition cursor-pointer shadow-xs active:scale-98 flex items-center gap-1.5"
@@ -497,56 +505,14 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
         </div>
       </div>
 
-      {/* c) Contrôle : 3 lignes Cursus Apogée, CIN, CV */}
+      {/* c) Contrôle : 4 lignes CIN, Diplôme, Relevés, CV */}
       <div className="bg-white border border-slate-200/90 rounded-2xl p-4 sm:p-5 shadow-xs space-y-3">
         <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500">
           {fr.dossierDirecteur.controleTitre}
         </h2>
 
         <div className="divide-y divide-slate-100 border border-slate-200/70 rounded-xl overflow-hidden bg-slate-50/50">
-          {/* Ligne 1 : Cursus Apogée */}
-          <div className="p-3.5 flex items-center justify-between gap-3 bg-white">
-            <div className="flex items-center gap-3 min-w-0">
-              {cursusApogeeOk ? (
-                <CheckCircle2 size={18} className="text-emerald-600 shrink-0" />
-              ) : (
-                <XCircle size={18} className="text-rose-500 shrink-0" />
-              )}
-              <div className="min-w-0">
-                <span className="text-xs font-bold text-slate-900 block truncate">
-                  {fr.dossierDirecteur.cursusApogee}
-                </span>
-                <span
-                  className={`text-[11px] font-semibold ${
-                    cursusApogeeOk ? 'text-emerald-700' : 'text-rose-600'
-                  }`}
-                >
-                  {cursusApogeeOk
-                    ? fr.dossierDirecteur.statutVerifieeApogee
-                    : fr.dossierDirecteur.statutManquante}
-                </span>
-              </div>
-            </div>
-
-            {diplomePiece?.fichier ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setPieceIllisible(false);
-                  setViewingPiece({
-                    titre: fr.dossierDirecteur.cursusApogee,
-                    fichier: diplomePiece.fichier!,
-                  });
-                }}
-                className="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition cursor-pointer flex items-center gap-1 active:scale-98 shrink-0"
-              >
-                <Eye size={13} className="text-slate-500" />
-                <span>{fr.dossierDirecteur.btnVoir}</span>
-              </button>
-            ) : null}
-          </div>
-
-          {/* Ligne 2 : CIN */}
+          {/* Ligne 1 : CIN */}
           <div className="p-3.5 flex items-center justify-between gap-3 bg-white">
             <div className="flex items-center gap-3 min-w-0">
               {cinOk ? (
@@ -588,7 +554,91 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
             ) : null}
           </div>
 
-          {/* Ligne 3 : CV */}
+          {/* Ligne 2 : Diplôme */}
+          <div className="p-3.5 flex items-center justify-between gap-3 bg-white">
+            <div className="flex items-center gap-3 min-w-0">
+              {diplomeOk ? (
+                <CheckCircle2 size={18} className="text-emerald-600 shrink-0" />
+              ) : (
+                <XCircle size={18} className="text-rose-500 shrink-0" />
+              )}
+              <div className="min-w-0">
+                <span className="text-xs font-bold text-slate-900 block truncate">
+                  {fr.dossierDirecteur.diplome}
+                </span>
+                <span
+                  className={`text-[11px] font-semibold ${
+                    diplomeOk ? 'text-emerald-700' : 'text-rose-600'
+                  }`}
+                >
+                  {diplomeOk
+                    ? fr.dossierDirecteur.statutPreuveFournie
+                    : fr.dossierDirecteur.statutManquante}
+                </span>
+              </div>
+            </div>
+
+            {diplomePiece?.fichier ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setPieceIllisible(false);
+                  setViewingPiece({
+                    titre: fr.dossierDirecteur.diplome,
+                    fichier: diplomePiece.fichier!,
+                  });
+                }}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition cursor-pointer flex items-center gap-1 active:scale-98 shrink-0"
+              >
+                <Eye size={13} className="text-slate-500" />
+                <span>{fr.dossierDirecteur.btnVoir}</span>
+              </button>
+            ) : null}
+          </div>
+
+          {/* Ligne 3 : Relevés */}
+          <div className="p-3.5 flex items-center justify-between gap-3 bg-white">
+            <div className="flex items-center gap-3 min-w-0">
+              {relevesOk ? (
+                <CheckCircle2 size={18} className="text-emerald-600 shrink-0" />
+              ) : (
+                <XCircle size={18} className="text-rose-500 shrink-0" />
+              )}
+              <div className="min-w-0">
+                <span className="text-xs font-bold text-slate-900 block truncate">
+                  {fr.dossierDirecteur.releves}
+                </span>
+                <span
+                  className={`text-[11px] font-semibold ${
+                    relevesOk ? 'text-emerald-700' : 'text-rose-600'
+                  }`}
+                >
+                  {relevesOk
+                    ? fr.dossierDirecteur.statutPreuveFournie
+                    : fr.dossierDirecteur.statutManquante}
+                </span>
+              </div>
+            </div>
+
+            {relevesPiece?.fichier ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setPieceIllisible(false);
+                  setViewingPiece({
+                    titre: fr.dossierDirecteur.releves,
+                    fichier: relevesPiece.fichier!,
+                  });
+                }}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition cursor-pointer flex items-center gap-1 active:scale-98 shrink-0"
+              >
+                <Eye size={13} className="text-slate-500" />
+                <span>{fr.dossierDirecteur.btnVoir}</span>
+              </button>
+            ) : null}
+          </div>
+
+          {/* Ligne 4 : CV */}
           <div className="p-3.5 flex items-center justify-between gap-3 bg-white">
             <div className="flex items-center gap-3 min-w-0">
               {cvOk ? (
@@ -910,9 +960,10 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
                   onChange={(e) => setDemandePiece(e.target.value as any)}
                   className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-600"
                 >
-                  <option value="CURSUS">Cursus Apogée (Diplôme)</option>
-                  <option value="CIN">Carte d'Identité Nationale (CIN)</option>
-                  <option value="CV">Curriculum Vitae (CV)</option>
+                  <option value="CIN">{fr.dossierDirecteur.cin}</option>
+                  <option value="DIPLOME">{fr.dossierDirecteur.diplome}</option>
+                  <option value="RELEVES">{fr.dossierDirecteur.releves}</option>
+                  <option value="CV">{fr.dossierDirecteur.cv}</option>
                 </select>
               </div>
 

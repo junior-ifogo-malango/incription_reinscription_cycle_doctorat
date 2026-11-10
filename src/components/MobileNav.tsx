@@ -185,10 +185,10 @@ export const MobileNav: React.FC<MobileNavProps> = ({
       addTab('entretiens');
     }
     if (normalizedRoles.includes('enseignant')) {
-      addTab('sujets');
       addTab('candidatures_recues');
       addTab('entretiens');
       addTab('commission');
+      addTab('sujets');
     }
     if (normalizedRoles.includes('directeur_ced')) {
       addTab('seances');

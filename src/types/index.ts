@@ -121,7 +121,7 @@ export type MotifCasParticulier = 'ATTESTATION_SANS_DIPLOME' | 'DIPLOME_ETRANGER
 export type CandidatureStatut = 'brouillon' | 'deposee' | 'retenue' | 'a_corriger';
 
 export interface AnomalieCandidature {
-  piece: 'CURSUS' | 'CIN' | 'CV';
+  piece: 'CIN' | 'DIPLOME' | 'RELEVES' | 'CV' | 'CURSUS';
   nature: 'illisible' | 'absente' | 'incoherente';
   motif: string;
   le: string;
@@ -209,46 +209,44 @@ export interface DossierCompletResult {
 
 /**
  * Règle d'exhaustivité du dossier candidat :
- * complet si (cursus présent OU casParticulier avec motif) ET CIN et CV au statut 'prouvee'.
- * manques = liste lisible ("Cursus Apogée", "CIN", "CV").
- * Ne plante jamais si candidat, pieces ou cursus undefined.
+ * complet si CIN, DIPLOME, RELEVES et CV ont un fichier au statut 'prouvee' (caméra ou téléversement).
+ * Cas particulier avec motif : la pièce DIPLOME peut être une attestation, mais reste à téléverser.
+ * manques = noms lisibles ("CIN", "Diplôme", "Relevés", "CV").
+ * Ne plante jamais si candidat ou pieces undefined (renvoie 4 manques).
  */
 export function dossierComplet(candidat?: Candidat | null): DossierCompletResult {
+  const piecesRequises: { type: PieceType; label: string }[] = [
+    { type: 'CIN', label: 'CIN' },
+    { type: 'DIPLOME', label: 'Diplôme' },
+    { type: 'RELEVES', label: 'Relevés' },
+    { type: 'CV', label: 'CV' },
+  ];
+
+  if (!candidat || !Array.isArray(candidat.pieces)) {
+    return {
+      complet: false,
+      manques: ['CIN', 'Diplôme', 'Relevés', 'CV'],
+    };
+  }
+
+  const pieces = candidat.pieces;
   const manques: string[] = [];
 
-  if (!candidat) {
-    return { complet: false, manques: ['Cursus Apogée', 'CIN', 'CV'] };
-  }
-
-  // 1. Cursus : présent (candidat.cursus ou diplôme vérifié Apogée) OU casParticulier avec motif
-  const hasCasParticulier = Boolean(
-    candidat.dossier?.casParticulier &&
-    Boolean(candidat.dossier?.motif || candidat.dossier?.motifAutre)
-  );
-
-  const hasCursus = Boolean(
-    candidat.cursus ||
-    (Array.isArray(candidat.pieces) &&
-      candidat.pieces.some(
-        (p) => p && p.type && p.type.toUpperCase() === 'DIPLOME' && p.source === 'apogee' && p.statut === 'prouvee'
-      ))
-  );
-
-  if (!hasCursus && !hasCasParticulier) {
-    manques.push('Cursus Apogée');
-  }
-
-  // 2. CIN : statut 'prouvee'
-  const pieces = Array.isArray(candidat.pieces) ? candidat.pieces : [];
-  const cinPiece = pieces.find((p) => p && p.type && p.type.toUpperCase() === 'CIN');
-  if (!cinPiece || cinPiece.statut !== 'prouvee') {
-    manques.push('CIN');
-  }
-
-  // 3. CV : statut 'prouvee'
-  const cvPiece = pieces.find((p) => p && p.type && p.type.toUpperCase() === 'CV');
-  if (!cvPiece || cvPiece.statut !== 'prouvee') {
-    manques.push('CV');
+  for (const req of piecesRequises) {
+    const piece = pieces.find(
+      (p) => p && p.type && p.type.toUpperCase() === req.type.toUpperCase()
+    );
+    const aFichierProuve = Boolean(
+      piece &&
+      piece.statut === 'prouvee' &&
+      piece.fichier &&
+      typeof piece.fichier === 'string' &&
+      piece.fichier.trim() !== '' &&
+      piece.source !== 'apogee'
+    );
+    if (!aFichierProuve) {
+      manques.push(req.label);
+    }
   }
 
   return {

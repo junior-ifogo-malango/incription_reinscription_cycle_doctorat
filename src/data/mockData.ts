@@ -203,9 +203,7 @@ export const INITIAL_PIECES_YASSINE: Piece[] = [
   },
   {
     type: 'DIPLOME',
-    statut: 'prouvee',
-    source: 'apogee',
-    fichier: 'master_sciences_techniques_usmba.pdf',
+    statut: 'declaree',
   },
   {
     type: 'RELEVES',

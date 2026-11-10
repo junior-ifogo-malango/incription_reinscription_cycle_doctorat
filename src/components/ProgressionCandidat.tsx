@@ -140,16 +140,16 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
   // --- CALCUL DYNAMIQUE DES 6 ÉTAPES (aucun nouveau stockage) ---
   const candidaturesStatuts = candidat?.candidaturesStatuts || {};
 
-  // Étape 1 : Dossier complet (fait si dossierComplet)
-  const step1Done = dossierComplet(candidat).complet;
-
-  // Étape 2 : Envoyée (fait si statut ≠ 'brouillon')
-  const step2Done =
+  // Étape 1 : Candidature (fait si candidat a déposé au moins une candidature ≠ 'brouillon')
+  const step1Done =
     candidatures.length > 0 &&
     candidatures.some((id) => {
       const st = candidaturesStatuts[id];
       return Boolean(st && st !== 'brouillon');
     });
+
+  // Étape 2 : Dossier complet (fait si dossierComplet(candidat).complet)
+  const step2Done = dossierComplet(candidat).complet;
 
   // Étape 3 : Validée (≥1 candidature retenue)
   const step3Done = Object.values(candidaturesStatuts).some((st) => st === 'retenue');
@@ -181,19 +181,19 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
   const etapes: ProgressionEtapeInfo[] = [
     {
       numero: 1,
-      cle: 'dossier',
-      nom: fr.progression.steps.dossier.nom,
-      statut: 'future',
-      infobulle: fr.progression.steps.dossier.future,
-      actionTexte: fr.progression.steps.dossier.action,
-    },
-    {
-      numero: 2,
       cle: 'candidature',
       nom: fr.progression.steps.candidature.nom,
       statut: 'future',
       infobulle: fr.progression.steps.candidature.future,
       actionTexte: fr.progression.steps.candidature.action,
+    },
+    {
+      numero: 2,
+      cle: 'dossier',
+      nom: fr.progression.steps.dossier.nom,
+      statut: 'future',
+      infobulle: fr.progression.steps.dossier.future,
+      actionTexte: fr.progression.steps.dossier.action,
     },
     {
       numero: 3,
@@ -277,29 +277,7 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
   // Gestion des actions associées
   const handleAction = (stepIndex: number) => {
     switch (stepIndex) {
-      case 0: // Étape 1 : Dossier complet (cle: 'dossier')
-        {
-          const check = dossierComplet(candidat);
-          let targetId = '';
-          if (check.manques.includes('Cursus Apogée')) {
-            targetId = 'carte-piece-diplome';
-          } else if (check.manques.includes('CIN')) {
-            targetId = 'carte-piece-cin';
-          } else if (check.manques.includes('CV')) {
-            targetId = 'carte-piece-cv';
-          }
-          const el = targetId
-            ? (document.getElementById(targetId) ||
-               (targetId === 'carte-piece-diplome' ? document.getElementById('carte-piece-cursus') : null))
-            : null;
-          if (el) {
-            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          } else {
-            onNavigate?.('dossier');
-          }
-        }
-        break;
-      case 1: // Étape 2 : Envoyée (cle: 'candidature')
+      case 0: // Étape 1 : Candidature (cle: 'candidature')
         {
           const el =
             document.getElementById('action-envoyer-candidature') ||
@@ -308,6 +286,27 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
             el.scrollIntoView({ behavior: 'smooth', block: 'center' });
           } else {
             onNavigate?.('sujets');
+          }
+        }
+        break;
+      case 1: // Étape 2 : Dossier complet (cle: 'dossier')
+        {
+          const check = dossierComplet(candidat);
+          let targetId = '';
+          if (check.manques.includes('CIN')) {
+            targetId = 'carte-piece-cin';
+          } else if (check.manques.includes('Diplôme')) {
+            targetId = 'carte-piece-diplome';
+          } else if (check.manques.includes('Relevés')) {
+            targetId = 'carte-piece-releves';
+          } else if (check.manques.includes('CV')) {
+            targetId = 'carte-piece-cv';
+          }
+          const el = targetId ? document.getElementById(targetId) : null;
+          if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          } else {
+            onNavigate?.('dossier');
           }
         }
         break;

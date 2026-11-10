@@ -123,9 +123,7 @@ const YASSINE_INITIAL_PIECES: Piece[] = [
   },
   {
     type: 'DIPLOME',
-    statut: 'prouvee',
-    source: 'apogee',
-    fichier: 'master_sciences_techniques_usmba.pdf',
+    statut: 'declaree',
   },
   {
     type: 'RELEVES',
@@ -620,16 +618,9 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
 
     const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
 
-    // PDF conservé tel quel, refusé au-delà de 1,5 Mo
-    if (isPdf && file.size > 1.5 * 1024 * 1024) {
+    // Fichier refusé au-delà de 1,5 Mo (image ou PDF)
+    if (file.size > 1.5 * 1024 * 1024) {
       setFeedbackMessage({ type: 'error', text: fr.dossier.fileTooHeavyPdf });
-      e.target.value = '';
-      return;
-    }
-
-    // Image : refusée au-delà de 2 Mo avant compression
-    if (!isPdf && file.size > 2 * 1024 * 1024) {
-      setFeedbackMessage({ type: 'error', text: fr.dossier.fileTooHeavy });
       e.target.value = '';
       return;
     }
@@ -728,7 +719,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
     if (intitule) {
       setApogeeMessage({
         type: 'success',
-        text: `${fr.dossier.diplomeFound} ${intitule}`,
+        text: `${fr.dossier.concordanceApogee} : ${intitule}`,
       });
       try {
         const curCandidat = resolveCandidate(candidatId, candidat);
@@ -740,11 +731,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
         persistCandidate(curCandidat);
         setCandidat(curCandidat);
       } catch {}
-      handleUpdatePiece('DIPLOME', {
-        statut: 'prouvee',
-        source: 'apogee',
-        fichier: intitule,
-      });
+      // Règle stricte : la vérification Apogée (simulation) ne remplace JAMAIS un fichier
     } else {
       setApogeeMessage({
         type: 'error',
@@ -864,24 +851,18 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
 
   // Compteurs : 1) Pièces déclarées ('declaree' ou 'prouvee') ; 2) Pièces prouvées ('prouvee')
   const safePieces = Array.isArray(pieces) ? pieces : [];
-  const piecesDeclarees = safePieces.filter(
-    (p) => p && (p.statut === 'declaree' || p.statut === 'prouvee')
-  ).length;
-  const piecesProuvees = safePieces.filter((p) => p && p.statut === 'prouvee').length;
-
-  const percentDeclarees = Math.round((piecesDeclarees / 4) * 100);
-  const percentProuvees = Math.round((piecesProuvees / 4) * 100);
 
   const checkDossier = useMemo(() => {
     const cur = resolveCandidate(candidatId, candidat);
     return dossierComplet({
       ...cur,
-      cursus: cur?.cursus,
-      pieces: Array.isArray(pieces) ? pieces : (cur?.pieces || []),
+      pieces: safePieces.length > 0 ? safePieces : (cur?.pieces || []),
     });
-  }, [candidatId, candidat, pieces]);
+  }, [candidatId, candidat, safePieces]);
 
-  const elementsFournisCount = Math.max(0, 3 - checkDossier.manques.length);
+  // Compteur unique "N/4 pièces fournies"
+  const piecesFourniesCount = Math.max(0, 4 - checkDossier.manques.length);
+  const percentFournies = Math.round((piecesFourniesCount / 4) * 100);
 
   const getPieceName = (type: PieceType): string => {
     const key = type.toUpperCase() as keyof typeof fr.dossier.pieces;
@@ -899,7 +880,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
 
   return (
     <div className="space-y-4 max-w-2xl mx-auto">
-      {/* 0. Progression du candidat en haut de Mon dossier, au-dessus du bandeau "N/3 éléments fournis" */}
+      {/* Progression du candidat en haut de Mon dossier */}
       {!isDirecteur && (
         <ProgressionCandidat
           candidatId={candidat?.id || candidatId}
@@ -921,7 +902,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
       )}
 
       {/* 1. Ligne en haut si peutProuver : bandeau dynamique */}
-      {peutProuver && piecesProuvees < 4 && (
+      {peutProuver && piecesFourniesCount < 4 && (
         <div className="bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-2xl px-4 py-3 text-xs font-semibold flex items-center gap-2 shadow-xs">
           <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
           <span>
@@ -932,57 +913,6 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
         </div>
       )}
 
-      {/* En haut : deux compteurs « N/4 pièces déclarées » et « N/4 pièces prouvées » avec barres de progression */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3.5">
-        {/* Ligne 1 : Pièces déclarées */}
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between text-xs">
-            <div className="flex items-center gap-1.5 font-bold text-slate-900">
-              <span className="text-sm text-emerald-700 font-extrabold">
-                {piecesDeclarees}/4
-              </span>
-              <span>{fr.dossier.piecesDeclarees}</span>
-            </div>
-            {piecesDeclarees === 4 && (
-              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                <CheckCircle2 size={12} />
-                <span>Complètes</span>
-              </span>
-            )}
-          </div>
-          <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
-            <div
-              className="bg-emerald-500 h-2 rounded-full transition-all duration-300"
-              style={{ width: `${percentDeclarees}%` }}
-            />
-          </div>
-        </div>
-
-        {/* Ligne 2 : Pièces prouvées */}
-        <div className="space-y-1.5 pt-2 border-t border-slate-100">
-          <div className="flex items-center justify-between text-xs">
-            <div className="flex items-center gap-1.5 font-bold text-slate-900">
-              <span className="text-sm text-emerald-700 font-extrabold">
-                {piecesProuvees}/4
-              </span>
-              <span>{fr.dossier.piecesProuvees}</span>
-            </div>
-            {piecesProuvees === 4 && (
-              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                <CheckCircle2 size={12} />
-                <span>{fr.dossierModule.allReadyBadge}</span>
-              </span>
-            )}
-          </div>
-          <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
-            <div
-              className="bg-emerald-700 h-2 rounded-full transition-all duration-300"
-              style={{ width: `${percentProuvees}%` }}
-            />
-          </div>
-        </div>
-      </div>
-
       {/* Message de succès transmission */}
       {transmissionSuccess && (
         <div className="bg-emerald-50 border border-emerald-300 text-emerald-900 rounded-2xl p-3.5 text-xs font-semibold flex items-center gap-2 shadow-xs">
@@ -991,7 +921,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
         </div>
       )}
 
-      {/* 5. Candidat à corriger : bandeau "À corriger : [élément], [motif]" */}
+      {/* Candidat à corriger : bandeau "À corriger : [élément], [motif]" */}
       {!isDirecteur && hasACorriger && activeAnomalie && (
         <div className="bg-rose-50 border border-rose-300 text-rose-950 rounded-2xl p-4 text-xs space-y-1.5 shadow-xs">
           <div className="flex items-center gap-2 font-bold text-rose-900 text-sm">
@@ -1004,32 +934,33 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
         </div>
       )}
 
-      {/* 3. Bandeau "Dossier : N/3 éléments fournis" + manquants en texte */}
-      <div id="bandeau-elements-fournis" className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3">
+      {/* Compteur unique : N/4 pièces fournies */}
+      <div id="compteur-pieces-fournies" className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3">
         <div className="flex items-center justify-between text-xs flex-wrap gap-2">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-extrabold text-slate-900">
-              Dossier : {elementsFournisCount}/3 éléments fournis
+              {piecesFourniesCount}/4 pièces fournies
             </span>
-            {elementsFournisCount === 3 ? (
-              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
-                <CheckCircle2 size={13} className="text-emerald-600" />
-                <span>Complet</span>
+            {checkDossier.complet ? (
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />
+                <span>{fr.dossierModule.allReadyBadge}</span>
               </span>
             ) : (
-              <span className="text-[11px] font-semibold text-rose-700">
-                Manquants : {checkDossier.manques.join(', ')}
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-rose-700 bg-rose-50 px-2 py-0.5 rounded-full border border-rose-200">
+                <AlertCircle size={13} className="text-rose-600 shrink-0" />
+                <span>Manquants : {checkDossier.manques.join(', ')}</span>
               </span>
             )}
           </div>
           <span className="text-[11px] text-slate-400 font-mono">
-            {Math.round((elementsFournisCount / 3) * 100)}%
+            {percentFournies}%
           </span>
         </div>
         <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
           <div
             className="bg-emerald-600 h-2 rounded-full transition-all duration-300"
-            style={{ width: `${Math.round((elementsFournisCount / 3) * 100)}%` }}
+            style={{ width: `${percentFournies}%` }}
           />
         </div>
 
@@ -1150,14 +1081,18 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
           const isDiplome = type === 'DIPLOME' || type === 'diplome';
           const isCin = type === 'CIN' || type === 'cin';
           const isCv = type === 'CV' || type === 'cv';
-          const isProven = piece.statut === 'prouvee';
-          // Règle 3 : Les boutons de preuve (CIN, CV) s'affichent dès qu'une candidature est en 'brouillon'
-          const canProuveThisPiece = !isDirecteur && ((isCin || isCv) ? (hasCandidatureActive || peutProuver) : peutProuver);
+          const isProven = Boolean(
+            piece &&
+            piece.statut === 'prouvee' &&
+            piece.fichier &&
+            piece.source !== 'apogee'
+          );
 
           const pieceMatchesAnomalie = Boolean(
             (activeAnomalie && (
               (activeAnomalie.piece === 'CIN' && isCin) ||
               (activeAnomalie.piece === 'CV' && isCv) ||
+              (activeAnomalie.piece === 'DIPLOME' && isDiplome) ||
               (activeAnomalie.piece === 'CURSUS' && isDiplome)
             )) || piece.statut === 'illisible'
           );
@@ -1174,114 +1109,39 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
             <React.Fragment key={type}>
               <div
                 id={cardId}
-                data-carte={isDiplome ? 'cursus' : undefined}
                 className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3"
               >
-              {/* Ligne 1 : Nom de la pièce + Badge unique */}
+              {/* Ligne 1 : Nom de la pièce + Badge */}
               <div className="flex items-start justify-between gap-3">
                 <div className="space-y-0.5">
                   <h3 className="text-xs font-bold text-slate-900 leading-snug">
                     {getPieceName(type)}
                   </h3>
-                  {piece.source && (
+                  {piece.source && isProven && (
                     <p className="text-[10px] text-slate-400">
                       {fr.dossier.sources[piece.source] || piece.source}
                     </p>
                   )}
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap justify-end">
-                  {/* Un seul badge par carte avec ordre strict de priorité */}
-                  {isProven && piece.source === 'apogee' ? (
-                    // 1. Vérifiée (Apogée)
+                  {isProven ? (
                     <span className="inline-flex items-center gap-1.5 font-medium rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs px-2.5 py-0.5">
                       <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />
-                      <span>{fr.dossier.verifieeApogee}</span>
-                    </span>
-                  ) : isProven && isCin && (piece.ocrResultat as any)?.statutValidite === 'valide' ? (
-                    // 1b. Vérifiée (contrôle simulé) - après confirmation avec verifierCIN 'valide'
-                    <span className="inline-flex items-center gap-1.5 font-medium rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs px-2.5 py-0.5">
-                      <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />
-                      <span>{fr.dossier.verifieeControleSimule}</span>
-                    </span>
-                  ) : isProven ? (
-                    // 2. Preuve fournie - non contrôlée (si le contrôle n'a pas été fait ou indisponible)
-                    <span className="inline-flex items-center gap-1.5 font-medium rounded-full bg-blue-50 text-blue-800 border border-blue-200 text-xs px-2.5 py-0.5">
-                      <CheckCircle2 size={13} className="text-blue-600 shrink-0" />
-                      <span>{fr.dossier.preuveFournieNonControlee}</span>
+                      <span>{fr.dossier.preuveFournie}</span>
                     </span>
                   ) : (pieceMatchesAnomalie || (isCin && (piece.statut === 'illisible' || (piece.ocrResultat as any)?.statutValidite === 'illisible' || (piece.ocrResultat as any)?.statutValidite === 'expiree'))) ? (
-                    // 3. À corriger (si anomalie ou 'illisible'/'expiree')
                     <span className="inline-flex items-center gap-1.5 font-bold rounded-full bg-rose-50 text-rose-800 border border-rose-300 text-xs px-2.5 py-0.5">
                       <AlertTriangle size={13} className="text-rose-600 shrink-0" />
                       <span>{fr.dossier.aCorriger}</span>
                     </span>
-                  ) : canProuveThisPiece && (piece.statut === 'declaree' || piece.statut === 'absente') ? (
-                    // 4. Preuve à fournir
-                    <span className="inline-flex items-center gap-1.5 font-bold rounded-full bg-amber-50 text-amber-800 border border-amber-300 text-xs px-2.5 py-0.5">
-                      <AlertCircle size={13} className="text-amber-600 shrink-0" />
-                      <span>{fr.dossier.preuveAFournir}</span>
-                    </span>
-                  ) : piece.statut === 'declaree' ? (
-                    // Déclarée (seulement si preuve non requise, jamais simultanément avec preuve à fournir)
-                    <span className="inline-flex items-center gap-1.5 font-medium rounded-full bg-slate-100 text-slate-700 border border-slate-200 text-xs px-2.5 py-0.5">
-                      <FileText size={13} className="text-slate-500 shrink-0" />
-                      <span>{fr.statutsPiece.declaree.label}</span>
-                    </span>
                   ) : (
-                    // Absente
-                    <span className="inline-flex items-center gap-1.5 font-medium rounded-full bg-slate-100 text-slate-500 border border-slate-200 text-xs px-2.5 py-0.5">
+                    <span className="inline-flex items-center gap-1.5 font-medium rounded-full bg-slate-100 text-slate-600 border border-slate-200 text-xs px-2.5 py-0.5">
                       <X size={13} className="text-slate-400 shrink-0" />
                       <span>{fr.statutsPiece.absente.label}</span>
                     </span>
                   )}
                 </div>
               </div>
-
-              {/* RÈGLE NON PEUT PROUVER : case à cocher « Je déclare avoir cette pièce » + phrase explicative */}
-              {!canProuveThisPiece && !isProven && (
-                <div className="pt-2 border-t border-slate-100 space-y-1.5">
-                  {!isDirecteur && (
-                    <label className="flex items-center gap-2.5 text-xs text-slate-700 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={piece.statut === 'declaree'}
-                        onChange={(e) => {
-                          const newStatut = e.target.checked ? 'declaree' : 'absente';
-                          handleUpdatePiece(type, { statut: newStatut });
-                        }}
-                        className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 cursor-pointer"
-                      />
-                      <span className="font-medium">{fr.dossier.declarePiece}</span>
-                    </label>
-                  )}
-                  <p className="text-xs text-slate-500 pl-1">
-                    {candidatResultat?.resultat === 'LISTE_COMPLEMENTAIRE'
-                      ? fr.dossier.explicationListeAttente
-                      : candidatResultat?.resultat === 'REFUSE'
-                      ? fr.dossier.explicationRefuse
-                      : fr.dossier.explicationNonValide}
-                  </p>
-                </div>
-              )}
-
-              {/* RÈGLE PEUT PROUVER ET PIÈCE ABSENTE : case à cocher pour déclarer */}
-              {!isDirecteur && canProuveThisPiece && piece.statut === 'absente' && (
-                <div className="pt-2 border-t border-slate-100">
-                  <label className="flex items-center gap-2.5 text-xs text-slate-700 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={false}
-                      onChange={(e) => {
-                        if (e.target.checked) {
-                          handleUpdatePiece(type, { statut: 'declaree' });
-                        }
-                      }}
-                      className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 cursor-pointer"
-                    />
-                    <span className="font-medium">{fr.dossier.declarePiece}</span>
-                  </label>
-                </div>
-              )}
 
               {/* Saisie CIN sur la carte CIN */}
               {isCin && (
@@ -1522,83 +1382,18 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                 );
               })()}
 
-              {/* Champ CNE existant (avec consentement) sur la carte DIPLOME */}
-              {isDiplome && (
-                isDirecteur ? (
-                  <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3 space-y-1">
-                    <span className="font-bold text-slate-800 block text-[11px] uppercase tracking-wide">
-                      Cursus Apogée (Lecture seule)
-                    </span>
-                    <p className="text-slate-600 text-xs">
-                      {candidat?.cne ? `CNE : ${candidat.cne}` : 'CNE non renseigné'}
-                      {candidat?.cursus?.diplome ? ` — ${candidat.cursus.diplome}` : piece.fichier ? ` — ${piece.fichier}` : ''}
-                    </p>
-                    <p className="text-[11px] text-slate-500 italic">
-                      Consultation par le directeur de thèse en lecture seule.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3 space-y-2.5">
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        value={apogeeCne}
-                        onChange={(e) => {
-                          setApogeeCne(e.target.value);
-                          setApogeeMessage(null);
-                        }}
-                        placeholder={fr.dossier.cnePlaceholder}
-                        className="flex-1 min-h-[36px] px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-600 font-mono uppercase"
-                      />
-                      <button
-                        type="button"
-                        onClick={handleVerifyApogee}
-                        disabled={!apogeeCne.trim() || !apogeeConsent}
-                        className={`min-h-[36px] px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
-                          apogeeCne.trim() && apogeeConsent
-                            ? 'bg-emerald-700 hover:bg-emerald-800 text-white'
-                            : 'bg-slate-200 text-slate-400 cursor-not-allowed'
-                        }`}
-                      >
-                        {fr.dossier.verify}
-                      </button>
-                    </div>
 
-                    <label className="flex items-center gap-2 text-[11px] text-slate-700 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={apogeeConsent}
-                        onChange={(e) => {
-                          setApogeeConsent(e.target.checked);
-                          setApogeeMessage(null);
-                        }}
-                        className="w-3.5 h-3.5 rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
-                      />
-                      <span>{fr.dossier.apogeeConsent}</span>
-                    </label>
-
-                    {(!apogeeConsent || !apogeeCne.trim()) && (
-                      <p className="text-sm text-slate-500">
-                        {!apogeeConsent
-                          ? fr.dossier.consentRequiredReason
-                          : fr.dossier.cneRequiredReason}
-                      </p>
-                    )}
-
-                    {apogeeMessage && (
-                      <p
-                        className={`text-[11px] font-medium ${
-                          apogeeMessage.type === 'success' ? 'text-emerald-700' : 'text-rose-600'
-                        }`}
-                      >
-                        {apogeeMessage.text}
-                      </p>
-                    )}
-                  </div>
-                )
+              {/* Cas particulier attestation sur la carte Diplôme */}
+              {isDiplome && casParticulier && (
+                <div className="bg-purple-50 border border-purple-200 text-purple-900 rounded-xl p-2.5 text-xs flex items-center gap-2">
+                  <Info size={14} className="text-purple-600 shrink-0" />
+                  <span>
+                    Cas particulier ({motif === 'ATTESTATION_SANS_DIPLOME' ? 'Attestation sans diplôme' : (motifAutre || motif || 'Dérogatoire')}) : la pièce Diplôme peut être une attestation, mais reste à téléverser.
+                  </span>
+                </div>
               )}
 
-              {/* Pièce 'prouvee' (CIN, diplôme Apogée, etc.) : aperçu + boutons Voir et Remplacer */}
+              {/* Pièce 'prouvee' : aperçu + boutons Voir et Remplacer */}
               {isProven && !showOcrPanel && (
                 <div className="pt-2 border-t border-slate-100 space-y-2">
                   <div className="flex items-center gap-2 flex-wrap justify-between">
@@ -1627,11 +1422,6 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                           {piece.source === 'camera' ? 'Photo prise' : 'Fichier image'}
                         </span>
                       </div>
-                    ) : isDiplome && piece.source === 'apogee' ? (
-                      <div className="flex items-center gap-1.5 text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1.5 flex-1 min-w-0">
-                        <Award size={14} className="text-emerald-700 shrink-0" />
-                        <span className="truncate font-semibold">{piece.fichier || fr.dossier.apogeeDiplomeTitle}</span>
-                      </div>
                     ) : isPdf ? (
                       <div className="flex items-center gap-1.5 text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 flex-1 min-w-0">
                         <FileText size={14} className="text-slate-400 shrink-0" />
@@ -1659,7 +1449,12 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                         <button
                           type="button"
                           onClick={() => {
-                            handleUpdatePiece(type, { statut: 'declaree' });
+                            handleUpdatePiece(type, {
+                              statut: 'absente',
+                              fichier: undefined,
+                              source: undefined,
+                              ocrResultat: undefined,
+                            });
                             if (isCin) {
                               setShowOcrPanel(false);
                               setOcrResult(null);
@@ -1677,8 +1472,8 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                 </div>
               )}
 
-              {/* RÈGLE PEUT PROUVER : boutons visibles pour chaque pièce non prouvée */}
-              {!isDirecteur && canProuveThisPiece && !isProven && (!isCin || (!showOcrPanel && !ocrLoading)) && (
+              {/* Boutons Prendre en photo et Téléverser visibles pour chaque pièce non prouvée */}
+              {!isDirecteur && !isProven && (!isCin || (!showOcrPanel && !ocrLoading)) && (
                 <div className="space-y-1.5 pt-2 border-t border-slate-100">
                   <div className="flex items-center gap-2">
                     <button
@@ -1699,7 +1494,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                       <span>{fr.dossier.upload}</span>
                     </button>
 
-                    {/* Input fichier caché */}
+                    {/* Input fichier caché (1,5 Mo max) */}
                     <input
                       type="file"
                       accept="image/*,application/pdf"
