@@ -338,6 +338,24 @@ export function calculerNoteResultat(res?: { note?: number; criteres?: CriteresE
   return res.note !== undefined ? res.note : 0;
 }
 
+export type StatutSeance =
+  | 'a_venir'
+  | 'pv_attendu'
+  | 'pv_en_retard'
+  | 'pv_recu'
+  | 'reportee'
+  | 'non_tenue';
+
+export const DELAI_PV_JOURS = 4;
+
+export interface SeanceStatutRecord {
+  statutManuel?: 'reportee' | 'non_tenue';
+  motif?: string;
+  declarePar?: string;
+  declareLe?: string;
+  relanceLe?: string;
+}
+
 export type PVStatut = 'a_signer' | 'signe' | 'envoye' | 'publie' | 'original_recu' | 'approuve';
 
 export interface PV {

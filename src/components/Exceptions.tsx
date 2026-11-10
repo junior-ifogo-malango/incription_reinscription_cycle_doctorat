@@ -2,17 +2,25 @@ import React, { useState, useEffect } from 'react';
 import {
   Clock,
   CheckCircle2,
+  AlertCircle,
   AlertTriangle,
-  FileText,
-  UserCheck,
   Send,
   Calendar,
-  ShieldAlert,
+  X,
 } from 'lucide-react';
-import { Creneau, Enseignant, Candidat, Rapport, PV } from '../types';
+import { Creneau, Enseignant, Candidat, PV, SeanceStatutRecord } from '../types';
 import { storageService } from '../services/storage';
-import { INITIAL_RAPPORTS, MOCK_CANDIDATS, getConnectedDirecteurId } from '../data/mockData';
+import {
+  MOCK_CANDIDATS,
+  getConnectedDirecteurId,
+  calculerStatutSeance,
+  getSeancesStatutsMap,
+  saveSeanceStatut,
+  formatDateJJMM,
+} from '../data/mockData';
 import { fr } from '../i18n/fr';
+import { logEvent } from '../utils/journal';
+import { ajouterNotification } from '../utils/messages';
 
 // Constante unique du seuil d'inactivité (48 heures)
 export const SEUIL_HEURES = 48;
@@ -21,8 +29,20 @@ export const Exceptions: React.FC = () => {
   const [creneaux, setCreneaux] = useState<Creneau[]>([]);
   const [enseignants, setEnseignants] = useState<Enseignant[]>([]);
   const [candidat, setCandidat] = useState<Candidat | null>(null);
-  const [rapports, setRapports] = useState<Rapport[]>([]);
+  const [pvs, setPvs] = useState<PV[]>([]);
+  const [seancesStatuts, setSeancesStatuts] = useState<Record<string, SeanceStatutRecord>>({});
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Modal Constater que la séance n'a pas eu lieu
+  const [constaterModal, setConstaterModal] = useState<{
+    key: string;
+    date: string;
+    lieu: string;
+    enseignantId: string;
+    enseignantNom: string;
+  } | null>(null);
+  const [constaterMotif, setConstaterMotif] = useState('');
+  const [constaterError, setConstaterError] = useState<string | null>(null);
 
   const connectedDirecteurId = getConnectedDirecteurId();
 
@@ -31,14 +51,11 @@ export const Exceptions: React.FC = () => {
       setCreneaux(storageService.getCreneaux());
       setEnseignants(storageService.getEnseignants());
       setCandidat(storageService.getCandidat());
-
-      const rawRapports = localStorage.getItem('usmba_doctorat_rapports');
-      if (rawRapports) {
-        setRapports(JSON.parse(rawRapports));
-      } else {
-        localStorage.setItem('usmba_doctorat_rapports', JSON.stringify(INITIAL_RAPPORTS));
-        setRapports(INITIAL_RAPPORTS);
+      const rawPvs = localStorage.getItem('usmba_doctorat_pvs');
+      if (rawPvs) {
+        setPvs(JSON.parse(rawPvs));
       }
+      setSeancesStatuts(getSeancesStatutsMap());
     } catch {
       // fallback
     }
@@ -47,46 +64,59 @@ export const Exceptions: React.FC = () => {
   useEffect(() => {
     loadData();
     const handleSync = () => loadData();
-    window.addEventListener('usmba_rapports_updated', handleSync);
     window.addEventListener('usmba_creneaux_updated', handleSync);
     window.addEventListener('usmba_account_updated', handleSync);
+    window.addEventListener('usmba_pvs_updated', handleSync);
+    window.addEventListener('usmba_seances_updated', handleSync);
+    window.addEventListener('usmba_demo_date_updated', handleSync);
     window.addEventListener('storage', handleSync);
     return () => {
-      window.removeEventListener('usmba_rapports_updated', handleSync);
       window.removeEventListener('usmba_creneaux_updated', handleSync);
       window.removeEventListener('usmba_account_updated', handleSync);
+      window.removeEventListener('usmba_pvs_updated', handleSync);
+      window.removeEventListener('usmba_seances_updated', handleSync);
+      window.removeEventListener('usmba_demo_date_updated', handleSync);
       window.removeEventListener('storage', handleSync);
     };
   }, []);
 
-  // Règle : Exceptions ignore les versions remplacées
-  const getPvsValides = (): PV[] => {
-    try {
-      const raw = localStorage.getItem('usmba_doctorat_pvs');
-      if (!raw) return [];
-      const parsed: PV[] = JSON.parse(raw);
-      return parsed.filter((p) => !p.remplaceePar);
-    } catch {
-      return [];
-    }
-  };
-
-  const getEnseignantName = (id: string): string => {
+  const getEnseignantName = (id?: string): string => {
+    if (!id) return fr.exceptions.nonRenseigne;
     const ens = enseignants.find((e) => e.id === id);
-    return ens ? ens.nom : id;
+    if (ens && ens.nom && !ens.nom.startsWith('ens-')) return ens.nom;
+    return fr.exceptions.nonRenseigne;
   };
 
-  const getCandidatInfo = (id?: string): { nom: string; cne: string } => {
-    if (!id) return { nom: 'Candidat inconnu', cne: '-' };
-    if (id === 'cand-salma') return { nom: 'Salma Alami', cne: 'N149021873' };
-    if (id === 'cand-khadija') return { nom: 'Khadija Tazi', cne: 'M142078911' };
+  const getCandidatNom = (id?: string): string => {
+    if (!id) return fr.exceptions.nonRenseigne;
+    if (id === 'cand-salma') return 'Salma Alami';
+    if (id === 'cand-khadija') return 'Khadija Tazi';
+    if (id === 'cand-sara') return 'Sara Benjelloun';
+    if (id === 'cand-omar') return 'Omar Idrissi';
+    if (id === 'cand-001') return 'Yassine El Fassi';
+
     if (candidat && (id === candidat.id || id === 'cand-001')) {
-      return {
-        nom: candidat.nom || 'Yassine El Fassi',
-        cne: candidat.cne || 'N138249871',
-      };
+      if (candidat.nom && !candidat.nom.startsWith('cand-')) return candidat.nom;
     }
-    return { nom: id, cne: '-' };
+
+    const found = MOCK_CANDIDATS.find((c) => c.id === id);
+    if (found && found.nom && !found.nom.startsWith('cand-')) return found.nom;
+
+    try {
+      const rawAccounts = localStorage.getItem('usmba_registered_accounts');
+      if (rawAccounts) {
+        const accounts: Candidat[] = JSON.parse(rawAccounts);
+        const match = accounts.find((a) => a.id === id);
+        if (match && match.nom && !match.nom.startsWith('cand-')) return match.nom;
+      }
+      const rawCur = localStorage.getItem('usmba_doctorat_candidat');
+      if (rawCur) {
+        const cur: Candidat = JSON.parse(rawCur);
+        if (cur.id === id && cur.nom && !cur.nom.startsWith('cand-')) return cur.nom;
+      }
+    } catch {}
+
+    return fr.exceptions.nonRenseigne;
   };
 
   // 1. Filtrer les créneaux non confirmés (> 48h)
@@ -100,85 +130,63 @@ export const Exceptions: React.FC = () => {
     return false;
   });
 
-  // 1.b Filtrer les rapports de réinscription en retard (> 48h sans action)
-  const rapportsEnRetard = rapports.filter((r) => {
-    if (r.statut !== 'soumis' && r.statut !== 'avis_comite') return false;
-    if (!r.soumisLe) return false;
-    const resTime = new Date(r.soumisLe).getTime();
-    const diffHours = (now - resTime) / (1000 * 60 * 60);
-    return diffHours > SEUIL_HEURES;
-  });
-
-  const handleRelancerRapport = (reportId: string) => {
-    const rTarget = rapports.find((r) => r.id === reportId);
-    if (connectedDirecteurId && rTarget?.encadrantId === connectedDirecteurId) {
-      setToastMessage(fr.exceptions.conflitDirecteur);
-      setTimeout(() => setToastMessage(null), 4000);
-      return;
-    }
-    const todayStr = new Date().toLocaleDateString('fr-FR');
-    const updated = rapports.map((r) => {
-      if (r.id === reportId) {
-        return {
-          ...r,
-          relanceLe: new Date().toISOString(),
-          chronologie: [
-            ...(r.chronologie || []),
-            {
-              date: todayStr,
-              acteur: 'Direction CED',
-              action: 'Relance administrative simulée transmise',
-            },
-          ],
-        };
-      }
-      return r;
-    });
-    setRapports(updated);
-    try {
-      localStorage.setItem('usmba_doctorat_rapports', JSON.stringify(updated));
-      setToastMessage(fr.reinscription.relanceReportToast);
-      window.dispatchEvent(new CustomEvent('usmba_rapports_updated'));
-      setTimeout(() => setToastMessage(null), 3000);
-    } catch {
-      setToastMessage('Erreur de stockage');
-    }
-  };
-
-  // Calcul du temps écoulé
-  const getDureeEcoulee = (dateReservation?: string): string => {
-    if (!dateReservation) return '';
+  // Durée de silence en jours ("3 jours", "moins d'un jour")
+  const getDureeSilence = (dateReservation?: string): string => {
+    if (!dateReservation) return fr.exceptions.silenceDureeMoinsUnJour;
     const resTime = new Date(dateReservation).getTime();
-    const diffHours = Math.max(0, Math.floor((now - resTime) / (1000 * 60 * 60)));
-    return `${diffHours} h`;
+    const diffHours = Math.max(0, (now - resTime) / (1000 * 60 * 60));
+    const diffJours = Math.floor(diffHours / 24);
+    if (diffJours < 1) {
+      return fr.exceptions.silenceDureeMoinsUnJour;
+    }
+    if (diffJours === 1) {
+      return fr.exceptions.silenceDureeUnJour;
+    }
+    return fr.exceptions.silenceDureeJours.replace('{count}', String(diffJours));
   };
 
-  // Formatage de la date de relance
+  // Date JJ/MM à HH:mm
+  const formatCreneauDate = (dateStr?: string, heureStr?: string): string => {
+    if (!dateStr) return fr.exceptions.nonRenseigne;
+    let jjmm = dateStr;
+    if (dateStr.includes('-')) {
+      const parts = dateStr.split('-');
+      if (parts.length === 3) {
+        jjmm = `${parts[2].padStart(2, '0')}/${parts[1].padStart(2, '0')}`;
+      }
+    } else if (dateStr.includes('/')) {
+      const parts = dateStr.split('/');
+      if (parts.length >= 2) {
+        jjmm = `${parts[0].padStart(2, '0')}/${parts[1].padStart(2, '0')}`;
+      }
+    }
+    return heureStr ? `${jjmm} à ${heureStr}` : jjmm;
+  };
+
+  // Date de relance au format JJ/MM
   const formatRelanceDate = (isoString?: string): string => {
     if (!isoString) return '';
     try {
       const d = new Date(isoString);
-      return `${d.toLocaleDateString('fr-FR', {
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric',
-      })} à ${d.toLocaleTimeString('fr-FR', {
-        hour: '2-digit',
-        minute: '2-digit',
-      })}`;
+      const day = String(d.getDate()).padStart(2, '0');
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      return `${fr.exceptions.relanceLePrefix} ${day}/${month}`;
     } catch {
       return isoString;
     }
   };
 
-  // Bouton « Relancer (simulation) » : enregistre relanceLe = maintenant
+  // Bouton « Relancer »
   const handleRelancer = (creneauId: string) => {
     const cTarget = creneaux.find((c) => c.id === creneauId);
-    if (connectedDirecteurId && cTarget?.enseignantId === connectedDirecteurId) {
+    if (!cTarget) return;
+
+    if (connectedDirecteurId && cTarget.enseignantId === connectedDirecteurId) {
       setToastMessage(fr.exceptions.conflitDirecteur);
       setTimeout(() => setToastMessage(null), 4000);
       return;
     }
+
     const updated = creneaux.map((c) => {
       if (c.id === creneauId) {
         return {
@@ -192,7 +200,27 @@ export const Exceptions: React.FC = () => {
     try {
       storageService.setCreneaux(updated);
       setCreneaux(updated);
-      setToastMessage('Relance simulée enregistrée avec succès.');
+
+      // Notification 'action' envoyée au candidat
+      if (cTarget.candidatId) {
+        ajouterNotification({
+          destinataireId: cTarget.candidatId,
+          texte: fr.exceptions.notifRelanceCandidat,
+          type: 'action',
+        });
+      }
+
+      // Écriture d'un logEvent dans le journal
+      const candNom = getCandidatNom(cTarget.candidatId);
+      logEvent(
+        { id: 'dir-ced', nom: 'Structure CED', role: 'directeur_ced' },
+        fr.journalActions.relanceEntretien,
+        candNom,
+        `Entretien du ${formatCreneauDate(cTarget.date, cTarget.heure)}`
+      );
+
+      setToastMessage(fr.exceptions.toastRelanceSuccess);
+      window.dispatchEvent(new CustomEvent('usmba_creneaux_updated'));
       setTimeout(() => setToastMessage(null), 3000);
     } catch {
       setToastMessage(fr.exceptions.storageError);
@@ -200,160 +228,154 @@ export const Exceptions: React.FC = () => {
     }
   };
 
-  // 2. Détection des conflits
-  interface ConflitItem {
-    id: string;
-    type: 'enseignant' | 'candidat';
-    description: string;
-    creneauIds: string[];
-  }
-
-  const conflits: ConflitItem[] = [];
-
-  // a) Deux créneaux d'un même enseignant à la même date et heure
-  const teacherSlotsMap: Record<string, Creneau[]> = {};
+  // Séances sans PV (pv_en_retard)
+  const seanceKeys = new Set<string>();
   creneaux.forEach((c) => {
-    const key = `${c.enseignantId}-${c.date}-${c.heure}`;
-    if (!teacherSlotsMap[key]) {
-      teacherSlotsMap[key] = [];
-    }
-    teacherSlotsMap[key].push(c);
-  });
-
-  Object.entries(teacherSlotsMap).forEach(([key, list]) => {
-    if (list.length > 1) {
-      const ens = getEnseignantName(list[0].enseignantId);
-      conflits.push({
-        id: `conf-ens-${key}`,
-        type: 'enseignant',
-        description: `${fr.exceptions.conflictTeacher
-          .replace('{date}', list[0].date)
-          .replace('{heure}', list[0].heure)} (${ens})`,
-        creneauIds: list.map((c) => c.id),
-      });
-    }
-  });
-
-  // b) Un candidat sur plusieurs créneaux actifs ('reserve' ou 'confirme')
-  const candidateSlotsMap: Record<string, Creneau[]> = {};
-  creneaux.forEach((c) => {
-    if ((c.statut === 'reserve' || c.statut === 'confirme') && c.candidatId) {
-      if (!candidateSlotsMap[c.candidatId]) {
-        candidateSlotsMap[c.candidatId] = [];
+    if (c.enseignantId && c.date) {
+      if (c.statut === 'confirme' || c.statut === 'reserve' || c.candidatId) {
+        seanceKeys.add(`${c.enseignantId}_${c.date}`);
       }
-      candidateSlotsMap[c.candidatId].push(c);
     }
   });
-
-  Object.entries(candidateSlotsMap).forEach(([cId, list]) => {
-    if (list.length > 1) {
-      const candInfo = getCandidatInfo(cId);
-      conflits.push({
-        id: `conf-cand-${cId}`,
-        type: 'candidat',
-        description: `${fr.exceptions.conflictCandidate} : ${candInfo.nom} (${list.length} créneaux)`,
-        creneauIds: list.map((c) => c.id),
-      });
+  pvs.forEach((p) => {
+    if (p.directeurId && p.date) {
+      seanceKeys.add(`${p.directeurId}_${p.date}`);
     }
   });
+  Object.keys(seancesStatuts).forEach((k) => {
+    seanceKeys.add(k);
+  });
 
-  // 3. Dossiers à traiter au guichet
-  interface GuichetDossier {
-    id: string;
-    nom: string;
-    cne: string;
-    piecesPretes: number;
-    motif?: string;
-    statut: string;
-    statutRaw?: string;
-    agent: string;
-    derniereAction: string;
-  }
+  const seancesSansPv = Array.from(seanceKeys)
+    .map((key) => {
+      const [ensId, ...dateParts] = key.split('_');
+      const date = dateParts.join('_');
+      const sessionCreneaux = creneaux.filter((c) => c.enseignantId === ensId && c.date === date);
+      const sessionPvs = pvs.filter((p) => p.directeurId === ensId && p.date === date);
+      const statutRecord = seancesStatuts[key];
+      const statutInfo = calculerStatutSeance(date, ensId, sessionPvs, statutRecord);
+      const lieu = sessionCreneaux[0]?.lieu || 'CED';
+      const ensNom = getEnseignantName(ensId);
+      return {
+        key,
+        enseignantId: ensId,
+        date,
+        lieu,
+        enseignantNom: ensNom,
+        statut: statutInfo.statut,
+        diffJours: statutInfo.diffJours,
+        motif: statutInfo.motif,
+        relanceLe: statutInfo.relanceLe || statutRecord?.relanceLe,
+        creneaux: sessionCreneaux,
+      };
+    })
+    .filter((s) => s.statut === 'pv_en_retard');
 
-  const tousCandidats: Candidat[] = [...MOCK_CANDIDATS];
-  try {
-    const rawCur = localStorage.getItem('usmba_doctorat_candidat');
-    if (rawCur) {
-      const cur: Candidat = JSON.parse(rawCur);
-      const idx = tousCandidats.findIndex((c) => c.id === cur.id);
-      if (idx !== -1) tousCandidats[idx] = cur;
-      else tousCandidats.push(cur);
+  const handleRelancerDirecteur = (seance: (typeof seancesSansPv)[0]) => {
+    const nowIso = new Date().toISOString();
+    saveSeanceStatut(seance.key, { relanceLe: nowIso });
+    setSeancesStatuts((prev) => ({
+      ...prev,
+      [seance.key]: { ...(prev[seance.key] || {}), relanceLe: nowIso },
+    }));
+
+    // Notification 'action' envoyée au directeur
+    ajouterNotification({
+      destinataireId: seance.enseignantId,
+      texte: fr.exceptions.notifRelancePvDirecteur.replace('{date}', formatDateJJMM(seance.date)),
+      type: 'action',
+    });
+
+    // Journal
+    logEvent(
+      { id: 'dir-ced', nom: 'Structure CED', role: 'directeur_ced' },
+      fr.journalActions.relancePvDirecteur,
+      seance.enseignantNom,
+      `Séance du ${formatDateJJMM(seance.date)}`
+    );
+
+    setToastMessage(fr.exceptions.toastRelanceDirecteurSuccess);
+    setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  const handleOpenConstaterModal = (seance: (typeof seancesSansPv)[0]) => {
+    setConstaterModal(seance);
+    setConstaterMotif('');
+    setConstaterError(null);
+  };
+
+  const handleConfirmConstater = () => {
+    if (!constaterModal) return;
+    const cleanMotif = constaterMotif.trim();
+    if (cleanMotif.length < 5) {
+      setConstaterError(fr.exceptions.modalConstaterMotifError);
+      return;
     }
-    const rawOverrides = localStorage.getItem('usmba_candidats_overrides');
-    if (rawOverrides) {
-      const overrides: Record<string, Candidat> = JSON.parse(rawOverrides);
-      Object.values(overrides).forEach((cand) => {
-        const idx = tousCandidats.findIndex((c) => c.id === cand.id);
-        if (idx !== -1) tousCandidats[idx] = cand;
-        else tousCandidats.push(cand);
-      });
-    }
-    const rawAccounts = localStorage.getItem('usmba_registered_accounts');
-    if (rawAccounts) {
-      const accounts: Candidat[] = JSON.parse(rawAccounts);
-      accounts.forEach((cand) => {
-        const idx = tousCandidats.findIndex((c) => c.id === cand.id);
-        if (idx !== -1) tousCandidats[idx] = cand;
-        else tousCandidats.push(cand);
-      });
-    }
-  } catch {}
 
-  const guichetDossiers: GuichetDossier[] = [];
-  tousCandidats.forEach((c) => {
-    if (c.dossier?.guichet || (c.dossier as any)?.traiterAuGuichet) {
-      const piecesCount = (c.pieces || []).filter((p) => p.statut === 'prouvee').length;
-      let motifLabel: string | undefined = undefined;
+    const nowIso = new Date().toISOString();
+    saveSeanceStatut(constaterModal.key, {
+      statutManuel: 'non_tenue',
+      motif: cleanMotif,
+      declarePar: 'Structure CED',
+      declareLe: nowIso,
+    });
 
-      if (c.dossier?.casParticulier && c.dossier?.motif) {
-        const m = c.dossier.motif;
-        if (m === 'AUTRE') {
-          motifLabel = c.dossier.motifAutre || 'Autre motif';
-        } else if (m in fr.dossier.casParticulierMotifs) {
-          motifLabel = fr.dossier.casParticulierMotifs[m as keyof typeof fr.dossier.casParticulierMotifs];
-        } else {
-          motifLabel = m;
-        }
+    // 1. Notifier tous les candidats de cette séance
+    const touchedCandidates = new Set<string>();
+    const sessionCreneaux = creneaux.filter(
+      (c) => c.enseignantId === constaterModal.enseignantId && c.date === constaterModal.date
+    );
+    sessionCreneaux.forEach((c) => {
+      if (c.candidatId && !touchedCandidates.has(c.candidatId)) {
+        touchedCandidates.add(c.candidatId);
+        ajouterNotification({
+          destinataireId: c.candidatId,
+          texte: fr.exceptions.notifSeanceNonTenue
+            .replace('{date}', formatDateJJMM(constaterModal.date))
+            .replace('{motif}', cleanMotif),
+          type: 'action',
+        });
       }
+    });
 
-      const statutRaw = c.dossier?.guichetStatut || 'a_contacter';
-      const statutLabel =
-        statutRaw === 'saisi'
-          ? fr.guichetAgent.statuts.saisi
-          : statutRaw === 'venu'
-          ? fr.guichetAgent.statuts.venu
-          : statutRaw === 'contacte'
-          ? fr.guichetAgent.statuts.contacte
-          : fr.guichetAgent.statuts.a_contacter;
+    // 2. Rouvrir les créneaux
+    const updatedCreneaux = creneaux.map((c) => {
+      if (c.enseignantId === constaterModal.enseignantId && c.date === constaterModal.date) {
+        return {
+          ...c,
+          statut: 'libre' as const,
+          candidatId: undefined,
+          dateReservation: undefined,
+          dateConfirmation: undefined,
+          relanceLe: undefined,
+        };
+      }
+      return c;
+    });
 
-      const journal = c.dossier?.journalGuichet || [];
-      const derniereEntree = journal.length > 0 ? journal[journal.length - 1] : undefined;
-      const agentNom = c.dossier?.saisiPar || derniereEntree?.agent || '-';
-      const derniereAction = derniereEntree?.action || 'Demande initiale';
+    try {
+      storageService.setCreneaux(updatedCreneaux);
+      setCreneaux(updatedCreneaux);
+      window.dispatchEvent(new CustomEvent('usmba_creneaux_updated'));
+    } catch {}
 
-      guichetDossiers.push({
-        id: c.id,
-        nom: c.nom || 'Candidat inconnu',
-        cne: c.cne || '-',
-        piecesPretes: piecesCount,
-        motif: motifLabel,
-        statut: statutLabel,
-        statutRaw,
-        agent: agentNom,
-        derniereAction,
-      });
-    }
-  });
+    // 3. Log event
+    logEvent(
+      { id: 'dir-ced', nom: 'Structure CED', role: 'directeur_ced' },
+      fr.journalActions.seanceNonTenue,
+      `Séance du ${formatDateJJMM(constaterModal.date)} (${constaterModal.enseignantNom})`,
+      cleanMotif
+    );
 
-  const scrollToSection = (id: string) => {
-    const el = document.getElementById(id);
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth' });
-    }
+    setToastMessage(fr.exceptions.toastConstatSuccess);
+    setTimeout(() => setToastMessage(null), 3000);
+    setConstaterModal(null);
+    setConstaterMotif('');
+    setConstaterError(null);
   };
 
   return (
-    <div className="space-y-6 max-w-[1100px] mx-auto pb-12">
+    <div className="max-w-[768px] mx-auto space-y-8 pb-12">
       {/* Toast de notification */}
       {toastMessage && (
         <div className="fixed top-16 right-4 z-50 bg-slate-900 text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-lg border border-slate-800 flex items-center gap-2">
@@ -362,103 +384,116 @@ export const Exceptions: React.FC = () => {
         </div>
       )}
 
-      {/* En-tête sobre */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-        <div>
+      {/* En-tête : Titre et Sous-titre */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
+        <h1 className="text-base sm:text-lg font-bold text-slate-900">
+          {fr.exceptions.title}
+        </h1>
+        <p className="text-xs text-slate-500 mt-1">
+          {fr.exceptions.subtitle}
+        </p>
+      </div>
+
+      {/* Section 1 : Séances sans PV */}
+      <section className="space-y-4">
+        <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <h1 className="text-base sm:text-lg font-bold text-slate-900">
-              {fr.exceptions.title}
-            </h1>
-            <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
-              Lecture seule
-            </span>
+            <div className="w-2.5 h-2.5 rounded-full bg-amber-500" />
+            <h2 className="text-sm font-bold text-slate-900">
+              {fr.exceptions.seancesSansPvTitle}
+            </h2>
           </div>
-          <p className="text-xs text-slate-500 mt-0.5">
-            {fr.exceptions.subtitle}
-          </p>
+          <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-200">
+            {seancesSansPv.length}
+          </span>
         </div>
-      </div>
 
-      {/* En haut : 3 compteurs cliquables (ancres vers les sections) */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <button
-          type="button"
-          onClick={() => scrollToSection('section-non-confirmes')}
-          className="bg-white border border-slate-200 hover:border-rose-300 rounded-2xl p-4 shadow-xs text-left transition cursor-pointer hover:bg-rose-50/30 group"
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-600 group-hover:text-rose-900">
-              {fr.exceptions.navNonConfirmes}
-            </span>
-            <span
-              className={`text-sm font-extrabold px-2.5 py-0.5 rounded-full ${
-                nonConfirmes.length > 0
-                  ? 'bg-rose-100 text-rose-800 border border-rose-200'
-                  : 'bg-slate-100 text-slate-600'
-              }`}
-            >
-              {nonConfirmes.length}
-            </span>
+        {seancesSansPv.length === 0 ? (
+          <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center text-xs text-slate-500 shadow-xs flex flex-col items-center justify-center gap-2">
+            <CheckCircle2 size={28} className="text-emerald-500" />
+            <span className="font-medium">{fr.exceptions.emptySeancesSansPv}</span>
           </div>
-          <p className="text-[11px] text-slate-400 mt-2 flex items-center gap-1">
-            <Clock size={12} />
-            <span>Seuil &gt; {SEUIL_HEURES} h</span>
-          </p>
-        </button>
+        ) : (
+          <div className="space-y-4">
+            {seancesSansPv.map((s) => {
+              const seanceTitre = fr.exceptions.seanceDuLieu
+                .replace('{date}', formatDateJJMM(s.date))
+                .replace('{lieu}', s.lieu);
+              const retardTexte =
+                s.diffJours <= 1
+                  ? fr.exceptions.pvAttenduDepuisUnJour
+                  : fr.exceptions.pvAttenduDepuisJours.replace('{count}', String(s.diffJours));
+              const isRelance = Boolean(s.relanceLe);
 
-        <button
-          type="button"
-          onClick={() => scrollToSection('section-conflits')}
-          className="bg-white border border-slate-200 hover:border-amber-300 rounded-2xl p-4 shadow-xs text-left transition cursor-pointer hover:bg-amber-50/30 group"
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-600 group-hover:text-amber-900">
-              {fr.exceptions.navConflits}
-            </span>
-            <span
-              className={`text-sm font-extrabold px-2.5 py-0.5 rounded-full ${
-                conflits.length > 0
-                  ? 'bg-amber-100 text-amber-800 border border-amber-200'
-                  : 'bg-slate-100 text-slate-600'
-              }`}
-            >
-              {conflits.length}
-            </span>
+              return (
+                <div
+                  key={s.key}
+                  className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4"
+                >
+                  {/* Ligne supérieure : Titre séance & Retard */}
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h3 className="font-bold text-sm text-slate-900">{seanceTitre}</h3>
+                      <p className="text-xs text-slate-600 mt-0.5">{s.enseignantNom}</p>
+                    </div>
+                    <span className="inline-flex items-center gap-1.5 font-medium text-xs px-2.5 py-1 rounded-full bg-amber-50 text-amber-800 border border-amber-200 shrink-0">
+                      <Clock size={12} className="text-amber-600" />
+                      <span>{retardTexte}</span>
+                    </span>
+                  </div>
+
+                  {/* Pastille texte + icône */}
+                  <div className="flex items-center gap-2">
+                    <span className="inline-flex items-center gap-1.5 font-semibold text-xs px-2.5 py-1 rounded-full bg-rose-100 text-rose-800">
+                      <AlertTriangle size={13} className="text-rose-600 shrink-0" />
+                      <span>{fr.exceptions.badgePvEnRetard}</span>
+                    </span>
+                  </div>
+
+                  {/* Boutons d'action */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1 border-t border-slate-100">
+                    <div>
+                      {isRelance ? (
+                        <button
+                          type="button"
+                          disabled
+                          className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed"
+                        >
+                          <Clock size={12} />
+                          <span>
+                            {fr.exceptions.relanceDirecteurLe} {formatDateJJMM(s.relanceLe?.split('T')[0])}
+                          </span>
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleRelancerDirecteur(s)}
+                          className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold text-white bg-amber-700 hover:bg-amber-800 shadow-xs cursor-pointer active:scale-98 transition"
+                        >
+                          <Send size={12} />
+                          <span>{fr.exceptions.btnRelancerDirecteur}</span>
+                        </button>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleOpenConstaterModal(s)}
+                      className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 cursor-pointer active:scale-98 transition"
+                    >
+                      <AlertCircle size={13} className="shrink-0" />
+                      <span>{fr.exceptions.btnConstaterNonTenue}</span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
-          <p className="text-[11px] text-slate-400 mt-2 flex items-center gap-1">
-            <AlertTriangle size={12} />
-            <span>Enseignants &amp; Candidats</span>
-          </p>
-        </button>
+        )}
+      </section>
 
-        <button
-          type="button"
-          onClick={() => scrollToSection('section-guichet')}
-          className="bg-white border border-slate-200 hover:border-purple-300 rounded-2xl p-4 shadow-xs text-left transition cursor-pointer hover:bg-purple-50/30 group"
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-600 group-hover:text-purple-900">
-              {fr.exceptions.navGuichet}
-            </span>
-            <span
-              className={`text-sm font-extrabold px-2.5 py-0.5 rounded-full ${
-                guichetDossiers.length > 0
-                  ? 'bg-purple-100 text-purple-800 border border-purple-200'
-                  : 'bg-slate-100 text-slate-600'
-              }`}
-            >
-              {guichetDossiers.length}
-            </span>
-          </div>
-          <p className="text-[11px] text-slate-400 mt-2 flex items-center gap-1">
-            <UserCheck size={12} />
-            <span>Saisie assistée</span>
-          </p>
-        </button>
-      </div>
-
-      {/* 1. SECTION : « Entretiens non confirmés » */}
-      <section id="section-non-confirmes" className="space-y-3">
+      {/* Section : Entretiens non confirmés (> 48 h) */}
+      <section className="space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="w-2.5 h-2.5 rounded-full bg-rose-500" />
@@ -466,443 +501,176 @@ export const Exceptions: React.FC = () => {
               {fr.exceptions.sectionNonConfirmesTitle}
             </h2>
           </div>
-          <span className="text-xs text-slate-400">
-            {nonConfirmes.length} cas
+          <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200">
+            {nonConfirmes.length}
           </span>
         </div>
 
         {nonConfirmes.length === 0 ? (
-          <div className="bg-white border border-slate-200 rounded-2xl p-6 text-center text-xs text-slate-500">
-            {fr.exceptions.emptyNonConfirmes}
+          <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center text-xs text-slate-500 shadow-xs flex flex-col items-center justify-center gap-2">
+            <CheckCircle2 size={28} className="text-emerald-500" />
+            <span className="font-medium">{fr.exceptions.emptyNonConfirmes}</span>
           </div>
         ) : (
-          <>
-            {/* Version Bureau (Tableau compact ≥ 768px) */}
-            <div className="hidden md:block bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
-              <table className="w-full text-left text-xs text-slate-700">
-                <thead className="bg-slate-50 border-b border-slate-200 text-[11px] font-semibold text-slate-500 uppercase">
-                  <tr>
-                    <th className="px-4 py-3">{fr.exceptions.colCandidat}</th>
-                    <th className="px-4 py-3">{fr.exceptions.colEnseignant}</th>
-                    <th className="px-4 py-3">{fr.exceptions.colDateHeure}</th>
-                    <th className="px-4 py-3">{fr.exceptions.colDuree}</th>
-                    <th className="px-4 py-3">{fr.exceptions.colStatut}</th>
-                    <th className="px-4 py-3 text-right">{fr.exceptions.colAction}</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {nonConfirmes.map((c) => {
-                    const candInfo = getCandidatInfo(c.candidatId);
-                    const ensNom = getEnseignantName(c.enseignantId);
-                    const duree = getDureeEcoulee(c.dateReservation);
-                    const isRelance = Boolean(c.relanceLe);
-                    const isDirecteurOfCreneau = Boolean(
-                      connectedDirecteurId && c.enseignantId && connectedDirecteurId === c.enseignantId
-                    );
-
-                    return (
-                      <tr key={c.id} className="hover:bg-slate-50/60 transition">
-                        <td className="px-4 py-3.5 font-bold text-slate-900">
-                          {candInfo.nom}
-                        </td>
-                        <td className="px-4 py-3.5 text-slate-600">
-                          {ensNom}
-                        </td>
-                        <td className="px-4 py-3.5">
-                          <span className="font-medium text-slate-800">{c.date}</span>
-                          <span className="text-slate-400 ml-1.5">{c.heure}</span>
-                        </td>
-                        <td className="px-4 py-3.5 font-semibold text-rose-700">
-                          {duree}
-                        </td>
-                        <td className="px-4 py-3.5">
-                          <span className="inline-flex items-center gap-1.5 font-medium rounded-full bg-rose-50 text-rose-800 border border-rose-200 text-xs px-2.5 py-1">
-                            <Clock size={13} className="text-rose-600 shrink-0" />
-                            <span>{fr.exceptions.silenceBadge}</span>
-                          </span>
-                        </td>
-                        <td className="px-4 py-3.5 text-right">
-                          {isRelance ? (
-                            <span className="text-[11px] font-medium text-slate-500 italic">
-                              {fr.exceptions.relanceLePrefix} {formatRelanceDate(c.relanceLe)}
-                            </span>
-                          ) : (
-                            <div className="flex flex-col items-end gap-1">
-                              <button
-                                type="button"
-                                disabled={isDirecteurOfCreneau}
-                                onClick={() => !isDirecteurOfCreneau && handleRelancer(c.id)}
-                                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold shadow-xs ${
-                                  isDirecteurOfCreneau
-                                    ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
-                                    : 'bg-rose-700 hover:bg-rose-800 text-white cursor-pointer active:scale-98'
-                                }`}
-                              >
-                                <Send size={12} />
-                                <span>{fr.exceptions.btnRelancer}</span>
-                              </button>
-                              {isDirecteurOfCreneau && (
-                                <p className="text-[11px] font-semibold text-amber-800 flex items-center justify-end gap-1 text-right max-w-[200px]">
-                                  <AlertTriangle size={12} className="shrink-0 text-amber-600" />
-                                  <span>{fr.exceptions.conflitDirecteur}</span>
-                                </p>
-                              )}
-                            </div>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Version Mobile (Cartes 1 colonne) */}
-            <div className="md:hidden space-y-2.5">
-              {nonConfirmes.map((c) => {
-                const candInfo = getCandidatInfo(c.candidatId);
-                const ensNom = getEnseignantName(c.enseignantId);
-                const duree = getDureeEcoulee(c.dateReservation);
-                const isRelance = Boolean(c.relanceLe);
-                const isDirecteurOfCreneau = Boolean(
-                  connectedDirecteurId && c.enseignantId && connectedDirecteurId === c.enseignantId
-                );
-
-                return (
-                  <div
-                    key={c.id}
-                    className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <h3 className="font-bold text-xs text-slate-900">{candInfo.nom}</h3>
-                        <p className="text-[11px] text-slate-500">{ensNom}</p>
-                      </div>
-                      <span className="inline-flex items-center gap-1 font-semibold text-[11px] px-2 py-0.5 rounded-full bg-rose-100 text-rose-800">
-                        <Clock size={11} />
-                        <span>{duree}</span>
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-3 text-xs text-slate-600 bg-slate-50 p-2 rounded-xl">
-                      <div className="flex items-center gap-1">
-                        <Calendar size={13} className="text-slate-400" />
-                        <span className="font-medium">{c.date}</span>
-                      </div>
-                      <span className="text-slate-300">•</span>
-                      <span className="font-semibold text-slate-700">{c.heure}</span>
-                    </div>
-
-                    <div className="pt-1 flex items-center justify-between gap-2">
-                      <span className="inline-flex items-center gap-1 font-medium rounded-full bg-rose-50 text-rose-800 border border-rose-200 text-[11px] px-2 py-0.5">
-                        <Clock size={11} className="text-rose-600" />
-                        <span>{fr.exceptions.silenceBadge}</span>
-                      </span>
-
-                      {isRelance ? (
-                        <span className="text-[10px] text-slate-500 italic">
-                          {fr.exceptions.relanceLePrefix} {formatRelanceDate(c.relanceLe)}
-                        </span>
-                      ) : (
-                        <div className="flex flex-col items-end gap-1">
-                          <button
-                            type="button"
-                            disabled={isDirecteurOfCreneau}
-                            onClick={() => !isDirecteurOfCreneau && handleRelancer(c.id)}
-                            className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold ${
-                              isDirecteurOfCreneau
-                                ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
-                                : 'bg-rose-700 text-white cursor-pointer active:scale-98'
-                            }`}
-                          >
-                            <Send size={11} />
-                            <span>{fr.exceptions.btnRelancer}</span>
-                          </button>
-                          {isDirecteurOfCreneau && (
-                            <p className="text-[10px] font-semibold text-amber-800 flex items-center gap-1 text-right max-w-[180px]">
-                              <AlertTriangle size={11} className="shrink-0 text-amber-600" />
-                              <span>{fr.exceptions.conflitDirecteur}</span>
-                            </p>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </>
-        )}
-      </section>
-
-      {/* 2. SECTION : « Conflits détectés » */}
-      <section id="section-conflits" className="space-y-3 pt-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-2.5 h-2.5 rounded-full bg-amber-500" />
-            <h2 className="text-sm font-bold text-slate-900">
-              {fr.exceptions.sectionConflitsTitle}
-            </h2>
-          </div>
-          <span className="text-xs text-slate-400">
-            {conflits.length} détecté(s)
-          </span>
-        </div>
-
-        {conflits.length === 0 ? (
-          <div className="bg-white border border-slate-200 rounded-2xl p-6 text-center text-xs text-slate-500">
-            {fr.exceptions.emptyConflits}
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {conflits.map((cf) => (
-              <div
-                key={cf.id}
-                className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-xs text-amber-900 flex items-center gap-3 shadow-xs"
-              >
-                <AlertTriangle size={18} className="text-amber-600 shrink-0" />
-                <span className="font-medium">{cf.description}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {/* 3. SECTION : « Dossiers à traiter au guichet » */}
-      <section id="section-guichet" className="space-y-3 pt-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-2.5 h-2.5 rounded-full bg-purple-500" />
-            <h2 className="text-sm font-bold text-slate-900">
-              {fr.exceptions.sectionGuichetTitle}
-            </h2>
-          </div>
-          <span className="text-xs text-slate-400">
-            {guichetDossiers.length} dossier(s)
-          </span>
-        </div>
-
-        {guichetDossiers.length === 0 ? (
-          <div className="bg-white border border-slate-200 rounded-2xl p-6 text-center text-xs text-slate-500">
-            {fr.exceptions.emptyGuichet}
-          </div>
-        ) : (
-          <>
-            {/* Version Bureau (Tableau compact ≥ 768px) */}
-            <div className="hidden md:block bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
-              <table className="w-full text-left text-xs text-slate-700">
-                <thead className="bg-slate-50 border-b border-slate-200 text-[11px] font-semibold text-slate-500 uppercase">
-                  <tr>
-                    <th className="px-4 py-3">{fr.exceptions.colCandidat}</th>
-                    <th className="px-4 py-3">{fr.exceptions.colCne}</th>
-                    <th className="px-4 py-3">{fr.exceptions.colPieces}</th>
-                    <th className="px-4 py-3">{fr.exceptions.colMotif}</th>
-                    <th className="px-4 py-3">{fr.guichetAgent.colStatut}</th>
-                    <th className="px-4 py-3">{fr.guichetAgent.colJournalAgent}</th>
-                    <th className="px-4 py-3">{fr.guichetAgent.colJournalAction}</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {guichetDossiers.map((g) => (
-                    <tr key={g.id} className="hover:bg-slate-50/60 transition">
-                      <td className="px-4 py-3.5 font-bold text-slate-900">
-                        {g.nom}
-                      </td>
-                      <td className="px-4 py-3.5 text-slate-500 font-mono">
-                        {g.cne}
-                      </td>
-                      <td className="px-4 py-3.5">
-                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md">
-                          <FileText size={11} className="text-slate-500" />
-                          <span>{g.piecesPretes}/4 {fr.dossier.piecesPretes}</span>
-                        </span>
-                      </td>
-                      <td className="px-4 py-3.5">
-                        {g.motif ? (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-medium text-purple-800 bg-purple-50 border border-purple-200 px-2.5 py-0.5 rounded-md">
-                            {g.motif}
-                          </span>
-                        ) : (
-                          <span className="text-slate-400 italic text-[11px]">
-                            {fr.exceptions.standardDossier}
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3.5">
-                        <span
-                          className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full border ${
-                            g.statutRaw === 'saisi'
-                              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                              : g.statutRaw === 'venu'
-                              ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
-                              : g.statutRaw === 'contacte'
-                              ? 'bg-sky-50 text-sky-800 border-sky-200'
-                              : 'bg-amber-50 text-amber-800 border-amber-200'
-                          }`}
-                        >
-                          {g.statut}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3.5 font-medium text-slate-800">
-                        {g.agent}
-                      </td>
-                      <td className="px-4 py-3.5 text-slate-600">
-                        {g.derniereAction}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Version Mobile (Cartes 1 colonne) */}
-            <div className="md:hidden space-y-2.5">
-              {guichetDossiers.map((g) => (
-                <div
-                  key={g.id}
-                  className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-2.5"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-xs text-slate-900">{g.nom}</span>
-                    <span className="font-mono text-[11px] text-slate-500">{g.cne}</span>
-                  </div>
-
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md">
-                      <FileText size={11} className="text-slate-500" />
-                      <span>{g.piecesPretes}/4 {fr.dossier.piecesPretes}</span>
-                    </span>
-
-                    {g.motif && (
-                      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-purple-800 bg-purple-50 border border-purple-200 px-2.5 py-0.5 rounded-md">
-                        {g.motif}
-                      </span>
-                    )}
-
-                    <span
-                      className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                        g.statutRaw === 'saisi'
-                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                          : g.statutRaw === 'venu'
-                          ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
-                          : g.statutRaw === 'contacte'
-                          ? 'bg-sky-50 text-sky-800 border-sky-200'
-                          : 'bg-amber-50 text-amber-800 border-amber-200'
-                      }`}
-                    >
-                      {g.statut}
-                    </span>
-                  </div>
-
-                  <div className="pt-1.5 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-600">
-                    <span>
-                      Agent : <strong className="text-slate-800">{g.agent}</strong>
-                    </span>
-                    <span className="text-slate-500 italic">
-                      {g.derniereAction}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
-      </section>
-
-      {/* SECTION 4 : RAPPORTS DE RÉINSCRIPTION EN RETARD (> 48H SANS ACTION) */}
-      <section className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3">
-        <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-          <div>
-            <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wide flex items-center gap-2">
-              <Clock size={16} className="text-amber-600" />
-              <span>{fr.reinscription.lateReportsSectionTitle}</span>
-            </h3>
-            <p className="text-[11px] text-slate-500 mt-0.5">
-              Dossiers 'soumis' ou 'avis_comite' sans décision après {SEUIL_HEURES}h.
-            </p>
-          </div>
-          <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
-            {rapportsEnRetard.length}
-          </span>
-        </div>
-
-        {rapportsEnRetard.length === 0 ? (
-          <div className="py-6 text-center text-xs text-slate-500">
-            {fr.reinscription.lateReportsEmpty}
-          </div>
-        ) : (
-          <div className="space-y-2.5">
-            {rapportsEnRetard.map((r) => {
-              const diffHours = r.soumisLe
-                ? Math.max(0, Math.floor((now - new Date(r.soumisLe).getTime()) / (1000 * 60 * 60)))
-                : 0;
-
-              const waitingWho =
-                r.statut === 'soumis'
-                  ? fr.reinscription.waitingEncadrant
-                  : fr.reinscription.waitingComite;
+          <div className="space-y-4">
+            {nonConfirmes.map((c) => {
+              const candNom = getCandidatNom(c.candidatId);
+              const ensNom = getEnseignantName(c.enseignantId);
+              const dureeSilence = getDureeSilence(c.dateReservation);
+              const isRelance = Boolean(c.relanceLe);
+              const isDirecteurOfCreneau = Boolean(
+                connectedDirecteurId && c.enseignantId && connectedDirecteurId === c.enseignantId
+              );
 
               return (
                 <div
-                  key={r.id}
-                  className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
+                  key={c.id}
+                  className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4"
                 >
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-bold text-slate-900">{r.titre}</span>
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-white border border-slate-200 text-slate-700">
-                        {r.annee}ᵉ année
-                      </span>
+                  {/* Ligne supérieure : Candidat, Directeur & Durée de silence */}
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h3 className="font-bold text-sm text-slate-900">{candNom}</h3>
+                      <p className="text-xs text-slate-600 mt-0.5">{ensNom}</p>
                     </div>
-                    <p className="text-[11px] text-slate-500">
-                      Doctorant : <span className="font-semibold text-slate-700">{r.doctorantId}</span> • {fr.reinscription.waitingPrefix} <span className="font-bold text-amber-800">{waitingWho}</span>
-                    </p>
-                    <div className="flex items-center gap-2 pt-0.5">
-                      <span className="text-[11px] font-semibold text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded">
-                        {fr.reinscription.timeElapsed} {diffHours} h
-                      </span>
-                      {r.relanceLe && (
-                        <span className="text-[10px] text-emerald-700 font-medium">
-                          Relancé le {new Date(r.relanceLe).toLocaleDateString('fr-FR')}
-                        </span>
-                      )}
-                    </div>
+                    <span className="inline-flex items-center gap-1.5 font-medium text-xs px-2.5 py-1 rounded-full bg-rose-50 text-rose-700 border border-rose-200 shrink-0">
+                      <Clock size={12} className="text-rose-500" />
+                      <span>{dureeSilence}</span>
+                    </span>
                   </div>
 
-                  {(() => {
-                    const isDirecteurOfRapport = Boolean(
-                      connectedDirecteurId && r.encadrantId && connectedDirecteurId === r.encadrantId
-                    );
-                    return (
-                      <div className="flex flex-col items-end gap-1 shrink-0">
+                  {/* Ligne médiane : Date JJ/MM à HH:mm */}
+                  <div className="flex items-center gap-2 text-xs text-slate-700 bg-slate-50 border border-slate-100 px-3 py-2 rounded-xl">
+                    <Calendar size={14} className="text-slate-400 shrink-0" />
+                    <span className="font-semibold">{formatCreneauDate(c.date, c.heure)}</span>
+                  </div>
+
+                  {/* Ligne d'action : Pastille de silence & Bouton Relancer */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+                    <span className="inline-flex items-center gap-1.5 font-semibold text-xs px-2.5 py-1 rounded-full bg-rose-100 text-rose-800 w-fit">
+                      <Clock size={13} className="text-rose-600" />
+                      <span>{fr.exceptions.silenceBadge}</span>
+                    </span>
+
+                    {isRelance ? (
+                      <button
+                        type="button"
+                        disabled
+                        className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed"
+                      >
+                        <Clock size={12} />
+                        <span>{formatRelanceDate(c.relanceLe)}</span>
+                      </button>
+                    ) : (
+                      <div className="flex flex-col sm:items-end gap-1">
                         <button
                           type="button"
-                          disabled={isDirecteurOfRapport}
-                          onClick={() => !isDirecteurOfRapport && handleRelancerRapport(r.id)}
-                          className={`self-end sm:self-center px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-xs shrink-0 ${
-                            isDirecteurOfRapport
+                          disabled={isDirecteurOfCreneau}
+                          onClick={() => !isDirecteurOfCreneau && handleRelancer(c.id)}
+                          className={`inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold shadow-xs ${
+                            isDirecteurOfCreneau
                               ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
-                              : 'bg-amber-600 hover:bg-amber-700 text-white cursor-pointer active:scale-98'
+                              : 'bg-rose-700 hover:bg-rose-800 text-white cursor-pointer active:scale-98 transition'
                           }`}
                         >
-                          <Send size={13} />
-                          <span>{fr.reinscription.btnRelancerReport}</span>
+                          <Send size={12} />
+                          <span>{fr.exceptions.btnRelancer}</span>
                         </button>
-                        {isDirecteurOfRapport && (
-                          <p className="text-[11px] font-semibold text-amber-800 flex items-center gap-1 text-right max-w-[200px]">
+                        {isDirecteurOfCreneau && (
+                          <p className="text-[11px] font-semibold text-amber-800 flex items-center gap-1 sm:justify-end">
                             <AlertTriangle size={12} className="shrink-0 text-amber-600" />
                             <span>{fr.exceptions.conflitDirecteur}</span>
                           </p>
                         )}
                       </div>
-                    );
-                  })()}
+                    )}
+                  </div>
+
+                  {/* Raison écrite */}
+                  <div className="pt-2 border-t border-slate-100">
+                    <p className="text-xs text-slate-500 flex items-center gap-1.5">
+                      <AlertCircle size={13} className="text-slate-400 shrink-0" />
+                      <span>{fr.exceptions.raisonNonConfirme}</span>
+                    </p>
+                  </div>
                 </div>
               );
             })}
           </div>
         )}
       </section>
+
+      {/* Modal Constater que la séance n'a pas eu lieu */}
+      {constaterModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl max-w-md w-full p-5 space-y-4 shadow-xl border border-slate-200 animate-in fade-in duration-200">
+            <div className="flex items-start justify-between gap-2 border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                  <AlertCircle size={16} className="text-rose-600 shrink-0" />
+                  <span>{fr.exceptions.modalConstaterTitre}</span>
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  {fr.exceptions.seanceDuLieu
+                    .replace('{date}', formatDateJJMM(constaterModal.date))
+                    .replace('{lieu}', constaterModal.lieu)}{' '}
+                  • {constaterModal.enseignantNom}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setConstaterModal(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-600">
+              {fr.exceptions.modalConstaterDesc}
+            </p>
+
+            <div className="space-y-1.5">
+              <label className="block text-xs font-bold text-slate-700">
+                {fr.exceptions.modalConstaterMotifLabel}
+              </label>
+              <textarea
+                rows={3}
+                value={constaterMotif}
+                onChange={(e) => {
+                  setConstaterMotif(e.target.value);
+                  setConstaterError(null);
+                }}
+                placeholder={fr.exceptions.modalConstaterMotifPlaceholder}
+                className="w-full text-xs p-3 rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-rose-500"
+              />
+              {constaterError && (
+                <p className="text-xs text-rose-600 font-semibold flex items-center gap-1">
+                  <AlertCircle size={13} className="shrink-0" />
+                  <span>{constaterError}</span>
+                </p>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setConstaterModal(null)}
+                className="px-3.5 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition cursor-pointer"
+              >
+                {fr.common.cancel}
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmConstater}
+                className="px-4 py-2 text-xs font-bold text-white bg-rose-700 hover:bg-rose-800 rounded-xl shadow-xs transition cursor-pointer"
+              >
+                {fr.exceptions.btnConfirmerConstat}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

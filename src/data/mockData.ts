@@ -10,6 +10,10 @@ import {
   Doctorant,
   Compte,
   Periode,
+  StatutSeance,
+  DELAI_PV_JOURS,
+  SeanceStatutRecord,
+  PV,
 } from '../types';
 
 export const INITIAL_ENSEIGNANTS: Enseignant[] = [
@@ -475,7 +479,10 @@ export const INITIAL_CRENEAUX: Creneau[] = [
     date: '2026-11-05',
     heure: '14:30',
     lieu: 'Salle des Thèses 1 - FSDM Fès',
-    statut: 'libre',
+    candidatId: 'cand-khadija',
+    statut: 'confirme',
+    dateReservation: '2026-10-24T10:00:00Z',
+    dateConfirmation: '2026-10-24T11:00:00Z',
   },
   {
     id: 'cr-104',
@@ -941,4 +948,81 @@ export function saveComptes(comptes: Compte[]): void {
     // ignore
   }
 }
+
+export const SEANCES_STATUTS_STORAGE_KEY = 'usmba_seances_statuts';
+
+export function getSeancesStatutsMap(): Record<string, SeanceStatutRecord> {
+  try {
+    if (typeof localStorage === 'undefined') return {};
+    const raw = localStorage.getItem(SEANCES_STATUTS_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function saveSeanceStatut(
+  seanceKey: string,
+  record: Partial<SeanceStatutRecord>
+): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    const current = getSeancesStatutsMap();
+    current[seanceKey] = {
+      ...(current[seanceKey] || {}),
+      ...record,
+    };
+    localStorage.setItem(SEANCES_STATUTS_STORAGE_KEY, JSON.stringify(current));
+    window.dispatchEvent(new CustomEvent('usmba_seances_updated'));
+  } catch {}
+}
+
+export function calculerStatutSeance(
+  date: string,
+  enseignantId: string,
+  pvsForDateAndDir: PV[],
+  statutRecord?: SeanceStatutRecord | null,
+  demoDateOverride?: string
+): {
+  statut: StatutSeance;
+  diffJours: number;
+  motif?: string;
+  relanceLe?: string;
+} {
+  // 1. Déclarations humaines prioritaires
+  if (statutRecord?.statutManuel === 'reportee') {
+    return { statut: 'reportee', diffJours: 0, motif: statutRecord.motif, relanceLe: statutRecord.relanceLe };
+  }
+  if (statutRecord?.statutManuel === 'non_tenue') {
+    return { statut: 'non_tenue', diffJours: 0, motif: statutRecord.motif, relanceLe: statutRecord.relanceLe };
+  }
+
+  // 2. PV reçu : tous les PV de la séance à 'envoye' ou plus ('envoye' | 'publie' | 'original_recu' | 'approuve')
+  const validPvs = pvsForDateAndDir.filter((p) => !p.remplaceePar);
+  if (
+    validPvs.length > 0 &&
+    validPvs.every((p) => p.statut === 'envoye' || p.statut === 'publie' || p.statut === 'original_recu' || p.statut === 'approuve')
+  ) {
+    return { statut: 'pv_recu', diffJours: 0, relanceLe: statutRecord?.relanceLe };
+  }
+
+  // 3. Calcul par rapport à la date de démo (usmba_demo_date)
+  const demoDateStr = demoDateOverride || aujourdhui();
+  const dateDemo = new Date(demoDateStr + 'T00:00:00Z');
+  const dateSeance = new Date(date + 'T00:00:00Z');
+
+  if (dateSeance.getTime() > dateDemo.getTime()) {
+    return { statut: 'a_venir', diffJours: 0, relanceLe: statutRecord?.relanceLe };
+  }
+
+  const diffMs = dateDemo.getTime() - dateSeance.getTime();
+  const diffJours = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
+
+  if (diffJours <= DELAI_PV_JOURS) {
+    return { statut: 'pv_attendu', diffJours, relanceLe: statutRecord?.relanceLe };
+  } else {
+    return { statut: 'pv_en_retard', diffJours, relanceLe: statutRecord?.relanceLe };
+  }
+}
+
 

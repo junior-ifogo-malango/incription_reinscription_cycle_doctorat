@@ -20,11 +20,21 @@ import {
   AlertTriangle,
   FileCheck,
 } from 'lucide-react';
-import { Creneau, Resultat, ResultatType, PV, Candidat, calculerNoteResultat } from '../types';
-import { MOCK_CANDIDATS, INITIAL_CRENEAUX, getDirectorStructure, enrichirPVLecture, getComptes } from '../data/mockData';
+import { Creneau, Resultat, ResultatType, PV, Candidat, calculerNoteResultat, StatutSeance, SeanceStatutRecord } from '../types';
+import {
+  MOCK_CANDIDATS,
+  INITIAL_CRENEAUX,
+  getDirectorStructure,
+  enrichirPVLecture,
+  getComptes,
+  calculerStatutSeance,
+  getSeancesStatutsMap,
+  saveSeanceStatut,
+} from '../data/mockData';
 import { PVDocument } from './PVDocument';
 import { fr } from '../i18n/fr';
 import { logEvent } from '../utils/journal';
+import { ajouterNotification } from '../utils/messages';
 
 interface CommissionProps {
   enseignantId: string;
@@ -58,6 +68,7 @@ export const Commission: React.FC<CommissionProps> = ({
   const [creneaux, setCreneaux] = useState<Creneau[]>([]);
   const [resultats, setResultats] = useState<Resultat[]>([]);
   const [pvs, setPvs] = useState<PV[]>([]);
+  const [seancesStatuts, setSeancesStatuts] = useState<Record<string, SeanceStatutRecord>>({});
   const [activePV, setActivePV] = useState<{ pv: PV; candidatId?: string; autoPrint?: boolean } | null>(null);
   const [pvDownloaded, setPvDownloaded] = useState<Record<string, boolean>>(() => {
     try {
@@ -114,19 +125,27 @@ export const Commission: React.FC<CommissionProps> = ({
   const [reopenMotif, setReopenMotif] = useState('');
   const [reopenError, setReopenError] = useState<string | null>(null);
 
+  // Modal Signaler un empêchement
+  const [empechementModalDate, setEmpechementModalDate] = useState<string | null>(null);
+  const [empechementMotif, setEmpechementMotif] = useState('');
+  const [empechementError, setEmpechementError] = useState<string | null>(null);
+
   // Chargement des données avec persistance localStorage et try/catch
   useEffect(() => {
     loadData();
     const handleSync = () => loadData();
     window.addEventListener('usmba_pvs_updated', handleSync);
+    window.addEventListener('usmba_seances_updated', handleSync);
     window.addEventListener('storage', handleSync);
     return () => {
       window.removeEventListener('usmba_pvs_updated', handleSync);
+      window.removeEventListener('usmba_seances_updated', handleSync);
       window.removeEventListener('storage', handleSync);
     };
   }, [enseignantId]);
 
   const loadData = () => {
+    setSeancesStatuts(getSeancesStatutsMap());
     // 1. Créneaux
     let allCreneaux: Creneau[] = [];
     try {
@@ -376,15 +395,28 @@ export const Commission: React.FC<CommissionProps> = ({
   };
 
   // Regroupement par date pour la section Séances
-  const seancesParDate = creneauxConfirmes.reduce((acc, c) => {
-    if (!acc[c.date]) {
-      acc[c.date] = [];
+  const allTeacherDates = new Set<string>();
+  creneauxConfirmes.forEach((c) => {
+    allTeacherDates.add(c.date);
+  });
+  pvs.forEach((p) => {
+    if (p.directeurId === enseignantId) {
+      allTeacherDates.add(p.date);
     }
-    acc[c.date].push(c);
+  });
+  Object.keys(seancesStatuts).forEach((key) => {
+    if (key.startsWith(`${enseignantId}_`)) {
+      const d = key.slice(`${enseignantId}_`.length);
+      allTeacherDates.add(d);
+    }
+  });
+
+  const seancesParDate = Array.from(allTeacherDates).reduce((acc, d) => {
+    acc[d] = creneaux.filter((c) => c.date === d);
     return acc;
   }, {} as Record<string, Creneau[]>);
 
-  const datesSeances = Object.keys(seancesParDate).sort();
+  const datesSeances = Array.from(allTeacherDates).sort();
 
   // Génération ou régénération d'une nouvelle version de PV
   const handleGeneratePV = (date: string, creneauxDate: Creneau[]) => {
@@ -596,6 +628,89 @@ export const Commission: React.FC<CommissionProps> = ({
     }
   };
 
+  // Signalement d'un empêchement avec motif obligatoire (5 caractères min.)
+  const handleConfirmEmpechement = (date: string) => {
+    const cleanMotif = (empechementMotif || '').trim();
+    if (cleanMotif.length < 5) {
+      setEmpechementError(fr.commission.modalEmpechementMotifError);
+      return;
+    }
+
+    const seanceKey = `${enseignantId}_${date}`;
+    const nowIso = new Date().toISOString();
+
+    // 1. Sauvegarder statut reportee
+    saveSeanceStatut(seanceKey, {
+      statutManuel: 'reportee',
+      motif: cleanMotif,
+      declarePar: enseignantNom,
+      declareLe: nowIso,
+    });
+    setSeancesStatuts((prev) => ({
+      ...prev,
+      [seanceKey]: {
+        statutManuel: 'reportee',
+        motif: cleanMotif,
+        declarePar: enseignantNom,
+        declareLe: nowIso,
+      },
+    }));
+
+    // 2. Notifier les candidats de la séance
+    const touchedCandidates = new Set<string>();
+    const sessionCreneaux = creneaux.filter((c) => c.date === date);
+    sessionCreneaux.forEach((c) => {
+      if (c.candidatId && !touchedCandidates.has(c.candidatId)) {
+        touchedCandidates.add(c.candidatId);
+        ajouterNotification({
+          destinataireId: c.candidatId,
+          texte: fr.commission.notifSeanceReportee
+            .replace('{date}', formatJJMM(date))
+            .replace('{motif}', cleanMotif),
+          type: 'action',
+        });
+      }
+    });
+
+    // 3. Rouvrir les créneaux
+    try {
+      const raw = localStorage.getItem('usmba_doctorat_creneaux');
+      let allC: Creneau[] = raw ? JSON.parse(raw) : [];
+      allC = allC.map((c) => {
+        if (c.enseignantId === enseignantId && c.date === date) {
+          return {
+            ...c,
+            statut: 'libre' as const,
+            candidatId: undefined,
+            dateReservation: undefined,
+            dateConfirmation: undefined,
+            relanceLe: undefined,
+          };
+        }
+        return c;
+      });
+      localStorage.setItem('usmba_doctorat_creneaux', JSON.stringify(allC));
+      setCreneaux(allC.filter((c) => c.enseignantId === enseignantId));
+      window.dispatchEvent(new CustomEvent('usmba_creneaux_updated'));
+    } catch {}
+
+    // 4. logEvent
+    logEvent(
+      { id: enseignantId, nom: enseignantNom, role: 'enseignant' },
+      fr.journalActions.seanceReportee,
+      `Séance du ${formatJJMM(date)}`,
+      cleanMotif
+    );
+
+    // 5. Toast feedback
+    setFeedback({ id: `emp-${date}`, text: fr.commission.toastEmpechementSuccess });
+    setTimeout(() => setFeedback(null), 3000);
+
+    setEmpechementModalDate(null);
+    setEmpechementMotif('');
+    setEmpechementError(null);
+  };
+
   const renderStatusBadgeResultat = (res: ResultatType) => {
     switch (res) {
       case 'ADMIS':
@@ -678,6 +793,13 @@ export const Commission: React.FC<CommissionProps> = ({
           {datesSeances.map((date) => {
             const creneauxDate = seancesParDate[date] || [];
             const existingPV = getLatestPVForDate(date);
+            const seanceKey = `${enseignantId}_${date}`;
+            const sessionPvs = pvs.filter((p) => p.date === date && p.directeurId === enseignantId);
+            const statutRecord = seancesStatuts[seanceKey];
+            const statutInfo = calculerStatutSeance(date, enseignantId, sessionPvs, statutRecord);
+            const isReportee = statutInfo.statut === 'reportee';
+            const isNonTenue = statutInfo.statut === 'non_tenue';
+
             const totalCount = creneauxDate.length;
             const evaluatedCount = creneauxDate.filter((c) => Boolean(getResultatForCreneau(c.id))).length;
             const allEvaluated = totalCount > 0 && evaluatedCount === totalCount;
@@ -763,9 +885,19 @@ export const Commission: React.FC<CommissionProps> = ({
                     </div>
                   </div>
 
-                  {/* Pastille d'état */}
+                  {/* Pastille d'état & Signaler un empêchement */}
                   <div className="flex items-center gap-2 flex-wrap">
-                    {isEnvoye ? (
+                    {isReportee ? (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-900 border border-amber-300">
+                        <Clock size={13} className="text-amber-700 shrink-0" />
+                        <span>{fr.commission.seanceBadgeReportee}</span>
+                      </span>
+                    ) : isNonTenue ? (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-100 text-rose-900 border border-rose-300">
+                        <XCircle size={13} className="text-rose-600 shrink-0" />
+                        <span>{fr.commission.seanceBadgeNonTenue}</span>
+                      </span>
+                    ) : isEnvoye ? (
                       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-sky-50 text-sky-800 border border-sky-300">
                         <Send size={13} className="text-sky-600 shrink-0" />
                         <span>{existingPV?.statut === 'publie' ? 'Publié' : 'Envoyé à la Structure'}</span>
@@ -800,6 +932,22 @@ export const Commission: React.FC<CommissionProps> = ({
                         <Clock size={13} className="text-slate-500 shrink-0" />
                         <span>Évaluation en cours</span>
                       </span>
+                    )}
+
+                    {/* Bouton Signaler un empêchement */}
+                    {!isReportee && !isNonTenue && !isEnvoye && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEmpechementModalDate(date);
+                          setEmpechementMotif('');
+                          setEmpechementError(null);
+                        }}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-lg transition cursor-pointer shadow-2xs"
+                      >
+                        <AlertTriangle size={12} className="text-amber-600 shrink-0" />
+                        <span>{fr.commission.btnSignalerEmpechement}</span>
+                      </button>
                     )}
                   </div>
                 </div>
@@ -840,6 +988,36 @@ export const Commission: React.FC<CommissionProps> = ({
                     );
                   })}
                 </div>
+
+                {/* Exception : séance reportée */}
+                {isReportee && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-900 space-y-1">
+                    <div className="flex items-center gap-1.5 font-bold">
+                      <Clock size={14} className="text-amber-700" />
+                      <span>{fr.commission.seanceReporteeNotice}</span>
+                    </div>
+                    {statutInfo.motif && (
+                      <p className="text-[11px] text-amber-800 italic">
+                        Motif : « {statutInfo.motif} »
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Exception : séance non tenue */}
+                {isNonTenue && (
+                  <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-xs text-rose-900 space-y-1">
+                    <div className="flex items-center gap-1.5 font-bold">
+                      <XCircle size={14} className="text-rose-600" />
+                      <span>{fr.commission.seanceNonTenueNotice}</span>
+                    </div>
+                    {statutInfo.motif && (
+                      <p className="text-[11px] text-rose-800 italic">
+                        Motif : « {statutInfo.motif} »
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {/* Exception : scan refusé */}
                 {existingPV?.scanStatut === 'refuse' && existingPV.scanMotifRefus && (
@@ -1192,7 +1370,12 @@ export const Commission: React.FC<CommissionProps> = ({
 
                 {/* 4. UN seul bouton d'action selon l'étape */}
                 <div className="pt-2 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  {!existingPV || existingPV.rouvertLe ? (
+                  {isReportee || isNonTenue ? (
+                    <div className="text-xs text-slate-600 italic flex items-center gap-2 py-1">
+                      <AlertCircle size={14} className="text-slate-400 shrink-0" />
+                      <span>{isReportee ? fr.commission.seanceReporteeNotice : fr.commission.seanceNonTenueNotice}</span>
+                    </div>
+                  ) : !existingPV || existingPV.rouvertLe ? (
                     /* Étape 1 / 2 : Générer le PV (ou Régénérer si rouvert) */
                     !allEvaluated ? (
                       <>
@@ -1416,6 +1599,65 @@ export const Commission: React.FC<CommissionProps> = ({
                         className="px-4 py-1.5 text-xs font-semibold text-white bg-amber-700 hover:bg-amber-800 rounded-lg shadow-xs transition cursor-pointer"
                       >
                         {fr.commission.btnConfirmReopen}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Modal de signalement d'empêchement */}
+                {empechementModalDate === date && (
+                  <div className="mt-3 p-4 bg-amber-50/70 border border-amber-300 rounded-2xl space-y-3">
+                    <div>
+                      <h5 className="text-xs font-bold text-amber-950 flex items-center gap-1.5">
+                        <AlertTriangle size={14} className="text-amber-700" />
+                        <span>{fr.commission.modalEmpechementTitre}</span>
+                      </h5>
+                      <p className="text-[11px] text-amber-800 mt-0.5">
+                        {fr.commission.modalEmpechementDesc}
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                        {fr.commission.modalEmpechementMotifLabel}
+                      </label>
+                      <input
+                        type="text"
+                        value={empechementMotif}
+                        onChange={(e) => {
+                          setEmpechementMotif(e.target.value);
+                          setEmpechementError(null);
+                        }}
+                        placeholder={fr.commission.modalEmpechementMotifPlaceholder}
+                        className="w-full text-xs p-2.5 rounded-xl border border-amber-300 bg-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                      />
+                    </div>
+
+                    {empechementError && (
+                      <div className="p-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold flex items-center gap-1.5">
+                        <AlertCircle size={14} className="shrink-0" />
+                        <span>{empechementError}</span>
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-end gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEmpechementModalDate(null);
+                          setEmpechementMotif('');
+                          setEmpechementError(null);
+                        }}
+                        className="px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-200 rounded-lg transition cursor-pointer"
+                      >
+                        {fr.common.cancel}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleConfirmEmpechement(date)}
+                        className="px-4 py-1.5 text-xs font-semibold text-white bg-amber-700 hover:bg-amber-800 rounded-lg shadow-xs transition cursor-pointer"
+                      >
+                        {fr.commission.btnConfirmerEmpechement}
                       </button>
                     </div>
                   </div>

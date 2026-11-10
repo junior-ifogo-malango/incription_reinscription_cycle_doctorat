@@ -219,10 +219,10 @@ export const CedReinscriptions: React.FC = () => {
           <div>
             <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wide flex items-center gap-2">
               <Clock size={16} className="text-amber-600" />
-              <span>{fr.reinscription.lateReportsSectionTitle}</span>
+              <span>{fr.reinscription.sectionEnRetardTitle}</span>
             </h3>
             <p className="text-[11px] text-slate-500 mt-0.5">
-              Dossiers 'soumis' ou 'avis_comite' sans décision après {SEUIL_HEURES}h.
+              {fr.reinscription.lateReportsSectionTitle}
             </p>
           </div>
           <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">

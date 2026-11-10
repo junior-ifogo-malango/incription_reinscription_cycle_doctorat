@@ -561,8 +561,8 @@ export default function App() {
     (c) => c.enseignantId === activeEnseignant.id
   );
 
-  // Alertes CED (> 48h en attente de confirmation)
-  const now = new Date('2026-10-28T04:24:00Z').getTime();
+  // Alertes CED (> 48h en attente de confirmation - Tableau d'exceptions)
+  const now = Date.now();
   const alertesCreneaux = creneaux.filter((c) => {
     if (c.statut === 'reserve' && c.dateReservation) {
       const reservationTime = new Date(c.dateReservation).getTime();
