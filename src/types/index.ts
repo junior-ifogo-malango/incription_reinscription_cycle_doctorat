@@ -296,6 +296,13 @@ export interface ApogeeFictifEntry {
 
 export type ResultatType = 'ADMIS' | 'LISTE_COMPLEMENTAIRE' | 'REFUSE';
 
+export interface CriteresEvaluation {
+  acquis?: number; /* 0 à 5 */
+  projet?: number; /* 0 à 5 */
+  methodo?: number; /* 0 à 5 */
+  oral?: number; /* 0 à 5 */
+}
+
 export interface Resultat {
   creneauId: string;
   candidatId: string;
@@ -303,6 +310,27 @@ export interface Resultat {
   resultat: ResultatType;
   motif?: string;
   saisiLe: string; /* ISO */
+  criteres?: CriteresEvaluation;
+  avis?: string;
+}
+
+export function calculerNoteResultat(res?: { note?: number; criteres?: CriteresEvaluation } | null): number {
+  if (!res) return 0;
+  if (
+    res.criteres &&
+    (res.criteres.acquis !== undefined ||
+      res.criteres.projet !== undefined ||
+      res.criteres.methodo !== undefined ||
+      res.criteres.oral !== undefined)
+  ) {
+    const total =
+      (res.criteres.acquis ?? 0) +
+      (res.criteres.projet ?? 0) +
+      (res.criteres.methodo ?? 0) +
+      (res.criteres.oral ?? 0);
+    return Math.round(total * 10) / 10;
+  }
+  return res.note !== undefined ? res.note : 0;
 }
 
 export type PVStatut = 'a_signer' | 'signe' | 'envoye' | 'publie' | 'original_recu' | 'approuve';
@@ -326,6 +354,8 @@ export interface PV {
   scanDeposeLe?: string;
   scanStatut?: 'en_attente' | 'valide' | 'refuse';
   scanMotifRefus?: string;
+  membres?: [string, string]; /* noms des 2 membres, optionnels */
+  coordonnateur?: string;
 }
 
 /* Module R : Réinscription */

@@ -20,8 +20,8 @@ import {
   AlertTriangle,
   FileCheck,
 } from 'lucide-react';
-import { Creneau, Resultat, ResultatType, PV, Candidat } from '../types';
-import { MOCK_CANDIDATS, INITIAL_CRENEAUX, getDirectorStructure, enrichirPVLecture } from '../data/mockData';
+import { Creneau, Resultat, ResultatType, PV, Candidat, calculerNoteResultat } from '../types';
+import { MOCK_CANDIDATS, INITIAL_CRENEAUX, getDirectorStructure, enrichirPVLecture, getComptes } from '../data/mockData';
 import { PVDocument } from './PVDocument';
 import { fr } from '../i18n/fr';
 import { logEvent } from '../utils/journal';
@@ -58,7 +58,7 @@ export const Commission: React.FC<CommissionProps> = ({
   const [creneaux, setCreneaux] = useState<Creneau[]>([]);
   const [resultats, setResultats] = useState<Resultat[]>([]);
   const [pvs, setPvs] = useState<PV[]>([]);
-  const [activePV, setActivePV] = useState<PV | null>(null);
+  const [activePV, setActivePV] = useState<{ pv: PV; candidatId?: string; autoPrint?: boolean } | null>(null);
   const [pvDownloaded, setPvDownloaded] = useState<Record<string, boolean>>(() => {
     try {
       const raw = localStorage.getItem('usmba_commission_pv_downloaded');
@@ -68,14 +68,42 @@ export const Commission: React.FC<CommissionProps> = ({
     }
   });
 
-  // Formulaire d'évaluation en cours par créneau
+  // Noms des 2 membres de commission par séance
+  const [seanceMembres, setSeanceMembres] = useState<Record<string, [string, string]>>(() => {
+    try {
+      const raw = localStorage.getItem('usmba_commission_seance_membres');
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  const handleMembreChange = (date: string, index: 0 | 1, value: string) => {
+    setSeanceMembres((prev) => {
+      const cur = prev[date] || ['', ''];
+      const updated: [string, string] = [
+        index === 0 ? value : cur[0],
+        index === 1 ? value : cur[1],
+      ];
+      const next = { ...prev, [date]: updated };
+      try {
+        localStorage.setItem('usmba_commission_seance_membres', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  };
+
+  // Formulaire d'évaluation en cours par créneau : 4 critères /5 + avis motivé
   const [editForms, setEditForms] = useState<
     Record<
       string,
       {
-        note: string;
+        acquis: string;
+        projet: string;
+        methodo: string;
+        oral: string;
         resultat: ResultatType;
-        motif: string;
+        avis: string;
         error?: string;
       }
     >
@@ -201,15 +229,64 @@ export const Commission: React.FC<CommissionProps> = ({
     return resultats.find((r) => r.creneauId === creneauId);
   };
 
+  // Validation et calcul automatique de la note globale sur 20 à partir des 4 critères /5
+  const getFormValidation = (form?: {
+    acquis: string;
+    projet: string;
+    methodo: string;
+    oral: string;
+    resultat: ResultatType;
+    avis: string;
+  }) => {
+    if (!form) return { isValid: false, reason: fr.commission.criteresInvalidesReason, total: null };
+
+    const parseVal = (v?: string) => {
+      if (!v) return null;
+      const trimmed = v.trim().replace(',', '.');
+      if (trimmed === '') return null;
+      const num = parseFloat(trimmed);
+      return !isNaN(num) && num >= 0 && num <= 5 ? num : null;
+    };
+
+    const nAcquis = parseVal(form.acquis);
+    const nProjet = parseVal(form.projet);
+    const nMethodo = parseVal(form.methodo);
+    const nOral = parseVal(form.oral);
+
+    if (nAcquis === null || nProjet === null || nMethodo === null || nOral === null) {
+      return { isValid: false, reason: fr.commission.criteresInvalidesReason, total: null };
+    }
+
+    const total = Math.round((nAcquis + nProjet + nMethodo + nOral) * 10) / 10;
+
+    // Avis motivé obligatoire (5 caractères min.) si Défavorable (REFUSE)
+    if (form.resultat === 'REFUSE') {
+      const cleanAvis = (form.avis || '').trim();
+      if (cleanAvis.length < 5) {
+        return { isValid: false, reason: fr.commission.avisMotiveRequiredReason, total };
+      }
+    }
+
+    return {
+      isValid: true,
+      reason: '',
+      total,
+      values: { acquis: nAcquis, projet: nProjet, methodo: nMethodo, oral: nOral },
+    };
+  };
+
   // Initialiser ou mettre à jour le formulaire d'évaluation pour un créneau
   const initFormForCreneau = (c: Creneau) => {
     const existing = getResultatForCreneau(c.id);
     setEditForms((prev) => ({
       ...prev,
       [c.id]: {
-        note: existing ? String(existing.note) : '',
+        acquis: existing?.criteres?.acquis !== undefined ? String(existing.criteres.acquis) : '',
+        projet: existing?.criteres?.projet !== undefined ? String(existing.criteres.projet) : '',
+        methodo: existing?.criteres?.methodo !== undefined ? String(existing.criteres.methodo) : '',
+        oral: existing?.criteres?.oral !== undefined ? String(existing.criteres.oral) : '',
         resultat: existing ? existing.resultat : 'ADMIS',
-        motif: existing?.motif || '',
+        avis: existing?.avis || existing?.motif || '',
       },
     }));
     setOpenForms((prev) => ({ ...prev, [c.id]: true }));
@@ -217,14 +294,17 @@ export const Commission: React.FC<CommissionProps> = ({
 
   const handleFieldChange = (
     creneauId: string,
-    field: 'note' | 'resultat' | 'motif',
+    field: 'acquis' | 'projet' | 'methodo' | 'oral' | 'resultat' | 'avis',
     value: string
   ) => {
     setEditForms((prev) => {
       const cur = prev[creneauId] || {
-        note: '',
+        acquis: '',
+        projet: '',
+        methodo: '',
+        oral: '',
         resultat: 'ADMIS',
-        motif: '',
+        avis: '',
       };
       return {
         ...prev,
@@ -239,46 +319,35 @@ export const Commission: React.FC<CommissionProps> = ({
 
   const handleSaveResultat = (creneau: Creneau) => {
     const form = editForms[creneau.id];
-    if (!form) return;
+    const validation = getFormValidation(form);
 
-    // Validation note : obligatoire, 0 à 20, 1 décimale
-    const cleanNoteStr = form.note.trim().replace(',', '.');
-    const noteNum = parseFloat(cleanNoteStr);
-    const validNoteFormat = /^(?:20(?:\.0)?|1?[0-9](?:\.[0-9])?)$/.test(cleanNoteStr);
-
-    if (isNaN(noteNum) || noteNum < 0 || noteNum > 20 || !validNoteFormat) {
+    if (!validation.isValid || !validation.values || validation.total === null) {
       setEditForms((prev) => ({
         ...prev,
         [creneau.id]: {
-          ...form,
-          error: fr.commission.noteInvalid,
+          ...(form || {
+            acquis: '',
+            projet: '',
+            methodo: '',
+            oral: '',
+            resultat: 'ADMIS',
+            avis: '',
+          }),
+          error: validation.reason,
         },
       }));
       return;
     }
 
-    // Validation motif : obligatoire et 5 caractères minimum seulement si Refusé
-    if (form.resultat === 'REFUSE') {
-      const cleanMotif = form.motif.trim();
-      if (!cleanMotif || cleanMotif.length < 5) {
-        setEditForms((prev) => ({
-          ...prev,
-          [creneau.id]: {
-            ...form,
-            error: fr.commission.motifRequired,
-          },
-        }));
-        return;
-      }
-    }
-
-    // Sauvegarde du résultat
+    // Sauvegarde du résultat avec note calculée (somme des 4 critères) et avis
     const nouveauResultat: Resultat = {
       creneauId: creneau.id,
       candidatId: creneau.candidatId || '',
-      note: Math.round(noteNum * 10) / 10,
+      note: validation.total,
       resultat: form.resultat,
-      motif: form.resultat === 'REFUSE' ? form.motif.trim() : undefined,
+      motif: form.resultat === 'REFUSE' ? form.avis.trim() : undefined,
+      avis: form.avis.trim() || undefined,
+      criteres: validation.values,
       saisiLe: new Date().toISOString(),
     };
 
@@ -291,11 +360,11 @@ export const Commission: React.FC<CommissionProps> = ({
       setResultats(filtered);
       logEvent({ id: enseignantId, nom: enseignantNom, role: 'enseignant' }, fr.journalActions.candidatureValidee, `Candidat ${creneau.candidatId || ''} (${form.resultat})`);
 
-      // Fermer le formulaire
+      // Fermer le formulaire pour ce candidat
       setOpenForms((prev) => ({ ...prev, [creneau.id]: false }));
       setFeedback({ id: creneau.id, text: fr.commission.resultSaved });
       setTimeout(() => setFeedback(null), 3000);
-    } catch (e) {
+    } catch {
       setEditForms((prev) => ({
         ...prev,
         [creneau.id]: {
@@ -321,7 +390,7 @@ export const Commission: React.FC<CommissionProps> = ({
   const handleGeneratePV = (date: string, creneauxDate: Creneau[]) => {
     const existing = getLatestPVForDate(date);
     if (existing && !existing.rouvertLe) {
-      setActivePV(existing);
+      setActivePV({ pv: existing });
       return;
     }
 
@@ -341,6 +410,35 @@ export const Commission: React.FC<CommissionProps> = ({
 
       const dirStructure = getDirectorStructure(enseignantId);
 
+      const dateMembres = seanceMembres[date] || existing?.membres || ['', ''];
+      const membresTuple: [string, string] = [dateMembres[0] || '', dateMembres[1] || ''];
+
+      let coordonnateurNom: string | undefined = undefined;
+      try {
+        const comptes = getComptes();
+        const matching = comptes.find(
+          (c) =>
+            (c.role === 'directeur_ced' || c.roles?.includes('structure')) &&
+            c.structure &&
+            dirStructure &&
+            (c.structure.toLowerCase().includes(dirStructure.toLowerCase()) ||
+              dirStructure.toLowerCase().includes(c.structure.toLowerCase())) &&
+            c.nom &&
+            !c.nom.toLowerCase().includes('direction')
+        );
+        if (matching?.nom) {
+          coordonnateurNom = matching.nom;
+        } else {
+          const fallbackCed = comptes.find(
+            (c) =>
+              (c.role === 'directeur_ced' || c.roles?.includes('structure')) &&
+              c.nom &&
+              !c.nom.toLowerCase().includes('direction')
+          );
+          if (fallbackCed?.nom) coordonnateurNom = fallbackCed.nom;
+        }
+      } catch {}
+
       if (existing && existing.rouvertLe) {
         // Régénération après réouverture : version = ancienne version + 1
         const nextVersion = (existing.version ?? 1) + 1;
@@ -357,6 +455,8 @@ export const Commission: React.FC<CommissionProps> = ({
           code: newCode,
           genereLe: nowIso,
           version: nextVersion,
+          membres: membresTuple,
+          coordonnateur: coordonnateurNom,
         };
 
         const idx = curPvs.findIndex((p) => p.id === existing.id);
@@ -367,7 +467,7 @@ export const Commission: React.FC<CommissionProps> = ({
         localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(curPvs));
         setPvs(curPvs.map(enrichirPVLecture));
         window.dispatchEvent(new CustomEvent('usmba_pvs_updated'));
-        setActivePV(newPV);
+        setActivePV({ pv: newPV });
       } else {
         // Première version
         const newPV: PV = {
@@ -380,19 +480,20 @@ export const Commission: React.FC<CommissionProps> = ({
           code: newCode,
           genereLe: nowIso,
           version: 1,
+          membres: membresTuple,
+          coordonnateur: coordonnateurNom,
         };
         curPvs.push(newPV);
         localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(curPvs));
         setPvs(curPvs.map(enrichirPVLecture));
         window.dispatchEvent(new CustomEvent('usmba_pvs_updated'));
-        setActivePV(newPV);
+        setActivePV({ pv: newPV });
       }
       logEvent({ id: enseignantId, nom: enseignantNom, role: 'enseignant' }, fr.journalActions.pvGenere, `PV séance du ${date} (Code ${newCode})`);
     } catch {}
   };
 
   const handleDownloadPV = (pv: PV) => {
-    setActivePV(pv);
     setPvDownloaded((prev) => {
       const next = { ...prev, [pv.date]: true, [pv.id]: true };
       try {
@@ -400,9 +501,7 @@ export const Commission: React.FC<CommissionProps> = ({
       } catch {}
       return next;
     });
-    setTimeout(() => {
-      window.print();
-    }, 250);
+    setActivePV({ pv, autoPrint: true });
   };
 
   const handleDeposerScanCommission = (pvId: string) => {
@@ -525,13 +624,15 @@ export const Commission: React.FC<CommissionProps> = ({
     }
   };
 
-  // Si affichage plein écran du PVDocument
+  // Si affichage plein écran du PVDocument (pour un candidat ou pour toute la séance)
   if (activePV) {
     return (
       <PVDocument
-        pv={activePV}
+        pv={activePV.pv}
         directeurNom={enseignantNom}
+        candidatId={activePV.candidatId}
         onClose={() => setActivePV(null)}
+        autoPrint={activePV.autoPrint}
       />
     );
   }
@@ -768,7 +869,7 @@ export const Commission: React.FC<CommissionProps> = ({
                   </div>
                 )}
 
-                {/* 3. Candidats de la séance : nom, note, résultat (formulaire tant que non enregistré, puis lecture seule) */}
+                {/* 3. Candidats de la séance : UNE ligne par candidat sous le suivi */}
                 <div className="space-y-2">
                   <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">
                     Candidats de la séance ({totalCount})
@@ -777,61 +878,195 @@ export const Commission: React.FC<CommissionProps> = ({
                     {creneauxDate.map((c) => {
                       const res = getResultatForCreneau(c.id);
                       const candidatNom = getCandidatNom(c.candidatId);
+                      const isFormOpen = openForms[c.id] || !res;
+                      const isLocked = Boolean(existingPV && !existingPV.rouvertLe);
+
                       const form = editForms[c.id] || {
-                        note: '',
-                        resultat: 'ADMIS',
-                        motif: '',
+                        acquis: res?.criteres?.acquis !== undefined ? String(res.criteres.acquis) : '',
+                        projet: res?.criteres?.projet !== undefined ? String(res.criteres.projet) : '',
+                        methodo: res?.criteres?.methodo !== undefined ? String(res.criteres.methodo) : '',
+                        oral: res?.criteres?.oral !== undefined ? String(res.criteres.oral) : '',
+                        resultat: res ? res.resultat : 'ADMIS',
+                        avis: res?.avis || res?.motif || '',
                       };
 
-                      return (
-                        <div key={c.id} className="p-3 space-y-2">
-                          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5">
-                            <div>
-                              <span className="font-bold text-xs text-slate-900">{candidatNom}</span>
-                              <span className="text-[11px] text-slate-400 ml-2 font-mono">({c.heure})</span>
-                            </div>
-                            {res && (
-                              <div className="flex items-center gap-2">
-                                <span className="font-mono font-bold text-xs text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                                  {res.note.toFixed(1)} / 20
-                                </span>
-                                {renderStatusBadgeResultat(res.resultat)}
-                              </div>
-                            )}
-                          </div>
+                      const validation = getFormValidation(form);
 
-                          {res ? (
-                            /* Mode lecture seule : résultat déjà enregistré */
-                            res.motif ? (
-                              <p className="text-[11px] text-slate-600 italic">
-                                <span className="font-semibold text-slate-700 not-italic">Motif du refus :</span> {res.motif}
-                              </p>
-                            ) : null
+                      return (
+                        <div key={c.id} className="p-3">
+                          {res && !isFormOpen ? (
+                            /* UNE ligne par candidat : nom, note /20, décision (icône + texte), bouton Voir */
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-xs text-slate-900">{candidatNom}</span>
+                                <span className="text-[11px] text-slate-400 font-mono">({c.heure})</span>
+                              </div>
+
+                              <div className="flex items-center gap-2.5 flex-wrap">
+                                {/* Note /20 */}
+                                <span className="font-mono font-bold text-xs text-emerald-900 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
+                                  {calculerNoteResultat(res).toFixed(1)} / 20
+                                </span>
+
+                                {/* Décision (icône + texte) */}
+                                {renderStatusBadgeResultat(res.resultat)}
+
+                                {/* Bouton Voir : ouvre PVDocument en page A4 pour ce candidat */}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const dateMembres = seanceMembres[date] || existingPV?.membres || ['', ''];
+                                    const sessionPV = existingPV || {
+                                      id: `pv-${date}`,
+                                      directeurId: enseignantId,
+                                      structure: getDirectorStructure(enseignantId),
+                                      date,
+                                      resultats: creneauxDate.map((cr) => getResultatForCreneau(cr.id)).filter(Boolean) as Resultat[],
+                                      statut: 'a_signer' as const,
+                                      code: generatePVCode(),
+                                      genereLe: new Date().toISOString(),
+                                      membres: [dateMembres[0] || '', dateMembres[1] || ''] as [string, string],
+                                    };
+                                    setActivePV({ pv: sessionPV, candidatId: c.candidatId });
+                                  }}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 rounded-lg border border-emerald-200 transition cursor-pointer"
+                                >
+                                  <Eye size={13} />
+                                  <span>{fr.commission.btnVoirCandidat}</span>
+                                </button>
+
+                                {/* Modifier (si PV non figé) */}
+                                {!isLocked && (
+                                  <button
+                                    type="button"
+                                    onClick={() => initFormForCreneau(c)}
+                                    className="p-1 text-slate-400 hover:text-slate-600 rounded transition cursor-pointer"
+                                    title={fr.commission.btnEditResult}
+                                  >
+                                    <Edit2 size={13} />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
                           ) : (
-                            /* Formulaire note/résultat uniquement tant que non enregistré */
-                            <div className="pt-2 p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2.5">
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                            /* Formulaire d'évaluation par candidat : 4 notes /5, total /20 calculé, décision, avis motivé */
+                            <div className="pt-1 space-y-3 bg-slate-50/70 p-3 rounded-xl border border-slate-200">
+                              <div className="flex items-center justify-between border-b border-slate-200 pb-2">
                                 <div>
-                                  <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                                    {fr.commission.noteLabel} *
-                                  </label>
-                                  <input
-                                    type="text"
-                                    inputMode="decimal"
-                                    value={form.note}
-                                    onChange={(e) => handleFieldChange(c.id, 'note', e.target.value)}
-                                    placeholder={fr.commission.notePlaceholder}
-                                    className="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-1 focus:ring-emerald-500 font-mono"
-                                  />
+                                  <span className="font-bold text-xs text-slate-900">{candidatNom}</span>
+                                  <span className="text-[11px] text-slate-400 ml-2 font-mono">({c.heure})</span>
                                 </div>
+                                {res && !isLocked && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setOpenForms((prev) => ({ ...prev, [c.id]: false }))}
+                                    className="text-[11px] text-slate-500 hover:text-slate-700"
+                                  >
+                                    {fr.common.cancel}
+                                  </button>
+                                )}
+                              </div>
+
+                              {/* 4 notes /5 */}
+                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                                <div>
+                                  <label className="block text-[11px] font-bold text-slate-700 mb-0.5">
+                                    {fr.commission.critereAcquisLabel}
+                                  </label>
+                                  <p className="text-[10px] text-slate-500 mb-1 leading-tight">
+                                    {fr.commission.critereAcquisDesc}
+                                  </p>
+                                  <div className="flex items-center gap-1.5">
+                                    <input
+                                      type="text"
+                                      inputMode="decimal"
+                                      value={form.acquis}
+                                      onChange={(e) => handleFieldChange(c.id, 'acquis', e.target.value)}
+                                      placeholder="0 à 5"
+                                      className="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white font-mono focus:ring-1 focus:ring-emerald-500"
+                                    />
+                                    <span className="text-xs text-slate-500 font-mono font-bold">/ 05</span>
+                                  </div>
+                                </div>
+
+                                <div>
+                                  <label className="block text-[11px] font-bold text-slate-700 mb-0.5">
+                                    {fr.commission.critereProjetLabel}
+                                  </label>
+                                  <p className="text-[10px] text-slate-500 mb-1 leading-tight">
+                                    {fr.commission.critereProjetDesc}
+                                  </p>
+                                  <div className="flex items-center gap-1.5">
+                                    <input
+                                      type="text"
+                                      inputMode="decimal"
+                                      value={form.projet}
+                                      onChange={(e) => handleFieldChange(c.id, 'projet', e.target.value)}
+                                      placeholder="0 à 5"
+                                      className="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white font-mono focus:ring-1 focus:ring-emerald-500"
+                                    />
+                                    <span className="text-xs text-slate-500 font-mono font-bold">/ 05</span>
+                                  </div>
+                                </div>
+
+                                <div>
+                                  <label className="block text-[11px] font-bold text-slate-700 mb-0.5">
+                                    {fr.commission.critereMethodoLabel}
+                                  </label>
+                                  <p className="text-[10px] text-slate-500 mb-1 leading-tight">
+                                    {fr.commission.critereMethodoDesc}
+                                  </p>
+                                  <div className="flex items-center gap-1.5">
+                                    <input
+                                      type="text"
+                                      inputMode="decimal"
+                                      value={form.methodo}
+                                      onChange={(e) => handleFieldChange(c.id, 'methodo', e.target.value)}
+                                      placeholder="0 à 5"
+                                      className="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white font-mono focus:ring-1 focus:ring-emerald-500"
+                                    />
+                                    <span className="text-xs text-slate-500 font-mono font-bold">/ 05</span>
+                                  </div>
+                                </div>
+
+                                <div>
+                                  <label className="block text-[11px] font-bold text-slate-700 mb-0.5">
+                                    {fr.commission.critereOralLabel}
+                                  </label>
+                                  <p className="text-[10px] text-slate-500 mb-1 leading-tight">
+                                    {fr.commission.critereOralDesc}
+                                  </p>
+                                  <div className="flex items-center gap-1.5">
+                                    <input
+                                      type="text"
+                                      inputMode="decimal"
+                                      value={form.oral}
+                                      onChange={(e) => handleFieldChange(c.id, 'oral', e.target.value)}
+                                      placeholder="0 à 5"
+                                      className="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white font-mono focus:ring-1 focus:ring-emerald-500"
+                                    />
+                                    <span className="text-xs text-slate-500 font-mono font-bold">/ 05</span>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Total calculé /20 et Décision */}
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                                <div className="flex items-center justify-between p-2.5 bg-white rounded-lg border border-slate-300">
+                                  <span className="text-xs font-bold text-slate-700">{fr.commission.totalNoteLabel} :</span>
+                                  <span className="font-mono font-black text-sm text-emerald-900 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                                    {validation.total !== null ? `${validation.total.toFixed(1)} / 20` : '— / 20'}
+                                  </span>
+                                </div>
+
                                 <div>
                                   <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                                    {fr.commission.resultatLabel} *
+                                    {fr.commission.decisionLabel} *
                                   </label>
                                   <select
                                     value={form.resultat}
                                     onChange={(e) => handleFieldChange(c.id, 'resultat', e.target.value as ResultatType)}
-                                    className="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-1 focus:ring-emerald-500 font-medium"
+                                    className="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white font-medium focus:ring-1 focus:ring-emerald-500"
                                   >
                                     <option value="ADMIS">{fr.commission.resultats.ADMIS}</option>
                                     <option value="LISTE_COMPLEMENTAIRE">{fr.commission.resultats.LISTE_COMPLEMENTAIRE}</option>
@@ -840,33 +1075,52 @@ export const Commission: React.FC<CommissionProps> = ({
                                 </div>
                               </div>
 
-                              {form.resultat === 'REFUSE' && (
-                                <div>
-                                  <label className="block text-[11px] font-bold text-rose-700 mb-1">
-                                    {fr.commission.motifLabel} *
-                                  </label>
-                                  <input
-                                    type="text"
-                                    value={form.motif}
-                                    onChange={(e) => handleFieldChange(c.id, 'motif', e.target.value)}
-                                    placeholder={fr.commission.motifPlaceholder}
-                                    className="w-full text-xs p-2 rounded-lg border border-rose-300 bg-white focus:outline-none focus:ring-1 focus:ring-rose-500"
-                                  />
-                                </div>
-                              )}
+                              {/* Avis motivé */}
+                              <div>
+                                <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                                  {fr.commission.avisMotiveLabel}{' '}
+                                  {form.resultat === 'REFUSE' ? (
+                                    <span className="text-rose-600 font-semibold">* ({fr.commission.avisMotiveRequired})</span>
+                                  ) : (
+                                    <span className="text-slate-400 font-normal">(facultatif)</span>
+                                  )}
+                                </label>
+                                <textarea
+                                  rows={2}
+                                  value={form.avis}
+                                  onChange={(e) => handleFieldChange(c.id, 'avis', e.target.value)}
+                                  placeholder={fr.commission.avisMotivePlaceholder}
+                                  className={`w-full text-xs p-2 rounded-lg border bg-white focus:outline-none focus:ring-1 ${
+                                    form.resultat === 'REFUSE' && form.avis.trim().length < 5
+                                      ? 'border-rose-300 focus:ring-rose-500'
+                                      : 'border-slate-300 focus:ring-emerald-500'
+                                  }`}
+                                />
+                              </div>
 
-                              {form.error && (
-                                <div className="p-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold flex items-center gap-1.5">
-                                  <AlertCircle size={14} className="shrink-0" />
-                                  <span>{form.error}</span>
-                                </div>
-                              )}
+                              {/* Bouton Enregistrer (grisé avec raison écrite sinon) */}
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 border-t border-slate-200">
+                                {!validation.isValid ? (
+                                  <div className="text-[11px] font-semibold text-rose-700 flex items-center gap-1.5">
+                                    <AlertCircle size={13} className="shrink-0 text-rose-600" />
+                                    <span>{validation.reason}</span>
+                                  </div>
+                                ) : (
+                                  <div className="text-[11px] font-semibold text-emerald-800 flex items-center gap-1.5">
+                                    <CheckCircle2 size={13} className="shrink-0 text-emerald-600" />
+                                    <span>{validation.total !== null ? `Note : ${validation.total.toFixed(1)}/20 · Prêt à enregistrer` : 'Prêt à enregistrer'}</span>
+                                  </div>
+                                )}
 
-                              <div className="flex justify-end pt-1">
                                 <button
                                   type="button"
+                                  disabled={!validation.isValid}
                                   onClick={() => handleSaveResultat(c)}
-                                  className="px-3.5 py-1.5 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg shadow-xs transition cursor-pointer"
+                                  className={`px-4 py-2 text-xs font-semibold rounded-lg transition ${
+                                    validation.isValid
+                                      ? 'text-white bg-emerald-700 hover:bg-emerald-800 shadow-xs cursor-pointer'
+                                      : 'text-slate-400 bg-slate-100 border border-slate-200 cursor-not-allowed'
+                                  }`}
                                 >
                                   {fr.commission.btnSaveResult}
                                 </button>
@@ -879,6 +1133,63 @@ export const Commission: React.FC<CommissionProps> = ({
                   </div>
                 </div>
 
+                {/* Membres de la commission pour cette séance (modifiables avant génération du PV) */}
+                {(() => {
+                  const curMembres = seanceMembres[date] || existingPV?.membres || ['', ''];
+                  const isMembresLocked = Boolean(existingPV && !existingPV.rouvertLe);
+
+                  return (
+                    <div className="p-3 bg-slate-50/80 border border-slate-200 rounded-xl space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-slate-700">
+                          {fr.commission.membresSectionTitle}
+                        </span>
+                        {isMembresLocked && (
+                          <span className="text-[11px] text-slate-500 italic">
+                            Enregistrés dans le PV
+                          </span>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div>
+                          <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                            {fr.commission.membre1Label}
+                          </label>
+                          <input
+                            type="text"
+                            disabled={isMembresLocked}
+                            value={curMembres[0] || ''}
+                            onChange={(e) => handleMembreChange(date, 0, e.target.value)}
+                            placeholder={fr.commission.membre1Placeholder}
+                            className={`w-full px-2.5 py-1.5 text-xs rounded-lg border transition ${
+                              isMembresLocked
+                                ? 'bg-slate-100 text-slate-500 border-slate-200 cursor-not-allowed'
+                                : 'bg-white text-slate-800 border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500'
+                            }`}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                            {fr.commission.membre2Label}
+                          </label>
+                          <input
+                            type="text"
+                            disabled={isMembresLocked}
+                            value={curMembres[1] || ''}
+                            onChange={(e) => handleMembreChange(date, 1, e.target.value)}
+                            placeholder={fr.commission.membre2Placeholder}
+                            className={`w-full px-2.5 py-1.5 text-xs rounded-lg border transition ${
+                              isMembresLocked
+                                ? 'bg-slate-100 text-slate-500 border-slate-200 cursor-not-allowed'
+                                : 'bg-white text-slate-800 border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500'
+                            }`}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {/* 4. UN seul bouton d'action selon l'étape */}
                 <div className="pt-2 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   {!existingPV || existingPV.rouvertLe ? (
@@ -889,14 +1200,31 @@ export const Commission: React.FC<CommissionProps> = ({
                           <AlertCircle size={14} className="text-amber-600 shrink-0" />
                           <span>Notes incomplètes : évaluez les {totalCount - evaluatedCount} candidat(s) restant(s)</span>
                         </div>
-                        <button
-                          type="button"
-                          disabled
-                          className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-xl bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed"
-                        >
-                          <FileSignature size={14} />
-                          <span>Générer le PV</span>
-                        </button>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <button
+                            type="button"
+                            disabled
+                            className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-xl bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed"
+                          >
+                            <FileSignature size={14} />
+                            <span>Générer le PV</span>
+                          </button>
+                          <div className="flex flex-col items-start sm:items-end gap-0.5">
+                            <button
+                              type="button"
+                              disabled
+                              className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed"
+                              title={fr.commission.genereDabordPV}
+                            >
+                              <Printer size={13} />
+                              <span>{fr.commission.btnTelechargerSeance}</span>
+                            </button>
+                            <span className="text-[10px] text-slate-500 font-medium flex items-center gap-1">
+                              <AlertCircle size={11} className="text-slate-400 shrink-0" />
+                              <span>{fr.commission.genereDabordPV}</span>
+                            </span>
+                          </div>
+                        </div>
                       </>
                     ) : (
                       <>
@@ -904,14 +1232,31 @@ export const Commission: React.FC<CommissionProps> = ({
                           <CheckCircle2 size={14} className="text-emerald-600 shrink-0" />
                           <span>Tous les entretiens sont évalués. Prêt pour la génération du PV.</span>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => handleGeneratePV(date, creneauxDate)}
-                          className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl shadow-xs transition cursor-pointer"
-                        >
-                          <FileSignature size={14} />
-                          <span>{existingPV?.rouvertLe ? fr.commission.btnRegeneratePV : 'Générer le PV'}</span>
-                        </button>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={() => handleGeneratePV(date, creneauxDate)}
+                            className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl shadow-xs transition cursor-pointer"
+                          >
+                            <FileSignature size={14} />
+                            <span>{existingPV?.rouvertLe ? fr.commission.btnRegeneratePV : 'Générer le PV'}</span>
+                          </button>
+                          <div className="flex flex-col items-start sm:items-end gap-0.5">
+                            <button
+                              type="button"
+                              disabled
+                              className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed"
+                              title={fr.commission.genereDabordPV}
+                            >
+                              <Printer size={13} />
+                              <span>{fr.commission.btnTelechargerSeance}</span>
+                            </button>
+                            <span className="text-[10px] text-slate-500 font-medium flex items-center gap-1">
+                              <AlertCircle size={11} className="text-slate-400 shrink-0" />
+                              <span>{fr.commission.genereDabordPV}</span>
+                            </span>
+                          </div>
+                        </div>
                       </>
                     )
                   ) : !isDownloaded ? (
@@ -922,14 +1267,19 @@ export const Commission: React.FC<CommissionProps> = ({
                         <span className="text-slate-400">•</span>
                         <span className="text-[11px] font-mono text-slate-500">Ref {(existingPV.code || '').slice(0, 4)}</span>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => handleDownloadPV(existingPV)}
-                        className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl shadow-xs transition cursor-pointer"
-                      >
-                        <Printer size={14} />
-                        <span>Télécharger le PV</span>
-                      </button>
+                      <div className="flex flex-col items-start sm:items-end gap-1">
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadPV(existingPV)}
+                          className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl shadow-xs transition cursor-pointer"
+                        >
+                          <Printer size={14} />
+                          <span>{fr.commission.btnTelechargerSeance}</span>
+                        </button>
+                        <p className="text-[11px] text-slate-500 font-medium">
+                          {fr.commission.indicationPdf}
+                        </p>
+                      </div>
                     </>
                   ) : !isScanDepose ? (
                     /* Étape 3 : Déposer le scan */
@@ -939,9 +1289,9 @@ export const Commission: React.FC<CommissionProps> = ({
                         <button
                           type="button"
                           onClick={() => handleDownloadPV(existingPV)}
-                          className="text-[11px] text-emerald-700 underline hover:text-emerald-800"
+                          className="text-[11px] text-emerald-700 underline hover:text-emerald-800 cursor-pointer"
                         >
-                          (Réimprimer)
+                          (Réimprimer la séance)
                         </button>
                       </div>
                       <label className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl shadow-xs transition cursor-pointer">
