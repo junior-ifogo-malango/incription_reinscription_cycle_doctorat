@@ -127,7 +127,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       isDemoPassword
     ) {
       logEvent(
-        { id: 'dir-ced', nom: 'Directeur CED', role: 'directeur_ced' },
+        { id: 'dir-ced', nom: 'Directeur de structure', role: 'directeur_ced' },
         fr.journalActions.connexion,
         cleanEmail
       );

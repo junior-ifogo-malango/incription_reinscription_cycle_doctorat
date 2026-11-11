@@ -126,6 +126,8 @@ export const ajouterNotification = (notif: {
   destinataireId: string;
   texte: string;
   type?: 'info' | 'action';
+  actionLabel?: string;
+  actionTab?: string;
 }): void => {
   try {
     const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('usmba_notifications') : null;
@@ -137,6 +139,8 @@ export const ajouterNotification = (notif: {
       date: new Date().toISOString(),
       lue: false,
       type: notif.type || 'info',
+      ...(notif.actionLabel ? { actionLabel: notif.actionLabel } : {}),
+      ...(notif.actionTab ? { actionTab: notif.actionTab } : {}),
     };
     const updated = [newNotif, ...list];
     if (typeof localStorage !== 'undefined') {

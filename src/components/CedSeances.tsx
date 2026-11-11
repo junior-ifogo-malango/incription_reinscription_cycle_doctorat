@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Send, CheckCircle2, Clock, AlertCircle, FileText, Award, MessageCircle, Mail, Upload, FileCheck, XCircle, AlertTriangle, Eye } from 'lucide-react';
-import { PV, Notification, Resultat } from '../types';
-import { getConnectedDirecteurId, getDirectorStructure, enrichirPVLecture } from '../data/mockData';
+import { Send, CheckCircle2, Clock, AlertCircle, FileText, Award, MessageCircle, Mail, Upload, FileCheck, XCircle, AlertTriangle, Eye, ChevronDown } from 'lucide-react';
+import { PV, Notification, Resultat, Compte } from '../types';
+import { getConnectedDirecteurId, getDirectorStructure, enrichirPVLecture, getComptes, formatDateJJMM } from '../data/mockData';
+import { storageService } from '../services/storage';
 import { fr } from '../i18n/fr';
 import { logEvent } from '../utils/journal';
 import {
@@ -63,7 +64,7 @@ export const publierResultatsPV = (pvId: string): { success: boolean; message?: 
 
     window.dispatchEvent(new CustomEvent('usmba_notifications_updated'));
     window.dispatchEvent(new CustomEvent('usmba_pvs_updated'));
-    logEvent({ id: 'dir-ced', nom: 'Structure CED', role: 'directeur_ced' }, fr.journalActions.resultatsPublies, `PV-${targetPv.date}-${(targetPv.code || '').slice(0, 4)}`);
+    logEvent({ id: 'dir-ced', nom: 'Directeur de structure', role: 'directeur_ced' }, fr.journalActions.resultatsPublies, `PV-${targetPv.date}-${(targetPv.code || '').slice(0, 4)}`);
 
     return { success: true };
   } catch (err) {
@@ -216,7 +217,7 @@ export const CedSeances: React.FC = () => {
         localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(curPvs));
         setPvs(curPvs.filter((p) => !p.remplaceePar).map(enrichirPVLecture));
         window.dispatchEvent(new CustomEvent('usmba_pvs_updated'));
-        logEvent({ id: 'dir-ced', nom: 'Structure CED', role: 'directeur_ced' }, fr.journalActions.scanPvRefuse, `PV-${curPvs[idx].date}-${(curPvs[idx].code || '').slice(0, 4)}`, motif);
+        logEvent({ id: 'dir-ced', nom: 'Directeur de structure', role: 'directeur_ced' }, fr.journalActions.scanPvRefuse, `PV-${curPvs[idx].date}-${(curPvs[idx].code || '').slice(0, 4)}`, motif);
         setMessage({ type: 'error', text: `Scan du PV refusé : ${motif}. Le PV repasse à À signer.` });
         setTimeout(() => setMessage(null), 4000);
       }
@@ -239,6 +240,79 @@ export const CedSeances: React.FC = () => {
     handleRefuserScan(refusModalPvId, cleanMotif);
     setRefusModalPvId(null);
     setRefusMotif('');
+  };
+
+  const [expandedPvIds, setExpandedPvIds] = useState<Record<string, boolean>>({});
+
+  const togglePvExpanded = (pvId: string) => {
+    setExpandedPvIds((prev) => ({ ...prev, [pvId]: !prev[pvId] }));
+  };
+
+  const getLieuForPv = (pv: PV): string => {
+    try {
+      const creneaux = storageService.getCreneaux();
+      for (const res of pv.resultats || []) {
+        if (res.creneauId) {
+          const c = creneaux.find((cr) => cr.id === res.creneauId);
+          if (c?.lieu) return c.lieu;
+        }
+      }
+      const cMatch = creneaux.find(
+        (cr) => cr.date === pv.date && cr.enseignantId === pv.directeurId && cr.lieu
+      );
+      if (cMatch?.lieu) return cMatch.lieu;
+      const cDate = creneaux.find((cr) => cr.date === pv.date && cr.lieu);
+      if (cDate?.lieu) return cDate.lieu;
+    } catch {}
+    return 'CED';
+  };
+
+  const getCandidatNomComplet = (candidatId: string): string => {
+    if (!candidatId) return fr.cedSeances.nonRenseigne;
+    const info = trouverCandidat(candidatId);
+    const nom = info?.nom?.trim();
+    if (!nom || nom.toLowerCase().includes('cand-') || nom.startsWith('Candidat (')) {
+      return fr.cedSeances.nonRenseigne;
+    }
+    return nom;
+  };
+
+  const formatDecision = (res?: string): { label: string; className: string } => {
+    if (res === 'ADMIS') {
+      return { label: fr.cedSeances.decisionAdmis, className: 'bg-emerald-50 text-emerald-800 border-emerald-200' };
+    }
+    if (res === 'LISTE_COMPLEMENTAIRE') {
+      return { label: fr.cedSeances.decisionListeAttente, className: 'bg-amber-50 text-amber-800 border-amber-200' };
+    }
+    if (res === 'REFUSE') {
+      return { label: fr.cedSeances.decisionRefuse, className: 'bg-rose-50 text-rose-800 border-rose-200' };
+    }
+    return { label: res || fr.cedSeances.nonRenseigne, className: 'bg-slate-50 text-slate-700 border-slate-200' };
+  };
+
+  const renderEtapeBadge = (pv: PV, isPublished: boolean) => {
+    if (isPublished) {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+          <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />
+          <span>{fr.cedSeances.etapePublie}</span>
+        </span>
+      );
+    }
+    if (pv.scanStatut === 'refuse') {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-50 text-rose-800 border border-rose-200">
+          <XCircle size={13} className="text-rose-600 shrink-0" />
+          <span>{fr.cedSeances.etapeScanRefuse}</span>
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-sky-50 text-sky-800 border border-sky-200">
+        <Clock size={13} className="text-sky-600 shrink-0" />
+        <span>{fr.cedSeances.etapeEnAttente}</span>
+      </span>
+    );
   };
 
   const formatDate = (isoString?: string) => {
@@ -312,268 +386,205 @@ export const CedSeances: React.FC = () => {
             const isDirecteurOfPv = Boolean(
               connectedDirecteurId && pv.directeurId && connectedDirecteurId === pv.directeurId
             );
-            const isEnvoyeNonPublie48h = Boolean(
-              pv.statut === 'envoye' &&
-              !isPublished &&
-              pv.envoyeLe &&
-              (Date.now() - new Date(pv.envoyeLe).getTime()) / (1000 * 60 * 60) > 48
-            );
+            const isExpanded = Boolean(expandedPvIds[pv.id]);
+            const lieu = getLieuForPv(pv);
+            const nbCandidats = pv.resultats?.length || 0;
 
             return (
               <div
                 key={pv.id}
-                className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3"
+                className="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden transition-all"
               >
-                {/* Exception 5 : PV envoyé non publié depuis plus de 48 h (visible de la Structure) */}
-                {isEnvoyeNonPublie48h && (
-                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-900 flex items-center gap-2 font-semibold">
-                    <Clock size={16} className="text-amber-600 shrink-0" />
-                    <span>{fr.cedSeances.exceptionEnvoyeNonPublie}</span>
+                {/* Carte repliée par défaut : « Séance du JJ/MM · lieu », nombre de candidats, étape en pastille texte + icône. Rien d'autre. */}
+                <button
+                  type="button"
+                  onClick={() => togglePvExpanded(pv.id)}
+                  className="w-full text-left p-4 flex items-center justify-between gap-3 hover:bg-slate-50 transition cursor-pointer select-none"
+                >
+                  <div className="flex items-center gap-2.5 flex-wrap min-w-0">
+                    <span className="text-xs sm:text-sm font-bold text-slate-900">
+                      Séance du {formatDateJJMM(pv.date)} · {lieu}
+                    </span>
+                    <span className="text-xs text-slate-500 font-medium">
+                      ({nbCandidats} {fr.cedSeances.candidatsCount})
+                    </span>
                   </div>
-                )}
-
-                <div className="flex items-start justify-between gap-2 flex-wrap">
-                  <div>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <FileText size={15} className="text-emerald-700" />
-                      <span className="text-xs font-bold text-slate-900 font-mono">
-                        PV-{pv.date}-{(pv.code || '').slice(0, 4)}
-                      </span>
-                      <span className="text-[11px] font-semibold text-slate-500 font-sans">
-                        (v{pv.version ?? 1})
-                      </span>
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
-                        {pv.structure || structureName}
-                      </span>
-                      {pv.statut === 'envoye' && !isPublished && (
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-50 text-sky-800 border border-sky-200">
-                          Envoyé par {pv.envoyePar || 'Directeur'}
-                        </span>
-                      )}
-                      {pv.scanStatut === 'refuse' && (
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-50 text-rose-800 border border-rose-200">
-                          Scan refusé
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-xs text-slate-600 mt-1">
-                      {fr.cedSeances.datePrefix} {pv.date} • {pv.resultats?.length || 0} {fr.cedSeances.candidatsCount} • Code : {pv.code}
-                    </p>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {renderEtapeBadge(pv, isPublished)}
+                    <ChevronDown
+                      size={18}
+                      className={`text-slate-400 transition-transform duration-200 ${
+                        isExpanded ? 'rotate-180 text-slate-700' : ''
+                      }`}
+                    />
                   </div>
+                </button>
 
-                  <div className="flex items-center gap-2 flex-wrap">
-                    {/* Voir le scan */}
-                    <button
-                      type="button"
-                      onClick={() => setScanModalPv(pv)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-sky-800 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-xl transition cursor-pointer"
-                    >
-                      <Eye size={13} />
-                      <span>{fr.cedSeances.btnVoirScan}</span>
-                    </button>
-
-                    {/* Refuser le scan (motif obligatoire, le PV repasse à 'a_signer') */}
-                    {!isPublished && (
-                      <button
-                        type="button"
-                        disabled={isDirecteurOfPv}
-                        onClick={() => !isDirecteurOfPv && handleOpenRefusModal(pv.id)}
-                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors ${
-                          isDirecteurOfPv
-                            ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
-                            : 'text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 cursor-pointer active:scale-98'
-                        }`}
-                      >
-                        <XCircle size={13} />
-                        <span>{fr.cedSeances.btnRefuserScan}</span>
-                      </button>
-                    )}
-
-                    {/* Publication résultats */}
-                    {isPublished ? (
-                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                        <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />
-                        <span>
-                          {fr.cedSeances.publishedOn} {formatDate(pv.publieLe)}
-                        </span>
-                      </span>
-                    ) : (
-                      <div className="flex flex-col items-end gap-1">
+                {/* Au clic : volet avec Voir le scan, Refuser le scan, case de conformité, Publier (grisé avec raison écrite) et la liste des candidats */}
+                {isExpanded && (
+                  <div className="border-t border-slate-100 p-4 space-y-4 bg-slate-50/50">
+                    {/* Barre d'actions */}
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-white p-3.5 rounded-xl border border-slate-200">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {/* Voir le scan */}
                         <button
                           type="button"
-                          disabled={isDirecteurOfPv || !conformiteMap[pv.id]}
-                          onClick={() => !isDirecteurOfPv && conformiteMap[pv.id] && handlePublier(pv.id)}
-                          className={`min-h-[36px] px-4 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors ${
-                            isDirecteurOfPv || !conformiteMap[pv.id]
-                              ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
-                              : 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer active:scale-98'
-                          }`}
+                          onClick={() => setScanModalPv(pv)}
+                          className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-sky-800 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-xl transition cursor-pointer min-h-[44px]"
                         >
-                          <Send size={13} />
-                          <span>{fr.cedSeances.btnPublier}</span>
+                          <Eye size={15} />
+                          <span>{fr.cedSeances.btnVoirScan}</span>
                         </button>
-                        {isDirecteurOfPv && (
-                          <p className="text-[11px] font-semibold text-amber-800 flex items-center gap-1 text-right max-w-xs">
-                            <AlertTriangle size={12} className="shrink-0 text-amber-600" />
-                            <span>{fr.cedSeances.conflitDirecteur}</span>
-                          </p>
+
+                        {/* Refuser le scan */}
+                        {!isPublished && (
+                          <button
+                            type="button"
+                            disabled={isDirecteurOfPv}
+                            onClick={() => !isDirecteurOfPv && handleOpenRefusModal(pv.id)}
+                            className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-colors min-h-[44px] ${
+                              isDirecteurOfPv
+                                ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
+                                : 'text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 cursor-pointer active:scale-98'
+                            }`}
+                          >
+                            <XCircle size={15} />
+                            <span>{fr.cedSeances.btnRefuserScan}</span>
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Publier (grisé avec raison écrite) */}
+                      {isPublished ? (
+                        <div className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                          <CheckCircle2 size={15} className="text-emerald-600 shrink-0" />
+                          <span>
+                            {fr.cedSeances.publishedOn} {formatDate(pv.publieLe)}
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col items-start sm:items-end gap-1">
+                          <button
+                            type="button"
+                            disabled={isDirecteurOfPv || !conformiteMap[pv.id]}
+                            onClick={() => !isDirecteurOfPv && conformiteMap[pv.id] && handlePublier(pv.id)}
+                            className={`min-h-[44px] px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+                              isDirecteurOfPv || !conformiteMap[pv.id]
+                                ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
+                                : 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer active:scale-98 shadow-xs'
+                            }`}
+                          >
+                            <Send size={15} />
+                            <span>{fr.cedSeances.btnPublier}</span>
+                          </button>
+                          {isDirecteurOfPv ? (
+                            <p className="text-[11px] font-semibold text-amber-800 flex items-center gap-1 text-left sm:text-right max-w-xs">
+                              <AlertTriangle size={13} className="shrink-0 text-amber-600" />
+                              <span>{fr.cedSeances.conflitDirecteur}</span>
+                            </p>
+                          ) : !conformiteMap[pv.id] ? (
+                            <p className="text-[11px] font-medium text-amber-800 text-left sm:text-right max-w-xs">
+                              {fr.cedSeances.raisonConformiteRequise}
+                            </p>
+                          ) : null}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Case de conformité obligatoire avant publication */}
+                    {!isPublished && (
+                      <div className="bg-white p-3 rounded-xl border border-slate-200 flex items-center justify-between gap-3 flex-wrap">
+                        <label className="flex items-center gap-2.5 text-xs font-semibold text-slate-700 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(conformiteMap[pv.id])}
+                            onChange={(e) =>
+                              setConformiteMap((prev) => ({ ...prev, [pv.id]: e.target.checked }))
+                            }
+                            className="w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 cursor-pointer"
+                          />
+                          <span>{fr.cedSeances.conformiteLabel}</span>
+                        </label>
+                        {!conformiteMap[pv.id] && !isDirecteurOfPv && (
+                          <span className="text-[11px] text-amber-800 font-medium">
+                            {fr.cedSeances.raisonConformiteRequise}
+                          </span>
                         )}
                       </div>
                     )}
-                  </div>
-                </div>
 
-                {/* Case de conformité obligatoire avant publication */}
-                {!isPublished && (
-                  <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-3">
-                    <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(conformiteMap[pv.id])}
-                        onChange={(e) =>
-                          setConformiteMap((prev) => ({ ...prev, [pv.id]: e.target.checked }))
-                        }
-                        className="w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 cursor-pointer"
-                      />
-                      <span>{fr.cedSeances.conformiteLabel}</span>
-                    </label>
-                    {!conformiteMap[pv.id] && !isDirecteurOfPv && (
-                      <span className="text-[10px] text-amber-800 font-medium">
-                        Cochez la case de conformité pour activer la publication
-                      </span>
-                    )}
-                  </div>
-                )}
-
-                {/* Liste succincte des résultats pour contrôle CED */}
-                <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 space-y-1.5">
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
-                    {pv.resultats.map((res, i) => (
-                      <div key={i} className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-lg border border-slate-200">
-                        <span className="font-medium text-slate-700">{res.candidatId}</span>
-                        <span
-                          className={`font-bold ${
-                            res.resultat === 'ADMIS'
-                              ? 'text-emerald-700'
-                              : res.resultat === 'LISTE_COMPLEMENTAIRE'
-                              ? 'text-amber-700'
-                              : 'text-rose-700'
-                          }`}
-                        >
-                          {res.resultat}
-                        </span>
+                    {/* Liste des candidats */}
+                    <div className="bg-white border border-slate-200 rounded-xl overflow-hidden divide-y divide-slate-100">
+                      <div className="bg-slate-50 px-3.5 py-2 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                        Candidats ({nbCandidats})
                       </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Ligne par candidat avec WhatsApp et E-mail (sur un PV publié) */}
-                {isPublished && (
-                  <div className="pt-3 border-t border-slate-100 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <h4 className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">
-                        {fr.messages.notifierCandidatsTitle}
-                      </h4>
-                    </div>
-
-                    <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden bg-white">
                       {pv.resultats.map((res, i) => {
+                        const candidatNom = getCandidatNomComplet(res.candidatId);
+                        const dec = formatDecision(res.resultat);
                         const candidatInfo = trouverCandidat(res.candidatId);
                         const resultatText = messageResultat();
-
-                        const hasValidTel = Boolean(
-                          candidatInfo.tel && normaliserTel(candidatInfo.tel)
-                        );
-                        const telError = !candidatInfo.tel
-                          ? fr.messages.missingPhone
-                          : !normaliserTel(candidatInfo.tel)
-                          ? fr.messages.invalidPhone
-                          : null;
-
-                        const hasValidEmail = Boolean(
-                          candidatInfo.email && isEmailValide(candidatInfo.email)
-                        );
-                        const emailError = !candidatInfo.email
-                          ? fr.messages.missingEmail
-                          : !isEmailValide(candidatInfo.email)
-                          ? fr.messages.invalidEmail
-                          : null;
-
+                        const hasValidTel = Boolean(candidatInfo.tel && normaliserTel(candidatInfo.tel));
+                        const telError = !candidatInfo.tel ? fr.messages.missingPhone : !normaliserTel(candidatInfo.tel) ? fr.messages.invalidPhone : null;
+                        const hasValidEmail = Boolean(candidatInfo.email && isEmailValide(candidatInfo.email));
+                        const emailError = !candidatInfo.email ? fr.messages.missingEmail : !isEmailValide(candidatInfo.email) ? fr.messages.invalidEmail : null;
                         const waUrl = lienWhatsApp(candidatInfo.tel, resultatText);
-                        const mailUrl = lienMail(
-                          candidatInfo.email,
-                          fr.messages.resultatSubject,
-                          resultatText
-                        );
+                        const mailUrl = lienMail(candidatInfo.email, fr.messages.resultatSubject, resultatText);
 
                         return (
                           <div
                             key={i}
-                            className="p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-white hover:bg-slate-50 transition-colors"
+                            className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-50 transition-colors"
                           >
-                            <div>
-                              <p className="text-xs font-bold text-slate-900">
-                                {candidatInfo.nom || res.candidatId}
-                              </p>
-                              <p className="text-[11px] text-slate-500 font-mono">
-                                {candidatInfo.tel || fr.messages.missingPhone} • {candidatInfo.email || fr.messages.missingEmail}
-                              </p>
+                            <div className="space-y-0.5">
+                              <p className="text-xs font-bold text-slate-900">{candidatNom}</p>
+                              {isPublished && (
+                                <p className="text-[11px] text-slate-500 font-mono">
+                                  {candidatInfo.tel || fr.messages.missingPhone} • {candidatInfo.email || fr.messages.missingEmail}
+                                </p>
+                              )}
                             </div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold border ${dec.className}`}>
+                                {dec.label}
+                              </span>
 
-                            <div className="flex items-start gap-2 flex-wrap">
-                              {/* WhatsApp */}
-                              <div className="flex flex-col items-start">
-                                <button
-                                  type="button"
-                                  disabled={!hasValidTel}
-                                  onClick={() => waUrl && ouvrirLien(waUrl)}
-                                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors ${
-                                    hasValidTel
-                                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer shadow-xs active:scale-98'
-                                      : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
-                                  }`}
-                                >
-                                  <MessageCircle size={13} className={hasValidTel ? 'text-white' : 'text-slate-400'} />
-                                  <span>{fr.messages.btnWhatsApp}</span>
-                                </button>
-                                {!hasValidTel && (
-                                  <span className="text-[10px] text-rose-600 font-medium mt-0.5">
-                                    {telError}
-                                  </span>
-                                )}
-                              </div>
-
-                              {/* E-mail */}
-                              <div className="flex flex-col items-start">
-                                <button
-                                  type="button"
-                                  disabled={!hasValidEmail}
-                                  onClick={() => mailUrl && ouvrirLien(mailUrl)}
-                                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors ${
-                                    hasValidEmail
-                                      ? 'bg-sky-600 hover:bg-sky-700 text-white cursor-pointer shadow-xs active:scale-98'
-                                      : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
-                                  }`}
-                                >
-                                  <Mail size={13} className={hasValidEmail ? 'text-white' : 'text-slate-400'} />
-                                  <span>{fr.messages.btnEmail}</span>
-                                </button>
-                                {!hasValidEmail && (
-                                  <span className="text-[10px] text-rose-600 font-medium mt-0.5">
-                                    {emailError}
-                                  </span>
-                                )}
-                              </div>
+                              {isPublished && (
+                                <div className="flex items-center gap-1.5 ml-1">
+                                  <button
+                                    type="button"
+                                    disabled={!hasValidTel}
+                                    onClick={() => waUrl && ouvrirLien(waUrl)}
+                                    title={telError || ''}
+                                    className={`min-h-[36px] px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors ${
+                                      hasValidTel
+                                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer shadow-xs active:scale-98'
+                                        : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
+                                    }`}
+                                  >
+                                    <MessageCircle size={13} />
+                                    <span>WhatsApp</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={!hasValidEmail}
+                                    onClick={() => mailUrl && ouvrirLien(mailUrl)}
+                                    title={emailError || ''}
+                                    className={`min-h-[36px] px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors ${
+                                      hasValidEmail
+                                        ? 'bg-sky-600 hover:bg-sky-700 text-white cursor-pointer shadow-xs active:scale-98'
+                                        : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
+                                    }`}
+                                  >
+                                    <Mail size={13} />
+                                    <span>E-mail</span>
+                                  </button>
+                                </div>
+                              )}
                             </div>
                           </div>
                         );
                       })}
                     </div>
-
-                    {/* Mention discrète sous les boutons */}
-                    <p className="text-[10px] text-slate-500 italic px-1">
-                      {fr.messages.disclaimer}
-                    </p>
                   </div>
                 )}
               </div>

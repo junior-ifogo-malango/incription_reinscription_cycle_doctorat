@@ -13,8 +13,18 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { Rapport } from '../types';
-import { INITIAL_RAPPORTS, getConnectedDirecteurId } from '../data/mockData';
+import {
+  INITIAL_RAPPORTS,
+  getConnectedDirecteurId,
+  formatDateJJMM,
+  INITIAL_ENSEIGNANTS,
+  DEMO_DOCTORANT_NADIA,
+  MOCK_CANDIDATS,
+  getComptes,
+} from '../data/mockData';
 import { fr } from '../i18n/fr';
+import { logEvent } from '../utils/journal';
+import { ajouterNotification } from '../utils/messages';
 
 const STORAGE_KEY_RAPPORTS = 'usmba_doctorat_rapports';
 
@@ -87,7 +97,7 @@ export const CedReinscriptions: React.FC = () => {
             ...(r.chronologie || []),
             {
               date: todayStr,
-              acteur: 'Direction CED / Établissement',
+              acteur: 'Directeur de structure / Établissement',
               action: 'Validation définitive de la réinscription doctorale',
             },
           ],
@@ -116,7 +126,7 @@ export const CedReinscriptions: React.FC = () => {
           commentaires: [
             ...(r.commentaires || []),
             {
-              auteur: 'Direction CED',
+              auteur: 'Directeur de structure',
               date: todayStr,
               texte: `Rectification demandée : ${motif}`,
             },
@@ -125,7 +135,7 @@ export const CedReinscriptions: React.FC = () => {
             ...(r.chronologie || []),
             {
               date: todayStr,
-              acteur: 'Direction CED',
+              acteur: 'Directeur de structure',
               action: `Dossier renvoyé pour rectification : ${motif}`,
             },
           ],
@@ -168,7 +178,7 @@ export const CedReinscriptions: React.FC = () => {
             ...(r.chronologie || []),
             {
               date: todayStr,
-              acteur: 'Direction CED',
+              acteur: 'Directeur de structure',
               action: 'Relance administrative simulée transmise',
             },
           ],
@@ -179,8 +189,155 @@ export const CedReinscriptions: React.FC = () => {
     saveList(updated, fr.reinscription.relanceReportToast);
   };
 
-  // Filtrer les rapports à traiter par le CED : statut 'avis_comite' (ou 'valide_ced')
-  const comiteReports = rapports.filter((r) => r.statut === 'avis_comite' || r.statut === 'valide_ced');
+  const getDoctorantNom = (docId?: string): string => {
+    if (!docId) return fr.reinscription.nonRenseigne;
+    if (docId === 'doc-nadia') return DEMO_DOCTORANT_NADIA.nom;
+    if (docId === 'doc-tariq') return 'Tariq Mansouri';
+    try {
+      const rawCand = localStorage.getItem('usmba_candidats');
+      if (rawCand) {
+        const cands: { id: string; nom: string }[] = JSON.parse(rawCand);
+        const found = cands.find((c) => c.id === docId);
+        if (found?.nom?.trim() && !found.nom.startsWith('cand-') && !found.nom.startsWith('doc-')) {
+          return found.nom;
+        }
+      }
+    } catch {}
+    const cand = MOCK_CANDIDATS.find((c) => c.id === docId);
+    if (cand?.nom?.trim() && !cand.nom.startsWith('cand-') && !cand.nom.startsWith('doc-')) {
+      return cand.nom;
+    }
+    const compte = getComptes().find((c) => c.id === docId);
+    if (compte?.nom?.trim() && !compte.nom.startsWith('cand-') && !compte.nom.startsWith('doc-')) {
+      return compte.nom;
+    }
+    return fr.reinscription.nonRenseigne;
+  };
+
+  const getEncadrantNom = (ensId?: string): string => {
+    if (!ensId) return fr.reinscription.nonRenseigne;
+    try {
+      const rawEns = localStorage.getItem('usmba_enseignants');
+      if (rawEns) {
+        const ensList: { id: string; nom: string }[] = JSON.parse(rawEns);
+        const found = ensList.find((e) => e.id === ensId);
+        if (found?.nom?.trim() && !found.nom.startsWith('ens-')) return found.nom;
+      }
+    } catch {}
+    const ens = INITIAL_ENSEIGNANTS.find((e) => e.id === ensId);
+    if (ens?.nom?.trim() && !ens.nom.startsWith('ens-')) return ens.nom;
+    const compte = getComptes().find((c) => c.id === ensId);
+    if (compte?.nom?.trim() && !compte.nom.startsWith('ens-')) return compte.nom;
+    return fr.reinscription.nonRenseigne;
+  };
+
+  const handleRelancerMembreComite = (reportId: string, memberIdx: number) => {
+    const target = rapports.find((r) => r.id === reportId);
+    if (!target || !target.comite || !target.comite[memberIdx]) return;
+    const member = target.comite[memberIdx];
+
+    const todayStr = new Date().toLocaleDateString('fr-FR');
+    const nowIso = new Date().toISOString();
+    const docNom = getDoctorantNom(target.doctorantId);
+
+    ajouterNotification({
+      destinataireId: member.code || member.membre,
+      texte: fr.reinscription.notifRelanceComite.replace('{doctorant}', docNom),
+      type: 'action',
+      actionLabel: 'Voter',
+      actionTab: 'vote_comite',
+    });
+
+    logEvent(
+      { id: 'dir-ced', nom: 'Directeur de structure', role: 'directeur_ced' },
+      fr.journalActions.relanceMembreComite,
+      member.membre,
+      `Rapport de ${docNom} (${target.titre})`
+    );
+
+    const updated = rapports.map((r) => {
+      if (r.id === reportId && r.comite) {
+        const updatedComite = r.comite.map((v, i) => {
+          if (i === memberIdx) {
+            return { ...v, relanceLe: nowIso };
+          }
+          return v;
+        });
+        return {
+          ...r,
+          comite: updatedComite,
+          chronologie: [
+            ...(r.chronologie || []),
+            {
+              date: todayStr,
+              acteur: 'Directeur de structure',
+              action: `Relance envoyée à ${member.membre} pour avis comité`,
+            },
+          ],
+        };
+      }
+      return r;
+    });
+
+    saveList(updated, fr.reinscription.relanceMembreToast);
+  };
+
+  const handleRelancerEncadrant = (reportId: string) => {
+    const target = rapports.find((r) => r.id === reportId);
+    if (!target) return;
+
+    if (connectedDirecteurId && target.encadrantId === connectedDirecteurId) {
+      setErrorMsg(fr.exceptions.conflitDirecteur);
+      setTimeout(() => setErrorMsg(null), 4000);
+      return;
+    }
+
+    const todayStr = new Date().toLocaleDateString('fr-FR');
+    const nowIso = new Date().toISOString();
+    const docNom = getDoctorantNom(target.doctorantId);
+    const ensNom = getEncadrantNom(target.encadrantId);
+
+    ajouterNotification({
+      destinataireId: target.encadrantId,
+      texte: fr.reinscription.notifRelanceEncadrant.replace('{doctorant}', docNom),
+      type: 'action',
+      actionLabel: 'Valider',
+      actionTab: 'dossier',
+    });
+
+    logEvent(
+      { id: 'dir-ced', nom: 'Directeur de structure', role: 'directeur_ced' },
+      fr.journalActions.relanceEncadrantReinscription,
+      ensNom,
+      `Rapport de ${docNom} (${target.titre})`
+    );
+
+    const updated = rapports.map((r) => {
+      if (r.id === reportId) {
+        return {
+          ...r,
+          relanceLe: nowIso,
+          relanceEncadrantLe: nowIso,
+          chronologie: [
+            ...(r.chronologie || []),
+            {
+              date: todayStr,
+              acteur: 'Directeur de structure',
+              action: `Relance envoyée à l'encadrant (${ensNom}) pour validation`,
+            },
+          ],
+        };
+      }
+      return r;
+    });
+
+    saveList(updated, fr.reinscription.relanceEncadrantToast);
+  };
+
+  // Filtrer les rapports à traiter par le CED : tous les dossiers actifs
+  const comiteReports = rapports.filter(
+    (r) => r.statut === 'soumis' || r.statut === 'avis_comite' || r.statut === 'valide_ced' || r.statut === 'a_corriger'
+  );
 
   return (
     <div className="space-y-4">
@@ -237,15 +394,6 @@ export const CedReinscriptions: React.FC = () => {
         ) : (
           <div className="space-y-2.5">
             {rapportsEnRetard.map((r) => {
-              const diffHours = r.soumisLe
-                ? Math.max(0, Math.floor((now - new Date(r.soumisLe).getTime()) / (1000 * 60 * 60)))
-                : 0;
-
-              const waitingWho =
-                r.statut === 'soumis'
-                  ? fr.reinscription.waitingEncadrant
-                  : fr.reinscription.waitingComite;
-
               const isDirecteurOfRapport = Boolean(
                 connectedDirecteurId && r.encadrantId && connectedDirecteurId === r.encadrantId
               );
@@ -255,47 +403,31 @@ export const CedReinscriptions: React.FC = () => {
                   key={r.id}
                   className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
                 >
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-bold text-slate-900">{r.titre}</span>
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-white border border-slate-200 text-slate-700">
-                        {r.annee}ᵉ année
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-slate-500">
-                      Doctorant : <span className="font-semibold text-slate-700">{r.doctorantId}</span> • {fr.reinscription.waitingPrefix} <span className="font-bold text-amber-800">{waitingWho}</span>
-                    </p>
-                    <div className="flex items-center gap-2 pt-0.5">
-                      <span className="text-[11px] font-semibold text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded">
-                        {fr.reinscription.timeElapsed} {diffHours} h
-                      </span>
-                      {r.relanceLe && (
-                        <span className="text-[10px] text-emerald-700 font-medium">
-                          Relancé le {new Date(r.relanceLe).toLocaleDateString('fr-FR')}
-                        </span>
-                      )}
-                    </div>
-                  </div>
+                  <span className="font-bold text-slate-900 line-clamp-2">{r.titre}</span>
 
-                  <div className="flex flex-col items-end gap-1 shrink-0">
-                    <button
-                      type="button"
-                      disabled={isDirecteurOfRapport}
-                      onClick={() => !isDirecteurOfRapport && handleRelancerRapport(r.id)}
-                      className={`self-end sm:self-center px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-xs shrink-0 ${
-                        isDirecteurOfRapport
-                          ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
-                          : 'bg-amber-600 hover:bg-amber-700 text-white cursor-pointer active:scale-98'
-                      }`}
-                    >
-                      <Send size={13} />
-                      <span>{fr.reinscription.btnRelancerReport}</span>
-                    </button>
-                    {isDirecteurOfRapport && (
-                      <p className="text-[11px] font-semibold text-amber-800 flex items-center gap-1 text-right max-w-[200px]">
-                        <AlertTriangle size={12} className="shrink-0 text-amber-600" />
-                        <span>{fr.exceptions.conflitDirecteur}</span>
-                      </p>
+                  <div className="shrink-0 self-end sm:self-center">
+                    {r.relanceLe ? (
+                      <button
+                        type="button"
+                        disabled
+                        className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-200 text-slate-500 border border-slate-300 cursor-not-allowed shrink-0 min-h-[44px] flex items-center justify-center gap-1.5"
+                      >
+                        <span>Relancé le {formatDateJJMM(r.relanceLe)}</span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={isDirecteurOfRapport}
+                        onClick={() => !isDirecteurOfRapport && handleRelancerRapport(r.id)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-xs shrink-0 min-h-[44px] ${
+                          isDirecteurOfRapport
+                            ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
+                            : 'bg-amber-600 hover:bg-amber-700 text-white cursor-pointer active:scale-98'
+                        }`}
+                      >
+                        <Send size={13} />
+                        <span>{fr.reinscription.btnRelancerReport}</span>
+                      </button>
                     )}
                   </div>
                 </div>
@@ -322,6 +454,11 @@ export const CedReinscriptions: React.FC = () => {
             const isAlreadyValidated = report.statut === 'valide_ced';
             const isExpanded = expandedId === report.id;
             const motifInput = rectifMotifs[report.id] || '';
+            const isDirecteurOfRapport = Boolean(
+              connectedDirecteurId && report.encadrantId && connectedDirecteurId === report.encadrantId
+            );
+            const isEnAttenteEncadrant = report.statut === 'soumis';
+            const isEncadrantRelance = Boolean((report as any).relanceEncadrantLe || report.relanceLe);
 
             return (
               <div
@@ -340,7 +477,7 @@ export const CedReinscriptions: React.FC = () => {
                       </span>
                     </div>
                     <p className="text-xs text-slate-600 mt-1">
-                      Doctorant : <span className="font-semibold">{report.doctorantId}</span> • Encadrant : <span className="font-semibold">{report.encadrantId}</span>
+                      Doctorant : <span className="font-semibold text-slate-900">{getDoctorantNom(report.doctorantId)}</span> • Encadrant : <span className="font-semibold text-slate-900">{getEncadrantNom(report.encadrantId)}</span>
                     </p>
                   </div>
 
@@ -350,6 +487,36 @@ export const CedReinscriptions: React.FC = () => {
                         <CheckCircle2 size={13} className="text-emerald-700" />
                         <span>Réinscription validée</span>
                       </span>
+                    ) : isEnAttenteEncadrant ? (
+                      <div className="flex items-center gap-2">
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200">
+                          <Clock size={13} className="text-amber-600" />
+                          <span>{fr.reinscription.etapeEnAttenteEncadrant}</span>
+                        </span>
+                        {isEncadrantRelance ? (
+                          <button
+                            type="button"
+                            disabled
+                            className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-100 text-slate-500 border border-slate-200 cursor-not-allowed"
+                          >
+                            <span>Relancé le {formatDateJJMM((report as any).relanceEncadrantLe || report.relanceLe)}</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={isDirecteurOfRapport}
+                            onClick={() => !isDirecteurOfRapport && handleRelancerEncadrant(report.id)}
+                            className={`px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-xs ${
+                              isDirecteurOfRapport
+                                ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
+                                : 'bg-amber-600 hover:bg-amber-700 text-white cursor-pointer active:scale-98'
+                            }`}
+                          >
+                            <Send size={12} />
+                            <span>Relancer</span>
+                          </button>
+                        )}
+                      </div>
                     ) : (
                       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
                         <Clock size={13} className="text-indigo-600" />
@@ -369,47 +536,73 @@ export const CedReinscriptions: React.FC = () => {
                 </div>
 
                 {/* LES 3 AVIS DU COMITÉ DE THÈSE */}
-                <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 space-y-2">
-                  <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-slate-600">
-                    <span>{fr.reinscription.comiteVotesSummaryTitle}</span>
-                    <span className="font-bold text-slate-800">
-                      {favorableCount}/3 favorables
-                    </span>
-                  </div>
+                {votes.length > 0 && (
+                  <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 space-y-2">
+                    <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-slate-600">
+                      <span>{fr.reinscription.comiteVotesSummaryTitle}</span>
+                      <span className="font-bold text-slate-800">
+                        {favorableCount}/3 favorables
+                      </span>
+                    </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                    {votes.map((vote, idx) => (
-                      <div
-                        key={idx}
-                        className="bg-white p-2.5 rounded-lg border border-slate-200 text-xs space-y-1"
-                      >
-                        <p className="font-semibold text-slate-900 truncate" title={vote.membre}>
-                          {vote.membre}
-                        </p>
-                        <div className="flex items-center justify-between">
-                          {vote.avis === 'FAVORABLE' ? (
-                            <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                              Favorable
-                            </span>
-                          ) : vote.avis === 'DEFAVORABLE' ? (
-                            <span className="text-[11px] font-bold text-rose-700 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
-                              Défavorable
-                            </span>
-                          ) : (
-                            <span className="text-[11px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
-                              En attente
-                            </span>
-                          )}
-                        </div>
-                        {vote.commentaire && (
-                          <p className="text-[10px] text-slate-600 italic line-clamp-2">
-                            « {vote.commentaire} »
-                          </p>
-                        )}
-                      </div>
-                    ))}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      {votes.map((vote, idx) => {
+                        const isEnAttente = !vote.avis;
+                        const relanceMembreDate = (vote as any).relanceLe;
+
+                        return (
+                          <div
+                            key={idx}
+                            className="bg-white p-2.5 rounded-lg border border-slate-200 text-xs space-y-1.5"
+                          >
+                            <p className="font-semibold text-slate-900 truncate" title={vote.membre}>
+                              {vote.membre}
+                            </p>
+                            <div className="flex items-center justify-between gap-1 flex-wrap">
+                              {vote.avis === 'FAVORABLE' ? (
+                                <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                                  Favorable
+                                </span>
+                              ) : vote.avis === 'DEFAVORABLE' ? (
+                                <span className="text-[11px] font-bold text-rose-700 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+                                  Défavorable
+                                </span>
+                              ) : (
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="text-[11px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
+                                    En attente
+                                  </span>
+                                  {relanceMembreDate ? (
+                                    <button
+                                      type="button"
+                                      disabled
+                                      className="text-[10px] font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-500 border border-slate-200 cursor-not-allowed"
+                                    >
+                                      Relancé le {formatDateJJMM(relanceMembreDate)}
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRelancerMembreComite(report.id, idx)}
+                                      className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-600 hover:bg-amber-700 text-white transition cursor-pointer shadow-xs active:scale-98"
+                                    >
+                                      Relancer
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                            {vote.commentaire && (
+                              <p className="text-[10px] text-slate-600 italic line-clamp-2">
+                                « {vote.commentaire} »
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
+                )}
 
                 {/* DÉTAILS DÉPLIABLES */}
                 {isExpanded && (
@@ -438,8 +631,8 @@ export const CedReinscriptions: React.FC = () => {
                   </div>
                 )}
 
-                {/* BOUTONS D'ARBITRAGE DU CED (SEULEMENT SI NON ENCORE VALIDÉ) */}
-                {!isAlreadyValidated && (
+                {/* BOUTONS D'ARBITRAGE DU CED (SEULEMENT SI NON ENCORE VALIDÉ ET ÉTAPE AVIS COMITÉ) */}
+                {!isAlreadyValidated && report.statut === 'avis_comite' && (
                   <div className="pt-2 border-t border-slate-100 space-y-2">
                     <div className="flex flex-col sm:flex-row items-stretch sm:items-start gap-2.5">
                       {/* Bouton Valider la réinscription */}

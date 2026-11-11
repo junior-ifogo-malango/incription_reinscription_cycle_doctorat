@@ -29,7 +29,7 @@ import {
 } from 'lucide-react';
 import { UserRole, Role, Compte, Candidat, Enseignant, Sujet, Piece, Creneau, Notification, type Dossier as DossierData, Rapport, Vote, CandidatureStatut, normaliserRole, getCompteRoles, dossierComplet } from './types';
 import { storageService } from './services/storage';
-import { INITIAL_RAPPORTS, DEMO_DOCTORANT_NADIA, aujourdhui, getComptes, MOCK_CANDIDATS } from './data/mockData';
+import { INITIAL_RAPPORTS, DEMO_DOCTORANT_NADIA, aujourdhui, getComptes, MOCK_CANDIDATS, getDirectorStructure } from './data/mockData';
 import { fr } from './i18n/fr';
 import { LoginModal } from './components/LoginModal';
 import { MobileNav, TabType } from './components/MobileNav';
@@ -46,6 +46,7 @@ import { RapportComponent } from './components/Rapport';
 import { VoteComite } from './components/VoteComite';
 import { CedReinscriptions } from './components/CedReinscriptions';
 import { CedSeances } from './components/CedSeances';
+import { CedSujets } from './components/CedSujets';
 import { VerifPV } from './components/VerifPV';
 import { Guichet } from './components/Guichet';
 import { Admin } from './components/Admin';
@@ -60,7 +61,8 @@ export type AppTabType =
   | 'vote_comite'
   | 'guichet'
   | 'admin_comptes'
-  | 'admin_journal';
+  | 'admin_journal'
+  | 'ced_sujets';
 
 function genererCodeComite(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -195,6 +197,9 @@ export default function App() {
         if (parsed.role === 'enseignant' || parsed.roles?.includes('directeur') || parsed.roles?.includes('enseignant')) {
           return 'candidatures_recues';
         }
+        if (parsed.role === 'directeur_ced' || parsed.roles?.includes('structure')) {
+          return 'ced_sujets';
+        }
       }
     } catch {}
     return 'sujets';
@@ -298,10 +303,12 @@ export default function App() {
     };
     window.addEventListener('usmba_pieces_updated', handleSync);
     window.addEventListener('usmba_rapports_updated', handleSync);
+    window.addEventListener('usmba_sujets_updated', handleSync);
     window.addEventListener('storage', handleSync);
     return () => {
       window.removeEventListener('usmba_pieces_updated', handleSync);
       window.removeEventListener('usmba_rapports_updated', handleSync);
+      window.removeEventListener('usmba_sujets_updated', handleSync);
       window.removeEventListener('storage', handleSync);
     };
   }, []);
@@ -351,7 +358,7 @@ export default function App() {
     } else if (!compteToStore && userRole === 'directeur_ced') {
       compteToStore = {
         id: 'dir-ced',
-        nom: 'Direction CED',
+        nom: 'Directeur de structure',
         email: userEmail || 'ced@demo.ma',
         role: 'directeur_ced',
         roles: ['structure'],
@@ -387,6 +394,8 @@ export default function App() {
       setTab('rapport');
     } else if (userRole === 'agent') {
       setTab('guichet');
+    } else if (userRole === 'directeur_ced') {
+      setTab('ced_sujets');
     } else {
       setTab('seances');
     }
@@ -481,7 +490,7 @@ export default function App() {
     }
 
     if (
-      (targetTab === 'ced' || targetTab === 'seances') &&
+      (targetTab === 'ced' || targetTab === 'seances' || targetTab === 'ced_sujets') &&
       !normalizedRoles.includes('directeur_ced')
     ) {
       setRestrictionMsg(fr.auth.accessRestricted);
@@ -701,6 +710,25 @@ export default function App() {
       return candObj ? dossierComplet(candObj).complet : false;
     }).length;
   }, [candidaturesEnseignant, candidat]);
+
+  const structureConnecteeNom = useMemo(() => {
+    if (activeCompte) {
+      if (activeCompte.email === 'ced@demo.ma') return 'LISAC - FSDM Fès';
+      if (activeCompte.structure && activeCompte.structure !== 'CED USMBA') return activeCompte.structure;
+    }
+    return 'LISAC - FSDM Fès';
+  }, [activeCompte]);
+
+  // Badge Sujets Structure = nombre de sujets 'en_validation' de SA structure
+  const sujetsAValiderStructureCount = useMemo(() => {
+    return sujets.filter((s) => {
+      if (!s || s.statutValidation !== 'en_validation') return false;
+      const authorStructure = getDirectorStructure(s.enseignantId) || s.structure || '';
+      const n1 = authorStructure.trim().toLowerCase();
+      const n2 = structureConnecteeNom.trim().toLowerCase();
+      return n1 === n2 || n1.includes(n2) || n2.includes(n1);
+    }).length;
+  }, [sujets, structureConnecteeNom]);
 
   const handleToggleRetenir = (item: {
     key: string;
@@ -1092,51 +1120,67 @@ export default function App() {
                       </>
                     )}
 
-                    {/* Séances : directeur_ced */}
+                    {/* Menu Structure : Sujets, Séances, Réinscriptions, Tableau d'exceptions */}
                     {normalizedRoles.includes('directeur_ced') && (
-                      <button
-                        onClick={() => handleTabChange('seances')}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
-                          tab === 'seances'
-                            ? 'bg-emerald-800 text-amber-300'
-                            : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
-                        }`}
-                      >
-                        <span>{fr.nav.seances}</span>
-                      </button>
-                    )}
+                      <>
+                        {/* 1. Sujets */}
+                        <button
+                          onClick={() => handleTabChange('ced_sujets')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                            tab === 'ced_sujets' || (tab === 'sujets' && role === 'directeur_ced')
+                              ? 'bg-emerald-800 text-amber-300'
+                              : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
+                          }`}
+                        >
+                          <span>{fr.nav.sujets}</span>
+                          {sujetsAValiderStructureCount > 0 && (
+                            <span className="px-1.5 py-0.2 rounded-full bg-emerald-600 text-white font-bold text-[10px]">
+                              {sujetsAValiderStructureCount}
+                            </span>
+                          )}
+                        </button>
 
-                    {/* Réinscriptions : directeur_ced */}
-                    {normalizedRoles.includes('directeur_ced') && (
-                      <button
-                        onClick={() => handleTabChange('reinscriptions')}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
-                          tab === 'reinscriptions'
-                            ? 'bg-emerald-800 text-amber-300'
-                            : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
-                        }`}
-                      >
-                        <span>{fr.nav.reinscriptions}</span>
-                      </button>
-                    )}
+                        {/* 2. Séances */}
+                        <button
+                          onClick={() => handleTabChange('seances')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                            tab === 'seances'
+                              ? 'bg-emerald-800 text-amber-300'
+                              : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
+                          }`}
+                        >
+                          <span>{fr.nav.seances}</span>
+                        </button>
 
-                    {/* Exceptions : directeur_ced */}
-                    {normalizedRoles.includes('directeur_ced') && (
-                      <button
-                        onClick={() => handleTabChange('ced')}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
-                          tab === 'ced'
-                            ? 'bg-emerald-800 text-amber-300'
-                            : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
-                        }`}
-                      >
-                        <span>{fr.nav.exceptionsCed}</span>
-                        {alertesCreneaux.length > 0 && (
-                          <span className="px-1.5 py-0.2 rounded-full bg-rose-500 text-white font-bold text-[10px]">
-                            {alertesCreneaux.length}
-                          </span>
-                        )}
-                      </button>
+                        {/* 3. Réinscriptions */}
+                        <button
+                          onClick={() => handleTabChange('reinscriptions')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                            tab === 'reinscriptions'
+                              ? 'bg-emerald-800 text-amber-300'
+                              : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
+                          }`}
+                        >
+                          <span>{fr.nav.reinscriptions}</span>
+                        </button>
+
+                        {/* 4. Tableau d'exceptions */}
+                        <button
+                          onClick={() => handleTabChange('ced')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                            tab === 'ced'
+                              ? 'bg-emerald-800 text-amber-300'
+                              : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
+                          }`}
+                        >
+                          <span>{fr.nav.exceptionsCed}</span>
+                          {alertesCreneaux.length > 0 && (
+                            <span className="px-1.5 py-0.2 rounded-full bg-rose-500 text-white font-bold text-[10px]">
+                              {alertesCreneaux.length}
+                            </span>
+                          )}
+                        </button>
+                      </>
                     )}
 
                     {/* Scolarité (Admin) */}
@@ -1419,6 +1463,66 @@ export default function App() {
           </div>
         )}
 
+        {/* Menu mobile de la Structure : Sujets, Séances, Réinscriptions, Tableau d'exceptions */}
+        {normalizedRoles.includes('directeur_ced') && (
+          <div className="md:hidden bg-emerald-950 border-b border-emerald-900 px-3 py-2 flex items-center gap-1.5 overflow-x-auto">
+            <button
+              type="button"
+              onClick={() => handleTabChange('ced_sujets')}
+              className={`px-3 py-2 rounded-xl text-xs font-semibold whitespace-nowrap min-h-[44px] flex items-center gap-1.5 transition cursor-pointer ${
+                tab === 'ced_sujets' || (tab === 'sujets' && role === 'directeur_ced')
+                  ? 'bg-emerald-800 text-amber-300 font-bold'
+                  : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
+              }`}
+            >
+              <span>{fr.nav.sujets}</span>
+              {sujetsAValiderStructureCount > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full bg-emerald-600 text-white font-bold text-[10px]">
+                  {sujetsAValiderStructureCount}
+                </span>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => handleTabChange('seances')}
+              className={`px-3 py-2 rounded-xl text-xs font-semibold whitespace-nowrap min-h-[44px] flex items-center gap-1.5 transition cursor-pointer ${
+                tab === 'seances'
+                  ? 'bg-emerald-800 text-amber-300 font-bold'
+                  : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
+              }`}
+            >
+              <span>{fr.nav.seances}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleTabChange('reinscriptions')}
+              className={`px-3 py-2 rounded-xl text-xs font-semibold whitespace-nowrap min-h-[44px] flex items-center gap-1.5 transition cursor-pointer ${
+                tab === 'reinscriptions'
+                  ? 'bg-emerald-800 text-amber-300 font-bold'
+                  : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
+              }`}
+            >
+              <span>{fr.nav.reinscriptions}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleTabChange('ced')}
+              className={`px-3 py-2 rounded-xl text-xs font-semibold whitespace-nowrap min-h-[44px] flex items-center gap-1.5 transition cursor-pointer ${
+                tab === 'ced'
+                  ? 'bg-emerald-800 text-amber-300 font-bold'
+                  : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
+              }`}
+            >
+              <span>{fr.nav.exceptionsCed}</span>
+              {alertesCreneaux.length > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full bg-rose-500 text-white font-bold text-[10px]">
+                  {alertesCreneaux.length}
+                </span>
+              )}
+            </button>
+          </div>
+        )}
+
         {/* CONTENU PRINCIPAL SELON ONGLET */}
         <main className="flex-1 p-3.5 md:p-6 space-y-4">
           {/* Bandeau d'alerte pour candidat retenu avec pièces à prouver (Accueil) */}
@@ -1464,7 +1568,7 @@ export default function App() {
           ) : (
             <>
               {/* Onglet Module A2 : Sujets de Recherche (Catalogue) */}
-              {tab === 'sujets' && (
+              {tab === 'sujets' && role !== 'directeur_ced' && (
             <SujetsModule
               key="catalog"
               role={role}
@@ -1635,6 +1739,11 @@ export default function App() {
               enseignantId={activeEnseignant.id}
               enseignantNom={activeEnseignant.nom}
             />
+          )}
+
+          {/* Onglet Sujets (Structure / Directeur CED) */}
+          {(tab === 'ced_sujets' || (tab === 'sujets' && role === 'directeur_ced')) && (
+            <CedSujets />
           )}
 
           {/* Onglet Séances (Directeur CED) */}
