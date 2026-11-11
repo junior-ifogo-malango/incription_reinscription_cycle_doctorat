@@ -152,41 +152,13 @@ export const CedReinscriptions: React.FC = () => {
   const now = Date.now();
   const connectedDirecteurId = getConnectedDirecteurId();
 
-  // Filtrer les rapports de réinscription en retard (> 48h sans action)
-  const rapportsEnRetard = rapports.filter((r) => {
+  // Détection des rapports en retard (> 48h sans action)
+  const isRapportEnRetard = (r: Rapport): boolean => {
     if (r.statut !== 'soumis' && r.statut !== 'avis_comite') return false;
     if (!r.soumisLe) return false;
     const resTime = new Date(r.soumisLe).getTime();
     const diffHours = (now - resTime) / (1000 * 60 * 60);
     return diffHours > SEUIL_HEURES;
-  });
-
-  const handleRelancerRapport = (reportId: string) => {
-    const rTarget = rapports.find((r) => r.id === reportId);
-    if (connectedDirecteurId && rTarget?.encadrantId === connectedDirecteurId) {
-      setErrorMsg(fr.exceptions.conflitDirecteur);
-      setTimeout(() => setErrorMsg(null), 4000);
-      return;
-    }
-    const todayStr = new Date().toLocaleDateString('fr-FR');
-    const updated = rapports.map((r) => {
-      if (r.id === reportId) {
-        return {
-          ...r,
-          relanceLe: new Date().toISOString(),
-          chronologie: [
-            ...(r.chronologie || []),
-            {
-              date: todayStr,
-              acteur: 'Directeur de structure',
-              action: 'Relance administrative simulée transmise',
-            },
-          ],
-        };
-      }
-      return r;
-    });
-    saveList(updated, fr.reinscription.relanceReportToast);
   };
 
   const getDoctorantNom = (docId?: string): string => {
@@ -335,9 +307,22 @@ export const CedReinscriptions: React.FC = () => {
   };
 
   // Filtrer les rapports à traiter par le CED : tous les dossiers actifs
-  const comiteReports = rapports.filter(
-    (r) => r.statut === 'soumis' || r.statut === 'avis_comite' || r.statut === 'valide_ced' || r.statut === 'a_corriger'
-  );
+  // Les rapports en retard (> 48 h sans action) passent en premier
+  const comiteReports = [...rapports]
+    .filter(
+      (r) =>
+        r.statut === 'soumis' ||
+        r.statut === 'avis_comite' ||
+        r.statut === 'valide_ced' ||
+        r.statut === 'a_corriger'
+    )
+    .sort((a, b) => {
+      const aRetard = isRapportEnRetard(a);
+      const bRetard = isRapportEnRetard(b);
+      if (aRetard && !bRetard) return -1;
+      if (!aRetard && bRetard) return 1;
+      return 0;
+    });
 
   return (
     <div className="space-y-4">
@@ -370,73 +355,6 @@ export const CedReinscriptions: React.FC = () => {
         </div>
       )}
 
-      {/* Section : En retard (> 48 h sans action) */}
-      <section className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3">
-        <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-          <div>
-            <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wide flex items-center gap-2">
-              <Clock size={16} className="text-amber-600" />
-              <span>{fr.reinscription.sectionEnRetardTitle}</span>
-            </h3>
-            <p className="text-[11px] text-slate-500 mt-0.5">
-              {fr.reinscription.lateReportsSectionTitle}
-            </p>
-          </div>
-          <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
-            {rapportsEnRetard.length}
-          </span>
-        </div>
-
-        {rapportsEnRetard.length === 0 ? (
-          <div className="py-6 text-center text-xs text-slate-500">
-            {fr.reinscription.lateReportsEmpty}
-          </div>
-        ) : (
-          <div className="space-y-2.5">
-            {rapportsEnRetard.map((r) => {
-              const isDirecteurOfRapport = Boolean(
-                connectedDirecteurId && r.encadrantId && connectedDirecteurId === r.encadrantId
-              );
-
-              return (
-                <div
-                  key={r.id}
-                  className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
-                >
-                  <span className="font-bold text-slate-900 line-clamp-2">{r.titre}</span>
-
-                  <div className="shrink-0 self-end sm:self-center">
-                    {r.relanceLe ? (
-                      <button
-                        type="button"
-                        disabled
-                        className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-200 text-slate-500 border border-slate-300 cursor-not-allowed shrink-0 min-h-[44px] flex items-center justify-center gap-1.5"
-                      >
-                        <span>Relancé le {formatDateJJMM(r.relanceLe)}</span>
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        disabled={isDirecteurOfRapport}
-                        onClick={() => !isDirecteurOfRapport && handleRelancerRapport(r.id)}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-xs shrink-0 min-h-[44px] ${
-                          isDirecteurOfRapport
-                            ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
-                            : 'bg-amber-600 hover:bg-amber-700 text-white cursor-pointer active:scale-98'
-                        }`}
-                      >
-                        <Send size={13} />
-                        <span>{fr.reinscription.btnRelancerReport}</span>
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
       {comiteReports.length === 0 ? (
         <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-xs text-slate-500">
           {fr.reinscription.cedEmptyList}
@@ -444,6 +362,7 @@ export const CedReinscriptions: React.FC = () => {
       ) : (
         <div className="space-y-3">
           {comiteReports.map((report) => {
+            const isEnRetard = isRapportEnRetard(report);
             const votes = report.comite || [];
             const favorableCount = votes.filter((v) => v.avis === 'FAVORABLE').length;
             const defavorableCount = votes.filter((v) => v.avis === 'DEFAVORABLE').length;
@@ -475,6 +394,12 @@ export const CedReinscriptions: React.FC = () => {
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
                         {report.annee}ᵉ année
                       </span>
+                      {isEnRetard && (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                          <Clock size={11} className="text-rose-600 shrink-0" />
+                          <span>{fr.reinscription.badgeEnRetard}</span>
+                        </span>
+                      )}
                     </div>
                     <p className="text-xs text-slate-600 mt-1">
                       Doctorant : <span className="font-semibold text-slate-900">{getDoctorantNom(report.doctorantId)}</span> • Encadrant : <span className="font-semibold text-slate-900">{getEncadrantNom(report.encadrantId)}</span>

@@ -1157,6 +1157,7 @@ export const fr = {
 
     // Exceptions
     sectionEnRetardTitle: 'En retard',
+    badgeEnRetard: 'En retard',
     lateReportsSectionTitle: 'Rapports de réinscription en retard (> 48h sans action)',
     lateReportsEmpty: 'Aucun rapport de réinscription en retard (tous les dossiers sont traités dans les délais).',
     btnRelancerReport: 'Relancer',
