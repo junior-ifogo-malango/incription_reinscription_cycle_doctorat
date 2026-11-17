@@ -41,7 +41,27 @@ import { normalizeText } from './Autocomplete';
 import { normaliserTel, ajouterNotification } from '../utils/messages';
 import { logEvent } from '../utils/journal';
 import { MOCK_CANDIDATS, getPeriodeCandidature, formatDateJJMM } from '../data/mockData';
+import { LoginModal } from './LoginModal';
 
+
+const formatDateJJMMAAAA = (d?: string): string => {
+  if (!d) return '';
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(d)) return d;
+  const isoMatch = d.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) {
+    return `${isoMatch[3]}/${isoMatch[2]}/${isoMatch[1]}`;
+  }
+  try {
+    const dt = new Date(d);
+    if (!isNaN(dt.getTime())) {
+      const day = String(dt.getDate()).padStart(2, '0');
+      const month = String(dt.getMonth() + 1).padStart(2, '0');
+      const year = dt.getFullYear();
+      return `${day}/${month}/${year}`;
+    }
+  } catch {}
+  return d;
+};
 
 const getDisciplineConfig = (discipline?: string) => {
   const norm = (discipline || '')
@@ -161,10 +181,21 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
   });
   const [isFilterModalOpen, setIsFilterModalOpen] = useState(false);
 
-  // Dépliage accordéon sur place (sans pop-up)
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  // Fenêtre de détail d'un sujet + état d'accordéon enseignant
+  const [selectedSujetForDetail, setSelectedSujetForDetail] = useState<Sujet | null>(null);
   const [teacherSubView, setTeacherSubView] = useState<'mes_sujets' | 'catalogue'>('mes_sujets');
   const [expandedTeacherSujetId, setExpandedTeacherSujetId] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!selectedSujetForDetail) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setSelectedSujetForDetail(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedSujetForDetail]);
 
   // Alerte 4e sujet refusé
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -178,6 +209,13 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
     confirmerMotDePasse: '',
   });
   const [formValidationMsg, setFormValidationMsg] = useState<string | null>(null);
+
+  // Connexion unifiée au clic sur Candidater & complétion du profil à la validation
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [profileNom, setProfileNom] = useState('');
+  const [profileTel, setProfileTel] = useState('');
+  const [profileErrors, setProfileErrors] = useState<{ nom?: string; tel?: string }>({});
 
   // Vérification de compte (code SMS simulé)
   const [verifyCodeInput, setVerifyCodeInput] = useState('');
@@ -477,7 +515,7 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
     [sujets]
   );
   const keywordOptions = useMemo(
-    () => Array.from(new Set(sujets.flatMap((s) => s.motsCles))),
+    () => Array.from(new Set(sujets.flatMap((s) => s?.motsCles || []))),
     [sujets]
   );
 
@@ -504,14 +542,14 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
         // Un sujet archivé disparaît du catalogue
         if (s.statut === 'archive') return false;
         // Catalogue et recherche avancée : n'affichent que les sujets 'publie'
-        if (s.statutValidation !== 'publie') return false;
+        if ((s.statutValidation || 'publie') !== 'publie') return false;
 
         const ens = getEnseignant(s.enseignantId);
         const ensNomNorm = ens ? normalizeText(ens.nom) : '';
-        const sTitreNorm = normalizeText(s.titre);
-        const sDiscNorm = normalizeText(s.discipline);
-        const sStructNorm = normalizeText(s.structure);
-        const sKeywordsNorm = s.motsCles.map((k) => normalizeText(k));
+        const sTitreNorm = normalizeText(s.titre || '');
+        const sDiscNorm = normalizeText(s.discipline || '');
+        const sStructNorm = normalizeText(s.structure || '');
+        const sKeywordsNorm = (s.motsCles || []).map((k) => normalizeText(k));
 
         // 1. Recherche globale directe (titre, mots-clés, encadrant)
         if (normSearch) {
@@ -546,9 +584,9 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
       })
       .sort((a, b) => {
         if (sortBy === 'structure') {
-          return a.structure.localeCompare(b.structure);
+          return (a.structure || '').localeCompare(b.structure || '');
         }
-        return a.titre.localeCompare(b.titre);
+        return (a.titre || '').localeCompare(b.titre || '');
       });
   }, [sujets, searchQuery, advancedCriteria, sortBy, enseignants]);
 
@@ -640,7 +678,11 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
   const handleStartCandidater = () => {
     setErrorMsg(null);
     if (!candidat.compteCree) {
-      setView('register');
+      if (onRequestLogin) {
+        onRequestLogin();
+      } else {
+        setIsAuthModalOpen(true);
+      }
     } else if (candidat.verificationStatut === 'non_verifie') {
       setView('verify_code');
     } else {
@@ -927,19 +969,18 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
     }
   }, [candidat.candidatures, candidat.panier, onUpdateCandidat]);
 
-  // Validation finale des candidatures avec enregistrement en brouillon (Règle 2)
-  const handleValidateCandidatures = () => {
-    // Retirer les sujets candidatés du panier
-    const remainingPanier = candidat.panier.filter((id) => !tempSelection.includes(id));
+  // Finalisation des candidatures en brouillon
+  const finalizeValidateCandidatures = (targetCandidat: Candidat) => {
+    const remainingPanier = targetCandidat.panier.filter((id) => !tempSelection.includes(id));
     const nowIso = new Date().toISOString();
     const statuts: Record<string, any> = {
-      ...(candidat.candidaturesStatuts || {}),
+      ...(targetCandidat.candidaturesStatuts || {}),
     };
     tempSelection.forEach((id) => {
       statuts[id] = 'brouillon';
     });
     const updated: Candidat = {
-      ...candidat,
+      ...targetCandidat,
       panier: remainingPanier,
       panierInteret: remainingPanier,
       candidatures: tempSelection,
@@ -949,8 +990,37 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
     };
     onUpdateCandidat(updated);
     storageService.setCandidat(updated);
+
+    try {
+      const rawAccounts = localStorage.getItem('usmba_registered_accounts');
+      if (rawAccounts) {
+        const accounts: Candidat[] = JSON.parse(rawAccounts);
+        const idx = accounts.findIndex(
+          (a) =>
+            a.id === updated.id ||
+            (a.email && updated.email && a.email.toLowerCase().trim() === updated.email.toLowerCase().trim())
+        );
+        if (idx !== -1) {
+          accounts[idx] = { ...accounts[idx], ...updated };
+          localStorage.setItem('usmba_registered_accounts', JSON.stringify(accounts));
+        }
+      }
+      const rawOverrides = localStorage.getItem('usmba_candidats_overrides');
+      if (rawOverrides) {
+        const overrides: Record<string, Candidat> = JSON.parse(rawOverrides);
+        if (overrides[updated.id]) {
+          overrides[updated.id] = updated;
+          localStorage.setItem('usmba_candidats_overrides', JSON.stringify(overrides));
+        }
+      }
+    } catch {}
+
     logEvent(
-      { id: candidat.id, nom: candidat.nom, role: 'candidat' },
+      {
+        id: updated.id,
+        nom: updated.nom?.trim() || updated.email || fr.sujetsModule.nonRenseigne,
+        role: 'candidat',
+      },
       fr.journalActions.candidatureDeposee,
       `${tempSelection.length} sujet(s)`
     );
@@ -959,19 +1029,229 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
     setView('confirmation');
   };
 
+  // Validation finale des candidatures avec contrôle du profil (demandé une seule fois)
+  const handleValidateCandidatures = () => {
+    const isProfileIncomplete = !candidat.nom?.trim() || !candidat.tel?.trim();
+    if (isProfileIncomplete) {
+      setProfileNom(candidat.nom || '');
+      setProfileTel(candidat.tel || '');
+      setProfileErrors({});
+      setIsProfileModalOpen(true);
+      return;
+    }
+    finalizeValidateCandidatures(candidat);
+  };
+
+  const handleProfileModalSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const errs: { nom?: string; tel?: string } = {};
+    const cleanNom = profileNom.trim();
+    const cleanTelRaw = profileTel.trim();
+    const cleanTel = cleanTelRaw.replace(/[\s.-]/g, '');
+    const isZero10Digits = /^0[0-9]{9}$/.test(cleanTel);
+    const isPlus212_9Digits = /^\+212[0-9]{9}$/.test(cleanTel);
+
+    if (!cleanNom) {
+      errs.nom = fr.sujetsModule.completeProfileNameRequired;
+    }
+    if (!cleanTelRaw) {
+      errs.tel = fr.sujetsModule.completeProfileTelRequired;
+    } else if (!isZero10Digits && !isPlus212_9Digits) {
+      errs.tel = fr.sujetsModule.validationTelError;
+    }
+
+    if (errs.nom || errs.tel) {
+      setProfileErrors(errs);
+      return;
+    }
+
+    const updatedWithProfile: Candidat = {
+      ...candidat,
+      nom: cleanNom,
+      tel: cleanTelRaw,
+    };
+
+    try {
+      const rawAccounts = localStorage.getItem('usmba_registered_accounts');
+      const accounts: Candidat[] = rawAccounts ? JSON.parse(rawAccounts) : [];
+      const idx = accounts.findIndex(
+        (a) =>
+          a.id === updatedWithProfile.id ||
+          (a.email &&
+            updatedWithProfile.email &&
+            a.email.toLowerCase().trim() === updatedWithProfile.email.toLowerCase().trim())
+      );
+      if (idx !== -1) {
+        accounts[idx] = { ...accounts[idx], nom: cleanNom, tel: cleanTelRaw };
+      } else if (updatedWithProfile.compteCree) {
+        accounts.push(updatedWithProfile);
+      }
+      localStorage.setItem('usmba_registered_accounts', JSON.stringify(accounts));
+    } catch {}
+
+    storageService.setCandidat(updatedWithProfile);
+    onUpdateCandidat(updatedWithProfile);
+    setProfileErrors({});
+    setIsProfileModalOpen(false);
+    finalizeValidateCandidatures(updatedWithProfile);
+  };
+
   // Sujets du panier (sécurisé contre les sujets introuvables / supprimés / non publiés)
   const cartItems = useMemo(() => {
     const panierIds = Array.isArray(candidat?.panier) ? candidat.panier : [];
     return panierIds
       .map((id) => sujets.find((s) => s && s.id === id))
-      .filter((s): s is Sujet => Boolean(s && s.statutValidation === 'publie'));
+      .filter((s): s is Sujet => Boolean(s && (s.statutValidation || 'publie') === 'publie'));
   }, [candidat?.panier, sujets]);
+
+  const renderDetailModal = () => {
+    if (!selectedSujetForDetail) return null;
+    const ens = getEnseignant(selectedSujetForDetail.enseignantId);
+    const inCart = candidat.panier.includes(selectedSujetForDetail.id);
+    const isApplied = candidat.candidatures.includes(selectedSujetForDetail.id);
+    const showWishButton = role === 'candidat' || role === 'visiteur';
+    const {
+      Icon: DisciplineIcon,
+      barColor,
+      iconPill,
+      badge: badgeColor,
+    } = getDisciplineConfig(selectedSujetForDetail.discipline);
+
+    return (
+      <div
+        className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4"
+        onClick={() => setSelectedSujetForDetail(null)}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="sujet-detail-title"
+      >
+        <div
+          className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-xl w-full overflow-hidden flex flex-col max-h-[90vh]"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className={`h-1.5 w-full ${barColor}`} />
+
+          <div className="p-5 sm:p-6 overflow-y-auto space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2 flex-wrap">
+                <div
+                  className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${iconPill}`}
+                  aria-hidden="true"
+                >
+                  <DisciplineIcon size={14} />
+                </div>
+                <span className={`text-xs font-bold uppercase px-2.5 py-0.5 rounded-md border ${badgeColor}`}>
+                  {selectedSujetForDetail.discipline || fr.sujetsModule.nonRenseigne}
+                </span>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setSelectedSujetForDetail(null)}
+                aria-label={fr.sujetsModule.btnFermer}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition cursor-pointer shrink-0"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <h2 id="sujet-detail-title" className="text-lg sm:text-xl font-bold text-slate-900 leading-snug">
+              {selectedSujetForDetail.titre}
+            </h2>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-50 border border-slate-200/80 rounded-xl p-3.5 text-xs">
+              <div>
+                <span className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                  {fr.sujetsModule.detailDirecteurLabel}
+                </span>
+                <span className="mt-0.5 block font-semibold text-slate-800">
+                  {ens?.nom || fr.sujetsModule.nonRenseigne}
+                </span>
+              </div>
+
+              <div>
+                <span className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                  {fr.sujetsModule.detailStructureLabel}
+                </span>
+                <span className="mt-0.5 block font-semibold text-slate-800">
+                  {selectedSujetForDetail.structure || ens?.structure || fr.sujetsModule.nonRenseigne}
+                </span>
+              </div>
+
+              <div>
+                <span className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                  {fr.sujetsModule.detailEtablissementLabel}
+                </span>
+                <span className="mt-0.5 block font-semibold text-slate-800">
+                  {ens?.etablissement || fr.sujetsModule.nonRenseigne}
+                </span>
+              </div>
+
+              <div>
+                <span className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                  {fr.sujetsModule.detailDomaineLabel}
+                </span>
+                <span className="mt-0.5 block font-semibold text-slate-800">
+                  {selectedSujetForDetail.discipline || fr.sujetsModule.nonRenseigne}
+                </span>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                {fr.sujetsModule.detailDescriptionLabel}
+              </span>
+              <p className="text-sm text-slate-700 leading-relaxed bg-white border border-slate-200 rounded-xl p-3.5">
+                {selectedSujetForDetail.descriptionCourte || fr.sujetsModule.nonRenseigne}
+              </p>
+            </div>
+          </div>
+
+          <div className="px-5 py-3.5 sm:px-6 bg-slate-50 border-t border-slate-200 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-2.5">
+            <button
+              type="button"
+              onClick={() => setSelectedSujetForDetail(null)}
+              className="w-full sm:w-auto px-4 py-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-sm font-semibold transition cursor-pointer"
+            >
+              {fr.sujetsModule.btnFermer}
+            </button>
+
+            {showWishButton && (
+              isApplied ? (
+                <button
+                  type="button"
+                  disabled
+                  className="w-full sm:w-auto px-4 py-2.5 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-800 text-sm font-semibold flex items-center justify-center gap-2 cursor-not-allowed opacity-90"
+                >
+                  <FileCheck2 size={16} className="text-emerald-600 shrink-0" />
+                  <span>{fr.sujetsModule.candidatureDeposeeBadge}</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => toggleCart(selectedSujetForDetail.id)}
+                  className={`w-full sm:w-auto px-4 py-2.5 rounded-xl border text-sm font-bold transition flex items-center justify-center gap-2 active:scale-95 cursor-pointer ${
+                    inCart
+                      ? 'bg-rose-50 border-rose-300 text-rose-700 hover:bg-rose-100'
+                      : 'bg-emerald-700 border-emerald-700 text-white hover:bg-emerald-800'
+                  }`}
+                >
+                  <Heart size={16} className={inCart ? 'fill-rose-600 text-rose-600' : 'text-white'} />
+                  <span>{inCart ? fr.sujetsModule.btnInCart : fr.sujetsModule.btnAddToCart}</span>
+                </button>
+              )
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   const candidateItems = useMemo(() => {
     const candidaturesIds = Array.isArray(candidat?.candidatures) ? candidat.candidatures : [];
     return candidaturesIds
       .map((id) => sujets.find((s) => s && s.id === id))
-      .filter((s): s is Sujet => Boolean(s && s.statutValidation === 'publie'));
+      .filter((s): s is Sujet => Boolean(s && (s.statutValidation || 'publie') === 'publie'));
   }, [candidat?.candidatures, sujets]);
 
 
@@ -1191,6 +1471,108 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
             {fr.common.back}
           </button>
         </div>
+
+        {/* Fenêtre "Complétez votre profil" (uniquement à la première validation si profil incomplet) */}
+        {isProfileModalOpen && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-950/60 backdrop-blur-xs p-0 sm:p-4"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setIsProfileModalOpen(false);
+            }}
+          >
+            <div
+              className="w-full sm:max-w-[440px] bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in slide-in-from-bottom duration-200"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 bg-slate-50/80">
+                <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wide">
+                  {fr.sujetsModule.completeProfileTitle}
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setIsProfileModalOpen(false)}
+                  aria-label={fr.common.close}
+                  className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200 transition cursor-pointer"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+
+              <form onSubmit={handleProfileModalSubmit} noValidate className="p-4 space-y-3">
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  {fr.sujetsModule.completeProfileSub}
+                </p>
+
+                <div>
+                  <label htmlFor="profile-nom-input" className="block text-[11px] font-bold text-slate-700 mb-1">
+                    {fr.sujetsModule.nameLabel} *
+                  </label>
+                  <input
+                    id="profile-nom-input"
+                    type="text"
+                    value={profileNom}
+                    onChange={(e) => {
+                      setProfileNom(e.target.value);
+                      if (profileErrors.nom) setProfileErrors((prev) => ({ ...prev, nom: undefined }));
+                    }}
+                    className={`w-full text-xs p-2.5 rounded-lg border focus:outline-none focus:ring-1 bg-white ${
+                      profileErrors.nom
+                        ? 'border-rose-400 focus:ring-rose-500'
+                        : 'border-slate-300 focus:ring-emerald-600'
+                    }`}
+                    required
+                  />
+                  {profileErrors.nom && (
+                    <p className="text-[11px] text-rose-600 font-medium mt-1">{profileErrors.nom}</p>
+                  )}
+                </div>
+
+                <div>
+                  <label htmlFor="profile-tel-input" className="block text-[11px] font-bold text-slate-700 mb-1">
+                    {fr.sujetsModule.telLabel} *
+                  </label>
+                  <input
+                    id="profile-tel-input"
+                    type="tel"
+                    value={profileTel}
+                    onChange={(e) => {
+                      setProfileTel(e.target.value);
+                      if (profileErrors.tel) setProfileErrors((prev) => ({ ...prev, tel: undefined }));
+                    }}
+                    placeholder={fr.sujetsModule.telPlaceholder}
+                    className={`w-full text-xs p-2.5 rounded-lg border focus:outline-none focus:ring-1 bg-white ${
+                      profileErrors.tel
+                        ? 'border-rose-400 focus:ring-rose-500'
+                        : 'border-slate-300 focus:ring-emerald-600'
+                    }`}
+                    required
+                  />
+                  {profileErrors.tel && (
+                    <p className="text-[11px] text-rose-600 font-medium mt-1">{profileErrors.tel}</p>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setIsProfileModalOpen(false)}
+                    className="min-h-[44px] px-4 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-100 transition cursor-pointer"
+                  >
+                    {fr.common.cancel}
+                  </button>
+                  <button
+                    type="submit"
+                    className="min-h-[44px] px-4 py-2 rounded-xl text-xs font-bold bg-emerald-700 hover:bg-emerald-800 text-white shadow-xs transition cursor-pointer active:scale-98"
+                  >
+                    {fr.sujetsModule.btnSaveProfileAndValidate}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -1458,60 +1840,64 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
             </button>
           </div>
         ) : (
-          <div className="space-y-2.5">
+          <div className="space-y-3">
             {cartItems.map((sujet) => {
-              const ens = getEnseignant(sujet.enseignantId);
               const isApplied = candidat.candidatures.includes(sujet.id);
-
               const { Icon: DisciplineIcon, barColor, iconPill, badge: badgeColor, cardBg, cardBorder } = getDisciplineConfig(sujet.discipline);
 
               return (
                 <div
                   key={sujet.id}
-                  className={`group ${cardBg} border ${cardBorder} rounded-xl shadow-xs hover:shadow-md hover:-translate-y-0.5 transition-all duration-150 flex flex-col justify-between overflow-hidden`}
+                  className={`group ${cardBg} border ${cardBorder} rounded-xl shadow-xs hover:shadow-md transition-all duration-150 flex overflow-hidden`}
                 >
-                  <div className={`h-1 w-full ${barColor}`} />
-                  <div className="p-3.5 space-y-2.5">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-1.5 flex-wrap">
+                  {/* Barre de couleur épaisse à gauche */}
+                  <div className={`w-2 shrink-0 ${barColor}`} aria-hidden="true" />
+
+                  <div className="flex-1 min-w-0 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="flex-1 min-w-0 space-y-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <div
-                          className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${iconPill}`}
+                          className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${iconPill}`}
                           aria-hidden="true"
                         >
-                          <DisciplineIcon size={13} />
+                          <DisciplineIcon size={14} />
                         </div>
-                        <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-md border ${badgeColor}`}>
+                        <span className={`inline-block text-xs font-bold uppercase px-2.5 py-0.5 rounded-md border leading-tight ${badgeColor}`}>
                           {sujet.discipline}
                         </span>
-                      </div>
-                      <div className="flex items-center gap-1.5 flex-wrap">
                         {sujet.statut === 'archive' && (
-                          <span className="text-[10px] font-bold text-amber-900 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-full flex items-center gap-1">
+                          <span className="text-[11px] font-bold text-amber-900 bg-amber-100 border border-amber-300 px-2.5 py-0.5 rounded-full inline-flex items-center gap-1">
                             <AlertCircle size={12} className="text-amber-700 shrink-0" />
                             <span>{fr.sujetsModule.plusDisponible}</span>
                           </span>
                         )}
                         {isApplied && (
-                          <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full flex items-center gap-1">
+                          <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full inline-flex items-center gap-1">
                             <FileCheck2 size={12} className="text-emerald-600 shrink-0" />
                             <span>{fr.sujetsModule.alreadyAppliedBadge}</span>
                           </span>
                         )}
                       </div>
-                    </div>
-                    <h4 className="text-sm font-bold text-slate-900 leading-snug">{sujet.titre}</h4>
-                    <p className="text-[11px] text-slate-600">
-                      <span className="font-medium text-slate-700">{sujet.structure}</span> {ens ? `• ${ens.nom}` : ''}
-                    </p>
 
-                    <div className="pt-2 border-t border-slate-100 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedSujetForDetail(sujet)}
+                        className="text-left block w-full group/title cursor-pointer focus:outline-none"
+                      >
+                        <h4 className="text-base sm:text-lg font-bold text-slate-900 leading-snug line-clamp-2 group-hover/title:text-emerald-800 group-hover/title:underline transition-colors">
+                          {sujet.titre}
+                        </h4>
+                      </button>
+                    </div>
+
+                    <div className="shrink-0 w-full sm:w-auto">
                       <button
                         type="button"
                         onClick={() => toggleCart(sujet.id)}
-                        className="text-[11px] font-semibold text-rose-600 hover:text-rose-800 flex items-center gap-1 py-1 px-2 rounded-lg hover:bg-rose-50 transition cursor-pointer"
+                        className="w-full sm:w-auto min-h-[44px] text-sm font-bold py-2.5 px-4 rounded-xl border bg-rose-50 border-rose-300 text-rose-700 hover:bg-rose-100 transition flex items-center justify-center gap-2 active:scale-95 cursor-pointer"
                       >
-                        <Trash2 size={13} />
-                        <span>{fr.sujetsModule.btnRemove}</span>
+                        <Heart size={16} className="fill-rose-600 text-rose-600" />
+                        <span>{fr.sujetsModule.btnInCart}</span>
                       </button>
                     </div>
                   </div>
@@ -1548,6 +1934,46 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
             </div>
           </div>
         )}
+
+        <LoginModal
+          isOpen={isAuthModalOpen}
+          onClose={() => setIsAuthModalOpen(false)}
+          onLoginSuccess={(userRole, _email, candidateData, connectedCompte) => {
+            setIsAuthModalOpen(false);
+            if (userRole === 'candidat') {
+              const base = candidateData || storageService.loginAsDemo();
+              const mergedPanier = Array.from(
+                new Set([...(base.panier || []), ...(candidat.panier || [])])
+              ).filter((id) => !(base.candidatures || []).includes(id));
+              const updatedCand: Candidat = {
+                ...base,
+                panier: mergedPanier,
+                panierInteret: mergedPanier,
+              };
+              storageService.setCandidat(updatedCand);
+              onUpdateCandidat(updatedCand);
+              const availableIds = updatedCand.panier.filter((id) => {
+                const s = sujets.find((x) => x && x.id === id);
+                return s && s.statut !== 'archive' && (s.statutValidation || 'publie') === 'publie';
+              });
+              setTempSelection(
+                updatedCand.candidatures.length > 0
+                  ? updatedCand.candidatures
+                  : availableIds.slice(0, 3)
+              );
+              setView('select3');
+            } else {
+              try {
+                if (connectedCompte) {
+                  localStorage.setItem('usmba_active_account', JSON.stringify(connectedCompte));
+                }
+                localStorage.setItem('usmba_doctorat_role', userRole);
+                window.dispatchEvent(new CustomEvent('usmba_account_updated'));
+              } catch {}
+            }
+          }}
+        />
+        {renderDetailModal()}
       </div>
     );
   }
@@ -1922,9 +2348,9 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
                             </div>
                           )}
 
-                          {/* "N candidatures · N paniers" */}
+                          {/* "N candidatures · N vœux" */}
                           <p className="text-[11px] text-slate-600 font-medium mt-1">
-                            {candCount} candidature{candCount > 1 ? 's' : ''} · {panierCount} panier{panierCount > 1 ? 's' : ''}
+                            {candCount} candidature{candCount > 1 ? 's' : ''} · {panierCount} vœu{panierCount > 1 ? 'x' : ''}
                           </p>
 
                           {/* Mobile : le bouton d'action passe sous le titre */}
@@ -2195,92 +2621,48 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
                 )}
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
+              <div className="space-y-3">
                 {paginatedSujets.map((sujet) => {
                   if (!sujet) return null;
-                  const isExpanded = expandedId === sujet.id;
                   const isOwnSubject = sujet.enseignantId === activeTeacher.id;
-                  const ens = getEnseignant(sujet.enseignantId);
                   const { Icon: DisciplineIcon, barColor, iconPill, badge: badgeColor, cardBg, cardBorder } = getDisciplineConfig(sujet.discipline);
 
                   return (
                     <div
                       key={sujet.id}
-                      className={`group ${cardBg} border ${cardBorder} rounded-xl shadow-xs hover:shadow-md transition-all duration-150 flex flex-col justify-between overflow-hidden`}
+                      className={`group ${cardBg} border ${cardBorder} rounded-xl shadow-xs hover:shadow-md transition-all duration-150 flex overflow-hidden`}
                     >
-                      {/* Bande colorée de 4 px en haut */}
-                      <div className={`h-1 w-full ${barColor}`} aria-hidden="true" />
+                      {/* Barre de couleur épaisse à gauche */}
+                      <div className={`w-2 shrink-0 ${barColor}`} aria-hidden="true" />
 
-                      <div className="p-3.5 flex flex-col flex-1 justify-between space-y-3">
-                        <div
-                          onClick={() => setExpandedId(isExpanded ? null : sujet.id)}
-                          className="cursor-pointer space-y-2"
-                        >
-                          {/* Discipline + Badge "Mon sujet" */}
-                          <div className="flex items-center gap-1.5 flex-wrap">
+                      <div className="flex-1 min-w-0 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div className="flex-1 min-w-0 space-y-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <div
-                              className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${iconPill}`}
+                              className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${iconPill}`}
                               aria-hidden="true"
                             >
-                              <DisciplineIcon size={13} />
+                              <DisciplineIcon size={14} />
                             </div>
-                            <span className={`inline-block text-[10px] font-bold uppercase px-2 py-0.5 rounded-md border leading-tight line-clamp-1 ${badgeColor}`}>
+                            <span className={`inline-block text-xs font-bold uppercase px-2.5 py-0.5 rounded-md border leading-tight ${badgeColor}`}>
                               {sujet.discipline || 'Discipline'}
                             </span>
                             {isOwnSubject && (
-                              <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
-                                <GraduationCap size={11} className="text-emerald-700 shrink-0" />
+                              <span className="inline-flex items-center gap-1 text-xs font-bold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                <GraduationCap size={12} className="text-emerald-700 shrink-0" />
                                 <span>{fr.mesSujets.badgeMonSujet}</span>
                               </span>
                             )}
                           </div>
 
-                          {/* Titre */}
-                          <h3 className="text-sm font-bold text-slate-900 leading-snug line-clamp-2 min-h-[2.5rem]">
-                            {sujet.titre || 'Sans titre'}
-                          </h3>
-
-                          {/* Encadrant et structure */}
-                          <div className="space-y-0.5 text-[11px] text-slate-600">
-                            <p className="truncate font-medium text-slate-700">{sujet.structure}</p>
-                            {ens && <p className="truncate text-slate-500">{ens.nom}</p>}
-                          </div>
-
-                          {/* Détail dépliable */}
-                          {isExpanded && (
-                            <div className="pt-2 mt-2 border-t border-slate-100 text-xs text-slate-600 space-y-1.5">
-                              {sujet.descriptionCourte && (
-                                <p className="italic bg-white/80 p-2 rounded-lg text-[11px] leading-relaxed text-slate-700 border border-slate-200/60">
-                                  {sujet.descriptionCourte}
-                                </p>
-                              )}
-                              {Array.isArray(sujet.motsCles) && sujet.motsCles.length > 0 && (
-                                <div className="flex flex-wrap gap-1">
-                                  {sujet.motsCles.map((k) => (
-                                    <span key={k} className="text-[10px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-700 font-medium">
-                                      #{k}
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
-                              {ens && (
-                                <div className="text-[11px] text-slate-600 pt-0.5">
-                                  <span className="font-semibold text-slate-800">{ens.nom}</span> • {ens.email}
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Pied de carte : Lecture seule (pas de bouton d'action) */}
-                        <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
                           <button
                             type="button"
-                            onClick={() => setExpandedId(isExpanded ? null : sujet.id)}
-                            className="text-[11px] text-slate-500 hover:text-slate-800 cursor-pointer flex items-center gap-1 font-medium"
+                            onClick={() => setSelectedSujetForDetail(sujet)}
+                            className="text-left block w-full group/title cursor-pointer focus:outline-none"
                           >
-                            <span>{isExpanded ? fr.mesSujets.replierDetails : fr.mesSujets.voirDetails}</span>
-                            {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                            <h3 className="text-base sm:text-lg font-bold text-slate-900 leading-snug line-clamp-2 group-hover/title:text-emerald-800 group-hover/title:underline transition-colors">
+                              {sujet.titre || 'Sans titre'}
+                            </h3>
                           </button>
                         </div>
                       </div>
@@ -2579,6 +2961,7 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
             </div>
           </div>
         )}
+        {renderDetailModal()}
       </div>
     );
 
@@ -2587,10 +2970,10 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
   return (
     <div>
       {isCandidateOrVisitor && (
-        <div className="mt-6 mb-4 relative overflow-hidden bg-white rounded-2xl border border-slate-200/80 shadow-xs text-center py-6 px-4 md:py-8">
+        <div className="mt-4 mb-4 max-w-[720px] mx-auto relative overflow-hidden bg-white rounded-2xl border border-slate-200/80 shadow-xs text-center py-4 px-4 sm:py-5">
           {/* Motif géométrique discret style zellige (étoile à 8 branches) */}
           <svg
-            className="absolute inset-0 w-full h-full opacity-5 pointer-events-none"
+            className="absolute inset-0 w-full h-full opacity-[0.035] pointer-events-none"
             xmlns="http://www.w3.org/2000/svg"
             aria-hidden="true"
           >
@@ -2612,16 +2995,17 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
           </svg>
 
           <div className="relative z-10 flex flex-col items-center justify-center">
-            <h1 className="text-3xl md:text-5xl font-bold text-slate-800 leading-tight">
+            <h1 className="text-xl sm:text-2xl md:text-[32px] font-semibold text-slate-800 leading-tight md:whitespace-nowrap">
               <span>{fr.sujetsModule.bannerTitle}</span>{' '}
-              <span className="text-amber-500 font-bold">{fr.sujetsModule.bannerYear}</span>
+              <span className="text-amber-500">{fr.sujetsModule.bannerYear}</span>
             </h1>
-            <p className="mt-2 text-base md:text-xl text-emerald-700 font-medium">
-              {fr.sujetsModule.bannerSubtitle}
-            </p>
-            <p className="mt-2.5 text-xs md:text-sm font-semibold text-slate-700 flex items-center justify-center gap-1.5 bg-emerald-50/90 px-3.5 py-1 rounded-full border border-emerald-200/70 shadow-2xs">
+            <p className="mt-2.5 text-sm font-semibold text-slate-700 inline-flex items-center justify-center gap-1.5 bg-emerald-50/90 px-3.5 py-1 rounded-full border border-emerald-200/70 shadow-2xs">
               <Calendar size={14} className="text-emerald-700 shrink-0" aria-hidden="true" />
-              <span>{fr.dossier.candidaturesDuAu.replace('{debut}', periode?.debut || '2026-07-01').replace('{fin}', periode?.fin || '2026-09-09')}</span>
+              <span>
+                {fr.dossier.candidaturesDuAu
+                  .replace('{debut}', formatDateJJMMAAAA(periode?.debut || '2026-07-01'))
+                  .replace('{fin}', formatDateJJMMAAAA(periode?.fin || '2026-09-09'))}
+              </span>
             </p>
           </div>
         </div>
@@ -2801,10 +3185,10 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
         keywordOptions={keywordOptions}
       />
 
-      {/* GRILLE RESPONSIVE : 1 COLONNE MOBILE, 2-3 COLONNES SUR GRAND ÉCRAN */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
+      {/* LISTE PLEINE LARGEUR : 1 CARTE HORIZONTALE PAR LIGNE (COLONNE SUR MOBILE) */}
+      <div className="space-y-3">
         {paginatedSujets.length === 0 ? (
-          <div className="col-span-full bg-white border border-slate-200 rounded-xl p-8 text-center space-y-2">
+          <div className="bg-white border border-slate-200 rounded-xl p-8 text-center space-y-2">
             <p className="text-xs text-slate-600">{fr.sujetsModule.emptyCatalog}</p>
             <button
               onClick={handleResetFilters}
@@ -2815,106 +3199,68 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
           </div>
         ) : (
           paginatedSujets.map((sujet) => {
-            const isExpanded = expandedId === sujet.id;
             const inCart = candidat.panier.includes(sujet.id);
             const isApplied = candidat.candidatures.includes(sujet.id);
-            const ens = getEnseignant(sujet.enseignantId);
             const { Icon: DisciplineIcon, barColor, iconPill, badge: badgeColor, cardBg, cardBorder } = getDisciplineConfig(sujet.discipline);
 
             return (
               <div
                 key={sujet.id}
-                className={`group ${cardBg} border ${cardBorder} rounded-xl shadow-xs hover:shadow-md hover:-translate-y-0.5 transition-all duration-150 flex flex-col justify-between overflow-hidden`}
+                className={`group ${cardBg} border ${cardBorder} rounded-xl shadow-xs hover:shadow-md transition-all duration-150 flex overflow-hidden`}
               >
-                {/* Bande colorée de 4 px en haut (couleur de la discipline) */}
-                <div className={`h-1 w-full ${barColor}`} />
+                {/* Barre de couleur épaisse à gauche (couleur du domaine) */}
+                <div className={`w-2 shrink-0 ${barColor}`} aria-hidden="true" />
 
-                {/* Corps de la carte compacte avec espacements réguliers */}
-                <div className="p-3.5 flex flex-col flex-1 justify-between space-y-3">
-                  <div
-                    onClick={() => setExpandedId(isExpanded ? null : sujet.id)}
-                    className="cursor-pointer space-y-2"
-                  >
-                    {/* Badge de discipline avec pastille icône arrondie */}
-                    <div className="flex items-center gap-1.5 flex-wrap">
+                {/* Corps de la carte : colonne sur mobile, horizontal sur bureau */}
+                <div className="flex-1 min-w-0 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="flex-1 min-w-0 space-y-2">
+                    {/* Icône ronde du domaine et pastille de la filière au-dessus du titre */}
+                    <div className="flex items-center gap-2 flex-wrap">
                       <div
-                        className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${iconPill}`}
+                        className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${iconPill}`}
                         aria-hidden="true"
                       >
-                        <DisciplineIcon size={13} />
+                        <DisciplineIcon size={14} />
                       </div>
-                      <span className={`inline-block text-[10px] font-bold uppercase px-2 py-0.5 rounded-md border leading-tight line-clamp-1 ${badgeColor}`}>
+                      <span className={`inline-block text-xs font-bold uppercase px-2.5 py-0.5 rounded-md border leading-tight ${badgeColor}`}>
                         {sujet.discipline}
                       </span>
                     </div>
 
-                    {/* Titre en police plus grande que l'encadrant et la structure */}
-                    <h3 className="text-sm font-bold text-slate-900 leading-snug line-clamp-2 min-h-[2.5rem]">
-                      {sujet.titre}
-                    </h3>
-
-                    {/* Encadrant et structure */}
-                    <div className="space-y-0.5 text-[11px] text-slate-600">
-                      <p className="truncate font-medium text-slate-700">{sujet.structure}</p>
-                      {ens && <p className="truncate text-slate-500">{ens.nom}</p>}
-                    </div>
-
-                    {/* DÉTAIL DÉPLIABLE SUR PLACE (SANS POP-UP) */}
-                    {isExpanded && (
-                      <div className="pt-2 mt-2 border-t border-slate-100 text-xs text-slate-600 space-y-1.5">
-                        {sujet.descriptionCourte && (
-                          <p className="italic bg-slate-50 p-2 rounded-lg text-[11px] leading-relaxed text-slate-700">
-                            {sujet.descriptionCourte}
-                          </p>
-                        )}
-                        <div className="flex flex-wrap gap-1">
-                          {sujet.motsCles.map((k) => (
-                            <span key={k} className="text-[10px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-700 font-medium">
-                              #{k}
-                            </span>
-                          ))}
-                        </div>
-                        {ens && (
-                          <div className="text-[11px] text-slate-600 pt-0.5">
-                            <span className="font-semibold text-slate-800">{ens.nom}</span> • {ens.email}
-                          </div>
-                        )}
-                      </div>
-                    )}
+                    {/* Titre plus gros (2 lignes max), cliquable pour ouvrir la modale de détail */}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedSujetForDetail(sujet)}
+                      className="text-left block w-full group/title cursor-pointer focus:outline-none"
+                    >
+                      <h3 className="text-base sm:text-lg font-bold text-slate-900 leading-snug line-clamp-2 group-hover/title:text-emerald-800 group-hover/title:underline transition-colors">
+                        {sujet.titre}
+                      </h3>
+                    </button>
                   </div>
 
-                  {/* Bouton ♡ Ajouter au panier / Dans le panier / Candidature déposée */}
-                  <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
-                    <span
-                      onClick={() => setExpandedId(isExpanded ? null : sujet.id)}
-                      className="text-[11px] text-slate-400 hover:text-slate-600 cursor-pointer p-1"
-                    >
-                      {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                    </span>
-
+                  {/* Bouton Ajouter aux vœux / Dans mes vœux (pleine largeur sur mobile) */}
+                  <div className="shrink-0 w-full sm:w-auto">
                     {isApplied ? (
                       <button
                         type="button"
                         disabled
-                        className="text-xs font-semibold py-1 px-2.5 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-800 flex items-center gap-1.5 cursor-not-allowed opacity-90 select-none"
+                        className="w-full sm:w-auto min-h-[44px] text-sm font-semibold py-2.5 px-4 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-800 flex items-center justify-center gap-2 cursor-not-allowed opacity-90 select-none"
                       >
-                        <FileCheck2 size={13} className="text-emerald-600 shrink-0" />
+                        <FileCheck2 size={16} className="text-emerald-600 shrink-0" />
                         <span>{fr.sujetsModule.candidatureDeposeeBadge}</span>
                       </button>
                     ) : (
                       <button
                         type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleCart(sujet.id);
-                        }}
-                        className={`text-xs font-bold py-1 px-2.5 rounded-lg border transition flex items-center gap-1.5 active:scale-95 cursor-pointer ${
+                        onClick={() => toggleCart(sujet.id)}
+                        className={`w-full sm:w-auto min-h-[44px] text-sm font-bold py-2.5 px-4 rounded-xl border transition flex items-center justify-center gap-2 active:scale-95 cursor-pointer ${
                           inCart
-                            ? 'bg-rose-50 border-rose-300 text-rose-700'
-                            : 'bg-white border-slate-300 text-slate-700 hover:border-slate-400'
+                            ? 'bg-rose-50 border-rose-300 text-rose-700 hover:bg-rose-100'
+                            : 'bg-white border-slate-300 text-slate-800 hover:border-slate-400 hover:bg-slate-50'
                         }`}
                       >
-                        <Heart size={13} className={inCart ? 'fill-rose-600 text-rose-600' : 'text-slate-400'} />
+                        <Heart size={16} className={inCart ? 'fill-rose-600 text-rose-600' : 'text-slate-400'} />
                         <span>{inCart ? fr.sujetsModule.btnInCart : fr.sujetsModule.btnAddToCart}</span>
                       </button>
                     )}
@@ -2961,6 +3307,7 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
         </div>
       )}
       </div>
+      {renderDetailModal()}
     </div>
   );
 };

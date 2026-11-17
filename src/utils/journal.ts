@@ -63,3 +63,17 @@ export function logEvent(
     return null;
   }
 }
+
+export function logCompteCree(
+  id: string,
+  email: string
+): EvenementJournal | null {
+  const dateFr = new Date().toLocaleDateString('fr-FR');
+  return logEvent(
+    { id, nom: email, role: 'candidat' },
+    'Compte créé',
+    email,
+    dateFr
+  );
+}
+

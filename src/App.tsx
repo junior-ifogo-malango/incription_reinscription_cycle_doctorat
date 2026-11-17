@@ -15,7 +15,7 @@ import {
   RotateCcw,
   User,
   ChevronDown,
-  ShoppingBag,
+  Heart,
   FolderKanban,
   Search,
   CalendarCheck2,
@@ -1258,36 +1258,8 @@ export default function App() {
                           className="absolute right-0 top-full mt-1.5 w-60 bg-white text-slate-800 rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 text-xs"
                         >
                           <div className="px-3 py-2 border-b border-slate-100">
-                            <p className="font-bold text-slate-900">Visiteur démo</p>
-                            <span className="text-[10px] font-semibold text-slate-500">Non connecté</span>
-                          </div>
-
-                          <div
-                            className="px-3 py-2 border-b border-slate-100 bg-slate-50/70 space-y-1.5"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <div className="flex items-center justify-between">
-                              <label htmlFor="demo-date-visitor" className="text-[11px] font-semibold text-slate-700 flex items-center gap-1.5">
-                                <Calendar size={12} className="text-slate-500" />
-                                <span>{fr.demoDate.label}</span>
-                              </label>
-                              {Boolean(demoDateInput) && (
-                                <button
-                                  type="button"
-                                  onClick={handleResetDemoDate}
-                                  className="text-[10px] text-emerald-700 hover:text-emerald-800 font-semibold underline cursor-pointer"
-                                >
-                                  {fr.demoDate.reset}
-                                </button>
-                              )}
-                            </div>
-                            <input
-                              id="demo-date-visitor"
-                              type="date"
-                              value={demoDateInput || aujourdhui()}
-                              onChange={(e) => handleDemoDateChange(e.target.value)}
-                              className="w-full px-2 py-1 bg-white border border-slate-300 rounded text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
-                            />
+                            <p className="font-bold text-slate-900">{fr.auth.visitorBadge}</p>
+                            <span className="text-[10px] font-semibold text-slate-500">{fr.auth.visitorNotConnected}</span>
                           </div>
 
                           <button
@@ -1299,17 +1271,6 @@ export default function App() {
                           >
                             <LogIn size={13} />
                             <span>{fr.auth.login}</span>
-                          </button>
-
-                          <button
-                            onClick={() => {
-                              setAccountMenuOpen(false);
-                              handleResetData();
-                            }}
-                            className="w-full text-left px-3 py-2 text-slate-600 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
-                          >
-                            <RotateCcw size={13} />
-                            <span>{fr.nav.resetData}</span>
                           </button>
                         </div>
                       )}
@@ -1349,44 +1310,35 @@ export default function App() {
                           )}
                         </div>
 
-                        <div
-                          className="px-3 py-2 border-b border-slate-100 bg-slate-50/70 space-y-1.5"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <div className="flex items-center justify-between">
-                            <label htmlFor="demo-date-logged" className="text-[11px] font-semibold text-slate-700 flex items-center gap-1.5">
-                              <Calendar size={12} className="text-slate-500" />
-                              <span>{fr.demoDate.label}</span>
-                            </label>
-                            {Boolean(demoDateInput) && (
-                              <button
-                                type="button"
-                                onClick={handleResetDemoDate}
-                                className="text-[10px] text-emerald-700 hover:text-emerald-800 font-semibold underline cursor-pointer"
-                              >
-                                {fr.demoDate.reset}
-                              </button>
-                            )}
+                        {normalizedRoles.includes('admin') && (
+                          <div
+                            className="px-3 py-2 border-b border-slate-100 bg-slate-50/70 space-y-1.5"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <div className="flex items-center justify-between">
+                              <label htmlFor="demo-date-logged" className="text-[11px] font-semibold text-slate-700 flex items-center gap-1.5">
+                                <Calendar size={12} className="text-slate-500" />
+                                <span>{fr.demoDate.label}</span>
+                              </label>
+                              {Boolean(demoDateInput) && (
+                                <button
+                                  type="button"
+                                  onClick={handleResetDemoDate}
+                                  className="text-[10px] text-emerald-700 hover:text-emerald-800 font-semibold underline cursor-pointer"
+                                >
+                                  {fr.demoDate.reset}
+                                </button>
+                              )}
+                            </div>
+                            <input
+                              id="demo-date-logged"
+                              type="date"
+                              value={demoDateInput || aujourdhui()}
+                              onChange={(e) => handleDemoDateChange(e.target.value)}
+                              className="w-full px-2 py-1 bg-white border border-slate-300 rounded text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
+                            />
                           </div>
-                          <input
-                            id="demo-date-logged"
-                            type="date"
-                            value={demoDateInput || aujourdhui()}
-                            onChange={(e) => handleDemoDateChange(e.target.value)}
-                            className="w-full px-2 py-1 bg-white border border-slate-300 rounded text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
-                          />
-                        </div>
-
-                        <button
-                          onClick={() => {
-                            setAccountMenuOpen(false);
-                            handleResetData();
-                          }}
-                          className="w-full text-left px-3 py-2 text-slate-600 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
-                        >
-                          <RotateCcw size={13} />
-                          <span>{fr.nav.resetData}</span>
-                        </button>
+                        )}
 
                         <button
                           onClick={() => {
@@ -1412,7 +1364,7 @@ export default function App() {
                 />
               )}
 
-              {/* Icône panier avec badge (candidats et visiteurs uniquement) */}
+              {/* Icône Mes vœux avec badge (candidats et visiteurs uniquement) */}
               {role !== 'admin' && (
                 <button
                   onClick={() => handleTabChange('panier')}
@@ -1424,7 +1376,7 @@ export default function App() {
                       : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
                   }`}
                 >
-                  <ShoppingBag size={20} />
+                  <Heart size={20} className={tab === 'panier' ? 'fill-amber-300 text-amber-300' : ''} />
                   <span
                     className={`absolute -top-1 -right-1 text-[10px] min-w-[18px] h-[18px] px-1 rounded-full flex items-center justify-center shadow-xs transition-colors ${
                       (candidat.panier?.length || 0) > 0
@@ -1936,7 +1888,10 @@ export default function App() {
           userEmail={currentUserEmail}
           onOpenLogin={() => setIsLoginOpen(true)}
           onLogout={handleLogout}
-          onReset={handleResetData}
+          demoDateInput={demoDateInput}
+          todayDate={aujourdhui()}
+          onDemoDateChange={handleDemoDateChange}
+          onResetDemoDate={handleResetDemoDate}
           badgeCounts={{
             candidaturesCount: candidaturesCompletsNonValidesCount,
             piecesPretes: piecesAProverCount,
@@ -1962,10 +1917,10 @@ export default function App() {
                   </div>
                   <div>
                     <p className="font-bold text-xs text-slate-900 break-all">
-                      {isLoggedIn ? (currentUserEmail || fr.auth.accountMenu) : 'Visiteur démo'}
+                      {isLoggedIn ? (currentUserEmail || fr.auth.accountMenu) : fr.auth.visitorBadge}
                     </p>
                     {!isLoggedIn && (
-                      <span className="text-[10px] font-semibold text-slate-500">Non connecté</span>
+                      <span className="text-[10px] font-semibold text-slate-500">{fr.auth.visitorNotConnected}</span>
                     )}
                     {isLoggedIn && role === 'enseignant' && (
                       <div className="mt-1 pt-1 border-t border-slate-100">
@@ -1988,34 +1943,35 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Date de démo */}
-              <div
-                className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-1.5"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div className="flex items-center justify-between">
-                  <label htmlFor="demo-date-mobile" className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
-                    <Calendar size={13} className="text-slate-500" />
-                    <span>{fr.demoDate.label}</span>
-                  </label>
-                  {Boolean(demoDateInput) && (
-                    <button
-                      type="button"
-                      onClick={handleResetDemoDate}
-                      className="text-[11px] text-emerald-700 hover:text-emerald-800 font-semibold underline cursor-pointer"
-                    >
-                      {fr.demoDate.reset}
-                    </button>
-                  )}
+              {isLoggedIn && normalizedRoles.includes('admin') && (
+                <div
+                  className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-1.5"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="flex items-center justify-between">
+                    <label htmlFor="demo-date-mobile" className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                      <Calendar size={13} className="text-slate-500" />
+                      <span>{fr.demoDate.label}</span>
+                    </label>
+                    {Boolean(demoDateInput) && (
+                      <button
+                        type="button"
+                        onClick={handleResetDemoDate}
+                        className="text-[11px] text-emerald-700 hover:text-emerald-800 font-semibold underline cursor-pointer"
+                      >
+                        {fr.demoDate.reset}
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    id="demo-date-mobile"
+                    type="date"
+                    value={demoDateInput || aujourdhui()}
+                    onChange={(e) => handleDemoDateChange(e.target.value)}
+                    className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
+                  />
                 </div>
-                <input
-                  id="demo-date-mobile"
-                  type="date"
-                  value={demoDateInput || aujourdhui()}
-                  onChange={(e) => handleDemoDateChange(e.target.value)}
-                  className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
-                />
-              </div>
+              )}
 
               {!isLoggedIn && (
                 <button
@@ -2055,18 +2011,6 @@ export default function App() {
                   )}
                 </button>
               )}
-
-              <button
-                type="button"
-                onClick={() => {
-                  setMobileMenuOpen(false);
-                  handleResetData();
-                }}
-                className="w-full text-left py-2.5 px-3 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-700 flex items-center gap-2.5 text-xs font-semibold cursor-pointer"
-              >
-                <RotateCcw size={15} className="text-slate-500" />
-                <span>{fr.nav.resetData}</span>
-              </button>
 
               {isLoggedIn && (
                 <button

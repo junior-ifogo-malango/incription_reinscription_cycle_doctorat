@@ -7,7 +7,6 @@ import {
   FileText,
   LogIn,
   User,
-  RotateCcw,
   LogOut,
   X,
   MoreHorizontal,
@@ -46,7 +45,11 @@ interface MobileNavProps {
   userEmail?: string;
   onOpenLogin: () => void;
   onLogout: () => void;
-  onReset: () => void;
+  onReset?: () => void;
+  demoDateInput?: string;
+  todayDate?: string;
+  onDemoDateChange?: (newDate: string) => void;
+  onResetDemoDate?: () => void;
   badgeCounts?: {
     panierCount?: number;
     candidaturesCount?: number;
@@ -74,7 +77,10 @@ export const MobileNav: React.FC<MobileNavProps> = ({
   userEmail,
   onOpenLogin,
   onLogout,
-  onReset,
+  demoDateInput = '',
+  todayDate = '',
+  onDemoDateChange,
+  onResetDemoDate,
   badgeCounts = {},
 }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -312,7 +318,14 @@ export const MobileNav: React.FC<MobileNavProps> = ({
                   <User size={16} />
                 </div>
                 <div>
-                  <p className="font-bold text-xs text-slate-900 break-all">{userEmail || userName || fr.auth.accountMenu}</p>
+                  {isLoggedIn ? (
+                    <p className="font-bold text-xs text-slate-900 break-all">{userEmail || userName || fr.auth.accountMenu}</p>
+                  ) : (
+                    <>
+                      <p className="font-bold text-xs text-slate-900">{fr.auth.visitorBadge}</p>
+                      <span className="text-[10px] font-semibold text-slate-500">{fr.auth.visitorNotConnected}</span>
+                    </>
+                  )}
                 </div>
               </div>
               <button
@@ -397,29 +410,61 @@ export const MobileNav: React.FC<MobileNavProps> = ({
               </button>
             )}
 
-            <button
-              type="button"
-              onClick={() => {
-                setMobileMenuOpen(false);
-                onReset();
-              }}
-              className="w-full text-left py-2.5 px-3 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-700 flex items-center gap-2.5 text-xs font-semibold cursor-pointer"
-            >
-              <RotateCcw size={15} className="text-slate-500" />
-              <span>{fr.nav.resetData}</span>
-            </button>
+            {isLoggedIn && normalizedRoles.includes('admin') && onDemoDateChange && (
+              <div
+                className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-1.5"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between">
+                  <label htmlFor="demo-date-mobile-nav" className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                    <Calendar size={13} className="text-slate-500" />
+                    <span>{fr.demoDate.label}</span>
+                  </label>
+                  {Boolean(demoDateInput) && onResetDemoDate && (
+                    <button
+                      type="button"
+                      onClick={onResetDemoDate}
+                      className="text-[11px] text-emerald-700 hover:text-emerald-800 font-semibold underline cursor-pointer"
+                    >
+                      {fr.demoDate.reset}
+                    </button>
+                  )}
+                </div>
+                <input
+                  id="demo-date-mobile-nav"
+                  type="date"
+                  value={demoDateInput || todayDate}
+                  onChange={(e) => onDemoDateChange(e.target.value)}
+                  className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
+                />
+              </div>
+            )}
 
-            <button
-              type="button"
-              onClick={() => {
-                setMobileMenuOpen(false);
-                onLogout();
-              }}
-              className="w-full text-left py-2.5 px-3 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 flex items-center gap-2.5 text-xs font-semibold cursor-pointer"
-            >
-              <LogOut size={15} className="text-rose-600" />
-              <span>{fr.auth.logout}</span>
-            </button>
+            {!isLoggedIn ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  onOpenLogin();
+                }}
+                className="w-full text-left py-2.5 px-3 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 flex items-center gap-2.5 text-xs font-semibold cursor-pointer"
+              >
+                <LogIn size={15} className="text-emerald-700" />
+                <span>{fr.auth.login}</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  onLogout();
+                }}
+                className="w-full text-left py-2.5 px-3 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 flex items-center gap-2.5 text-xs font-semibold cursor-pointer"
+              >
+                <LogOut size={15} className="text-rose-600" />
+                <span>{fr.auth.logout}</span>
+              </button>
+            )}
 
             <button
               type="button"

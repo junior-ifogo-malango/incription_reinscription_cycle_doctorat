@@ -78,7 +78,14 @@ export const storageService = {
   getSujets(): Sujet[] {
     try {
       const data = localStorage.getItem(KEYS.SUJETS);
-      return data ? JSON.parse(data) : INITIAL_SUJETS;
+      if (!data) return INITIAL_SUJETS;
+      const parsed = JSON.parse(data);
+      if (!Array.isArray(parsed) || parsed.length === 0) return INITIAL_SUJETS;
+      return parsed.filter(Boolean).map((s: Sujet) => ({
+        ...s,
+        statutValidation: s.statutValidation || 'publie',
+        motsCles: Array.isArray(s.motsCles) ? s.motsCles : [],
+      }));
     } catch {
       return INITIAL_SUJETS;
     }
