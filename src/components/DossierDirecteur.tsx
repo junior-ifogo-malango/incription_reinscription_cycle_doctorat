@@ -128,7 +128,7 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
 
   // Modale "Demander de compléter"
   const [showDemandeModal, setShowDemandeModal] = useState<boolean>(false);
-  const [demandePiece, setDemandePiece] = useState<'CIN' | 'DIPLOME' | 'RELEVES' | 'CV'>('CIN');
+  const [demandePiece, setDemandePiece] = useState<'CIN' | 'DIPLOME' | 'RELEVES'>('CIN');
   const [demandeMotif, setDemandeMotif] = useState<string>('');
   const [demandeError, setDemandeError] = useState<string | null>(null);
 
@@ -200,10 +200,6 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
     return pieces.find((p) => p && p.type && p.type.toUpperCase() === 'CIN');
   }, [pieces]);
 
-  const cvPiece = useMemo(() => {
-    return pieces.find((p) => p && p.type && p.type.toUpperCase() === 'CV');
-  }, [pieces]);
-
   const diplomePiece = useMemo(() => {
     return pieces.find((p) => p && p.type && p.type.toUpperCase() === 'DIPLOME');
   }, [pieces]);
@@ -212,18 +208,19 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
     return pieces.find((p) => p && p.type && p.type.toUpperCase() === 'RELEVES');
   }, [pieces]);
 
-  // Statuts des 4 pièces de contrôle
+  // Statuts des 3 pièces de contrôle
   const cinOk = Boolean(
-    cinPiece && cinPiece.statut === 'prouvee' && cinPiece.fichier && cinPiece.source !== 'apogee'
+    cinPiece &&
+    cinPiece.statut === 'prouvee' &&
+    cinPiece.fichier &&
+    cinPiece.fichierVerso &&
+    cinPiece.source !== 'apogee'
   );
   const diplomeOk = Boolean(
     diplomePiece && diplomePiece.statut === 'prouvee' && diplomePiece.fichier && diplomePiece.source !== 'apogee'
   );
   const relevesOk = Boolean(
     relevesPiece && relevesPiece.statut === 'prouvee' && relevesPiece.fichier && relevesPiece.source !== 'apogee'
-  );
-  const cvOk = Boolean(
-    cvPiece && cvPiece.statut === 'prouvee' && cvPiece.fichier && cvPiece.source !== 'apogee'
   );
 
   // 5 dernières actions du journal concernant ce candidat
@@ -292,7 +289,7 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
     }
 
     const nowIso = new Date().toISOString();
-    const texteManques = check.manques.length > 0 ? check.manques.join(', ') : 'CIN, Diplôme, Relevés, CV';
+    const texteManques = check.manques.length > 0 ? check.manques.join(', ') : 'CIN, Diplôme, Relevés';
     const anomalieObj: AnomalieCandidature = {
       piece: demandePiece,
       nature: 'absente',
@@ -308,9 +305,6 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
         return { ...p, statut: 'absente' as const };
       }
       if (demandePiece === 'RELEVES' && p.type.toUpperCase() === 'RELEVES') {
-        return { ...p, statut: 'absente' as const };
-      }
-      if (demandePiece === 'CV' && p.type.toUpperCase() === 'CV') {
         return { ...p, statut: 'absente' as const };
       }
       return p;
@@ -416,9 +410,16 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
             </h1>
             <div className="flex items-center gap-2 text-xs text-slate-600 mt-1 flex-wrap">
               <span>
-                CNE :{' '}
+                {fr.dossierDirecteur.codeMassarLabel}{' '}
                 <strong className="font-mono text-slate-900">
                   {candidat.cne || fr.dossierDirecteur.aucuneDonnee}
+                </strong>
+              </span>
+              <span>•</span>
+              <span>
+                {fr.dossierDirecteur.whatsappLabel}{' '}
+                <strong className="font-mono text-slate-900">
+                  {candidat.tel || fr.dossierDirecteur.aucuneDonnee}
                 </strong>
               </span>
               <span>•</span>
@@ -489,7 +490,6 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
                   const firstManque = check.manques[0];
                   if (firstManque === 'Diplôme') setDemandePiece('DIPLOME');
                   else if (firstManque === 'Relevés') setDemandePiece('RELEVES');
-                  else if (firstManque === 'CV') setDemandePiece('CV');
                   else setDemandePiece('CIN');
                   setShowDemandeModal(true);
                   setDemandeMotif(check.manques.join(', '));
@@ -531,27 +531,49 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
                 >
                   {cinOk
                     ? fr.dossierDirecteur.statutPreuveFournie
+                    : cinPiece?.fichier && !cinPiece?.fichierVerso
+                    ? fr.dossierDirecteur.statutVersoManquant
+                    : !cinPiece?.fichier && cinPiece?.fichierVerso
+                    ? fr.dossierDirecteur.statutRectoManquant
                     : fr.dossierDirecteur.statutManquante}
                 </span>
               </div>
             </div>
 
-            {cinPiece?.fichier ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setPieceIllisible(false);
-                  setViewingPiece({
-                    titre: fr.dossierDirecteur.cin,
-                    fichier: cinPiece.fichier!,
-                  });
-                }}
-                className="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition cursor-pointer flex items-center gap-1 active:scale-98 shrink-0"
-              >
-                <Eye size={13} className="text-slate-500" />
-                <span>{fr.dossierDirecteur.btnVoir}</span>
-              </button>
-            ) : null}
+            <div className="flex items-center gap-1.5 shrink-0">
+              {cinPiece?.fichier ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPieceIllisible(false);
+                    setViewingPiece({
+                      titre: `${fr.dossierDirecteur.cin} — ${fr.dossier.cinRectoLabel}`,
+                      fichier: cinPiece.fichier!,
+                    });
+                  }}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition cursor-pointer flex items-center gap-1 active:scale-98 shrink-0"
+                >
+                  <Eye size={13} className="text-slate-500" />
+                  <span>{fr.dossierDirecteur.btnVoirRecto}</span>
+                </button>
+              ) : null}
+              {cinPiece?.fichierVerso ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPieceIllisible(false);
+                    setViewingPiece({
+                      titre: `${fr.dossierDirecteur.cin} — ${fr.dossier.cinVersoLabel}`,
+                      fichier: cinPiece.fichierVerso!,
+                    });
+                  }}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition cursor-pointer flex items-center gap-1 active:scale-98 shrink-0"
+                >
+                  <Eye size={13} className="text-slate-500" />
+                  <span>{fr.dossierDirecteur.btnVoirVerso}</span>
+                </button>
+              ) : null}
+            </div>
           </div>
 
           {/* Ligne 2 : Diplôme */}
@@ -628,48 +650,6 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
                   setViewingPiece({
                     titre: fr.dossierDirecteur.releves,
                     fichier: relevesPiece.fichier!,
-                  });
-                }}
-                className="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition cursor-pointer flex items-center gap-1 active:scale-98 shrink-0"
-              >
-                <Eye size={13} className="text-slate-500" />
-                <span>{fr.dossierDirecteur.btnVoir}</span>
-              </button>
-            ) : null}
-          </div>
-
-          {/* Ligne 4 : CV */}
-          <div className="p-3.5 flex items-center justify-between gap-3 bg-white">
-            <div className="flex items-center gap-3 min-w-0">
-              {cvOk ? (
-                <CheckCircle2 size={18} className="text-emerald-600 shrink-0" />
-              ) : (
-                <XCircle size={18} className="text-rose-500 shrink-0" />
-              )}
-              <div className="min-w-0">
-                <span className="text-xs font-bold text-slate-900 block truncate">
-                  {fr.dossierDirecteur.cv}
-                </span>
-                <span
-                  className={`text-[11px] font-semibold ${
-                    cvOk ? 'text-emerald-700' : 'text-rose-600'
-                  }`}
-                >
-                  {cvOk
-                    ? fr.dossierDirecteur.statutPreuveFournie
-                    : fr.dossierDirecteur.statutManquante}
-                </span>
-              </div>
-            </div>
-
-            {cvPiece?.fichier ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setPieceIllisible(false);
-                  setViewingPiece({
-                    titre: fr.dossierDirecteur.cv,
-                    fichier: cvPiece.fichier!,
                   });
                 }}
                 className="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition cursor-pointer flex items-center gap-1 active:scale-98 shrink-0"
@@ -963,7 +943,6 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
                   <option value="CIN">{fr.dossierDirecteur.cin}</option>
                   <option value="DIPLOME">{fr.dossierDirecteur.diplome}</option>
                   <option value="RELEVES">{fr.dossierDirecteur.releves}</option>
-                  <option value="CV">{fr.dossierDirecteur.cv}</option>
                 </select>
               </div>
 

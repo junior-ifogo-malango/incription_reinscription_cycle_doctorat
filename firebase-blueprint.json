@@ -1,0 +1,93 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Profil utilisateur authentifié via Google Firebase Auth avec rôle applicatif USMBA.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Identifiant unique Firebase Auth (UID).",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Adresse e-mail Google vérifiée de l'utilisateur.",
+          "minLength": 3,
+          "maxLength": 254
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Nom complet affiché depuis le compte Google.",
+          "maxLength": 120
+        },
+        "photoURL": {
+          "type": "string",
+          "description": "URL de la photo de profil Google.",
+          "maxLength": 500
+        },
+        "role": {
+          "type": "string",
+          "description": "Rôle applicatif attribué à l'utilisateur.",
+          "enum": ["candidat", "enseignant", "directeur_ced", "doctorant", "agent", "admin"]
+        },
+        "authProvider": {
+          "type": "string",
+          "description": "Fournisseur d'authentification utilisé.",
+          "enum": ["google"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Horodatage serveur de création du profil."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Horodatage serveur de dernière mise à jour."
+        }
+      },
+      "required": ["uid", "email", "displayName", "role", "authProvider", "createdAt", "updatedAt"]
+    },
+    "AdminMarker": {
+      "title": "AdminMarker",
+      "description": "Marqueur d'habilitation administrateur pour le contrôle d'accès basé sur les rôles.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "UID de l'administrateur.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "E-mail de l'administrateur.",
+          "minLength": 3,
+          "maxLength": 254
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Horodatage serveur d'attribution."
+        }
+      },
+      "required": ["uid", "email", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Profils utilisateurs privés (PII isolée par propriétaire et administrateur)."
+    },
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/AdminMarker" },
+      "description": "Registre des comptes administrateurs autorisés."
+    }
+  }
+}

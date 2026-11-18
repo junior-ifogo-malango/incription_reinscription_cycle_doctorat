@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, LogIn, AlertCircle, KeyRound, Eye, EyeOff } from 'lucide-react';
+import { X, LogIn, AlertCircle, Eye, EyeOff, Loader2 } from 'lucide-react';
 import { UserRole, Candidat, Compte, normaliserRole, getCompteRoles } from '../types';
 import { fr } from '../i18n/fr';
 import { DEMO_CANDIDAT_YASSINE, INITIAL_ENSEIGNANTS, MOCK_CANDIDATS, getComptes } from '../data/mockData';
 import { storageService } from '../services/storage';
 import { logEvent, logCompteCree } from '../utils/journal';
+import { signInWithGoogle, signOutFirebase } from '../firebase';
+import { resolveGoogleSession } from '../utils/googleAuthResolver';
 
 interface LoginModalProps {
   isOpen: boolean;
@@ -59,15 +61,18 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   isOpen,
   onClose,
   onLoginSuccess,
-  onOpenVoteComite,
   restrictionMessage,
 }) => {
+  const [mode, setMode] = useState<'login' | 'register'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [emailTouched, setEmailTouched] = useState(false);
   const [passwordTouched, setPasswordTouched] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [googleError, setGoogleError] = useState<string | null>(null);
+  const [googleErrorCode, setGoogleErrorCode] = useState<string | null>(null);
 
   const emailInputRef = useRef<HTMLInputElement | null>(null);
   const passwordInputRef = useRef<HTMLInputElement | null>(null);
@@ -82,16 +87,31 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
   useEffect(() => {
     if (isOpen) {
+      setMode('login');
       setEmail('');
       setPassword('');
       setShowPassword(false);
       setEmailTouched(false);
       setPasswordTouched(false);
       setError(null);
+      setGoogleError(null);
+      setGoogleErrorCode(null);
+      setGoogleLoading(false);
       hasAutoFocusedPasswordRef.current = false;
       requestAnimationFrame(() => emailInputRef.current?.focus());
     }
   }, [isOpen]);
+
+  const switchMode = (nextMode: 'login' | 'register') => {
+    setMode(nextMode);
+    setError(null);
+    setGoogleError(null);
+    setGoogleErrorCode(null);
+    setEmailTouched(false);
+    setPasswordTouched(false);
+    hasAutoFocusedPasswordRef.current = false;
+    requestAnimationFrame(() => emailInputRef.current?.focus());
+  };
 
   // Focus sur Mot de passe dès que l'e-mail atteint un format valide
   useEffect(() => {
@@ -124,6 +144,51 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
   if (!isOpen) return null;
 
+  const handleGoogleSignIn = async () => {
+    if (googleLoading) return;
+    setGoogleError(null);
+    setGoogleErrorCode(null);
+    setError(null);
+    setGoogleLoading(true);
+    try {
+      const { profile } = await signInWithGoogle();
+      const resolved = resolveGoogleSession(profile);
+      if (resolved.error) {
+        await signOutFirebase();
+        setGoogleError(resolved.error);
+        return;
+      }
+      logEvent(
+        {
+          id: resolved.compte?.id || profile.uid,
+          nom: resolved.compte?.nom || profile.displayName || resolved.email,
+          role: resolved.role,
+        },
+        fr.journalActions.connexion,
+        `${resolved.email} (${fr.auth.googleAccountBadge})`
+      );
+      onLoginSuccess(resolved.role, resolved.email, resolved.candidateData, resolved.compte);
+      onClose();
+    } catch (err: unknown) {
+      const code =
+        typeof err === 'object' && err !== null && 'code' in err
+          ? String((err as { code?: unknown }).code)
+          : '';
+      setGoogleErrorCode(code || null);
+      if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+        setGoogleError(fr.auth.googlePopupClosed);
+      } else if (code === 'auth/popup-blocked') {
+        setGoogleError(fr.auth.googlePopupBlocked);
+      } else if (code === 'auth/unauthorized-domain') {
+        setGoogleError(fr.auth.googleUnauthorizedDomain);
+      } else {
+        setGoogleError(fr.auth.googleSignInError);
+      }
+    } finally {
+      setGoogleLoading(false);
+    }
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setEmailTouched(true);
@@ -131,6 +196,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
     setError(null);
 
     if (!isEmailValid || !isPasswordLongEnough) return;
+    if (mode === 'register' && isKnown) return;
 
     // Cas création de nouveau compte (e-mail inconnu -> toujours Candidat)
     if (!isKnown) {
@@ -353,17 +419,10 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
   const showEmailError = emailTouched && email.trim().length > 0 && !isEmailValid;
   const showPasswordShortError =
-    isEmailValid &&
+    passwordTouched &&
     password.length > 0 &&
-    !isPasswordLongEnough &&
-    (!isKnown || passwordTouched);
+    !isPasswordLongEnough;
   const passwordFieldError = error || (showPasswordShortError ? fr.auth.passwordTooShort : null);
-
-  const disabledReason = !isEmailValid
-    ? fr.auth.loginDisabledEmailReason
-    : !isPasswordLongEnough
-    ? fr.auth.loginDisabledPasswordReason
-    : null;
 
   return (
     <div
@@ -383,7 +442,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
           <div className="flex items-center gap-2">
             <LogIn size={16} className="text-emerald-700" />
             <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wide">
-              {fr.auth.loginTitle}
+              {mode === 'register' ? fr.auth.createAccountTitle : fr.auth.loginTitle}
             </h3>
           </div>
           <button
@@ -404,8 +463,8 @@ export const LoginModal: React.FC<LoginModalProps> = ({
           </div>
         )}
 
-        {/* Formulaire progressif unique : E-mail d'abord, puis Mot de passe */}
-        <form onSubmit={handleSubmit} noValidate className="p-4 space-y-3">
+        {/* Formulaire E-mail + Mot de passe visibles dès l'ouverture */}
+        <form onSubmit={handleSubmit} noValidate className="p-4 pb-3 space-y-3">
           <div>
             <label htmlFor="login-email-input" className="block text-[11px] font-bold text-slate-700 mb-1">
               {fr.auth.emailLabel}
@@ -439,91 +498,150 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                 {fr.auth.invalidEmail}
               </p>
             )}
+            {mode === 'register' && isKnown && (
+              <p className="text-[11px] text-rose-600 font-medium mt-1">
+                {fr.auth.emailAlreadyExists}
+              </p>
+            )}
           </div>
 
-          {isEmailValid && (
-            <div className="space-y-2 animate-in fade-in duration-150">
-              {!isKnown && (
-                <p className="text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1.5 font-medium">
-                  {fr.auth.newAccountHint}
-                </p>
-              )}
+          <div>
+            <label htmlFor="login-password-input" className="block text-[11px] font-bold text-slate-700 mb-1">
+              {fr.auth.passwordLabel}
+            </label>
+            <div className="relative flex items-center">
+              <input
+                ref={passwordInputRef}
+                id="login-password-input"
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  setError(null);
+                }}
+                onBlur={() => setPasswordTouched(true)}
+                placeholder="••••••••"
+                className={`w-full text-xs p-2.5 pr-9 rounded-lg border focus:outline-none focus:ring-1 bg-white ${
+                  passwordFieldError
+                    ? 'border-rose-400 focus:ring-rose-500'
+                    : 'border-slate-300 focus:ring-emerald-600'
+                }`}
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((prev) => !prev)}
+                aria-label={showPassword ? fr.auth.hidePassword : fr.auth.showPassword}
+                className="absolute right-2.5 p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
+                {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+              </button>
+            </div>
+            {passwordFieldError && (
+              <p className="text-[11px] text-rose-600 font-medium mt-1">
+                {passwordFieldError}
+              </p>
+            )}
+            {(mode === 'register' || (isEmailValid && !isKnown)) && (
+              <p className="text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1.5 font-medium mt-1.5">
+                {fr.auth.newAccountHint}
+              </p>
+            )}
+          </div>
 
-              <div>
-                <label htmlFor="login-password-input" className="block text-[11px] font-bold text-slate-700 mb-1">
-                  {fr.auth.passwordLabel}
-                </label>
-                <div className="relative flex items-center">
-                  <input
-                    ref={passwordInputRef}
-                    id="login-password-input"
-                    type={showPassword ? 'text' : 'password'}
-                    value={password}
-                    onChange={(e) => {
-                      setPassword(e.target.value);
-                      setError(null);
-                    }}
-                    onBlur={() => setPasswordTouched(true)}
-                    placeholder="••••••••"
-                    className={`w-full text-xs p-2.5 pr-9 rounded-lg border focus:outline-none focus:ring-1 bg-white ${
-                      passwordFieldError
-                        ? 'border-rose-400 focus:ring-rose-500'
-                        : 'border-slate-300 focus:ring-emerald-600'
-                    }`}
-                    required
+          <div>
+            <button
+              type="submit"
+              disabled={!isFormValid || (mode === 'register' && isKnown)}
+              className={`w-full min-h-[44px] py-2.5 rounded-xl text-xs font-bold transition shadow-xs ${
+                !isFormValid || (mode === 'register' && isKnown)
+                  ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                  : 'bg-emerald-700 hover:bg-emerald-800 text-white active:scale-95 cursor-pointer'
+              }`}
+            >
+              {mode === 'register' || (isEmailValid && !isKnown)
+                ? fr.auth.btnCreateAccount
+                : fr.auth.btnSubmitLogin}
+            </button>
+            {!isFormValid && (
+              <p className="text-[11px] text-slate-500 text-center pt-1.5">
+                {fr.auth.loginDisabledSimpleReason}
+              </p>
+            )}
+            <div className="pt-2 text-center">
+              <button
+                type="button"
+                onClick={() => switchMode(mode === 'register' ? 'login' : 'register')}
+                className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 hover:underline cursor-pointer"
+              >
+                {mode === 'register' ? fr.auth.alreadyHaveAccountLink : fr.auth.noAccountCreateLink}
+              </button>
+            </div>
+          </div>
+        </form>
+
+        {/* Séparateur "ou" puis bouton Continuer avec Google en dessous du formulaire */}
+        <div className="px-4 pb-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <div className="h-px flex-1 bg-slate-200" />
+            <span className="text-[11px] font-semibold text-slate-400">
+              {fr.auth.orSeparator}
+            </span>
+            <div className="h-px flex-1 bg-slate-200" />
+          </div>
+
+          <div className="space-y-1.5">
+            <button
+              type="button"
+              onClick={handleGoogleSignIn}
+              disabled={googleLoading}
+              className="w-full min-h-[44px] py-2.5 px-4 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 active:scale-[0.99] text-slate-800 text-xs font-bold transition shadow-xs flex items-center justify-center gap-2.5 cursor-pointer disabled:opacity-60 disabled:cursor-wait"
+            >
+              {googleLoading ? (
+                <Loader2 size={16} className="animate-spin text-emerald-700 shrink-0" />
+              ) : (
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                  className="shrink-0"
+                >
+                  <path
+                    fill="#4285F4"
+                    d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z"
                   />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword((prev) => !prev)}
-                    aria-label={showPassword ? fr.auth.hidePassword : fr.auth.showPassword}
-                    className="absolute right-2.5 p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
-                  >
-                    {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
-                  </button>
-                </div>
-                {passwordFieldError && (
-                  <p className="text-[11px] text-rose-600 font-medium mt-1">
-                    {passwordFieldError}
+                  <path
+                    fill="#34A853"
+                    d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.14C3.26 21.3 7.31 24 12 24Z"
+                  />
+                  <path
+                    fill="#FBBC05"
+                    d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14Z"
+                  />
+                  <path
+                    fill="#EA4335"
+                    d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96Z"
+                  />
+                </svg>
+              )}
+              <span>{googleLoading ? fr.auth.googleSignInLoading : fr.auth.googleSignIn}</span>
+            </button>
+
+            {googleError && (
+              <div className="space-y-0.5 text-center pt-0.5">
+                <p className="text-[11px] text-rose-600 font-medium">
+                  {googleError}
+                </p>
+                {googleErrorCode && (
+                  <p className="text-[10px] text-slate-400 font-mono">
+                    {fr.auth.googleErrorCodePrefix} : {googleErrorCode}
                   </p>
                 )}
               </div>
-            </div>
-          )}
-
-          <button
-            type="submit"
-            disabled={!isFormValid}
-            className={`w-full min-h-[44px] py-2.5 rounded-xl text-xs font-bold transition shadow-xs ${
-              !isFormValid
-                ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
-                : 'bg-emerald-700 hover:bg-emerald-800 text-white active:scale-95 cursor-pointer'
-            }`}
-          >
-            {isEmailValid && !isKnown ? fr.auth.btnCreateAccount : fr.auth.btnSubmitLogin}
-          </button>
-          {disabledReason && (
-            <p className="text-[11px] text-slate-500 text-center pt-0.5">
-              {disabledReason}
-            </p>
-          )}
-        </form>
-
-        {/* Lien bas de modale : Vote comité SANS compte */}
-        {onOpenVoteComite && (
-          <div className="p-3 text-center border-t border-slate-100 bg-white">
-            <button
-              type="button"
-              onClick={() => {
-                onClose();
-                onOpenVoteComite();
-              }}
-              className="text-xs font-semibold text-amber-800 hover:text-amber-900 hover:underline flex items-center justify-center gap-1.5 w-full cursor-pointer py-1"
-            >
-              <KeyRound size={13} className="text-amber-600" />
-              <span>{fr.auth.comiteVoteLink}</span>
-            </button>
+            )}
           </div>
-        )}
+        </div>
       </div>
     </div>
   );

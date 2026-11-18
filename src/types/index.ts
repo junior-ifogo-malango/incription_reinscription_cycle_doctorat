@@ -114,7 +114,9 @@ export interface Piece {
   type: PieceType;
   statut: PieceStatut;
   source?: PieceSource;
-  fichier?: string; /* dataURL */
+  fichier?: string; /* dataURL (Recto pour CIN) */
+  fichierVerso?: string; /* dataURL (Verso pour CIN) */
+  sourceVerso?: PieceSource;
   id?: string;
   candidatId?: string;
   dateMaj?: string;
@@ -146,6 +148,9 @@ export interface Candidature {
 export interface Candidat {
   id: string;
   nom: string;
+  nomFamille?: string;
+  prenom?: string;
+  dateNaissance?: string;
   cne?: string;
   cin?: string;
   email: string;
@@ -214,23 +219,22 @@ export interface DossierCompletResult {
 
 /**
  * Règle d'exhaustivité du dossier candidat :
- * complet si CIN, DIPLOME, RELEVES et CV ont un fichier au statut 'prouvee' (caméra ou téléversement).
+ * complet si CIN, DIPLOME et RELEVES ont un fichier au statut 'prouvee' (caméra ou téléversement).
  * Cas particulier avec motif : la pièce DIPLOME peut être une attestation, mais reste à téléverser.
- * manques = noms lisibles ("CIN", "Diplôme", "Relevés", "CV").
- * Ne plante jamais si candidat ou pieces undefined (renvoie 4 manques).
+ * manques = noms lisibles ("CIN", "Diplôme", "Relevés").
+ * Ne plante jamais si candidat ou pieces undefined (renvoie 3 manques).
  */
 export function dossierComplet(candidat?: Candidat | null): DossierCompletResult {
   const piecesRequises: { type: PieceType; label: string }[] = [
     { type: 'CIN', label: 'CIN' },
     { type: 'DIPLOME', label: 'Diplôme' },
     { type: 'RELEVES', label: 'Relevés' },
-    { type: 'CV', label: 'CV' },
   ];
 
   if (!candidat || !Array.isArray(candidat.pieces)) {
     return {
       complet: false,
-      manques: ['CIN', 'Diplôme', 'Relevés', 'CV'],
+      manques: ['CIN', 'Diplôme', 'Relevés'],
     };
   }
 
@@ -241,12 +245,14 @@ export function dossierComplet(candidat?: Candidat | null): DossierCompletResult
     const piece = pieces.find(
       (p) => p && p.type && p.type.toUpperCase() === req.type.toUpperCase()
     );
+    const isCinPiece = req.type.toUpperCase() === 'CIN';
+    const hasRecto = Boolean(piece?.fichier && typeof piece.fichier === 'string' && piece.fichier.trim() !== '');
+    const hasVerso = Boolean(piece?.fichierVerso && typeof piece.fichierVerso === 'string' && piece.fichierVerso.trim() !== '');
     const aFichierProuve = Boolean(
       piece &&
       piece.statut === 'prouvee' &&
-      piece.fichier &&
-      typeof piece.fichier === 'string' &&
-      piece.fichier.trim() !== '' &&
+      hasRecto &&
+      (!isCinPiece || hasVerso) &&
       piece.source !== 'apogee'
     );
     if (!aFichierProuve) {

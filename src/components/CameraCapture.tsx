@@ -1,9 +1,57 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Camera, X, AlertCircle, CheckCircle2, Upload } from 'lucide-react';
+import { Camera, X, AlertCircle, CheckCircle2, Upload, ExternalLink } from 'lucide-react';
 import { fr } from '../i18n/fr';
+
+type CameraErrorKind = 'permission_denied' | 'preview_blocked';
+
+async function detectCameraErrorKind(err: unknown): Promise<CameraErrorKind> {
+  const errName =
+    typeof err === 'object' && err !== null && 'name' in err
+      ? String((err as { name?: unknown }).name)
+      : '';
+  const errMsg =
+    err instanceof Error ? err.message.toLowerCase() : String(err || '').toLowerCase();
+
+  const docAny = typeof document !== 'undefined' ? (document as unknown as {
+    featurePolicy?: { allowsFeature?: (f: string) => boolean };
+    permissionsPolicy?: { allowsFeature?: (f: string) => boolean };
+  }) : null;
+
+  const policyBlocked =
+    docAny?.featurePolicy?.allowsFeature?.('camera') === false ||
+    docAny?.permissionsPolicy?.allowsFeature?.('camera') === false ||
+    errMsg.includes('permissions policy') ||
+    errMsg.includes('feature policy') ||
+    errName === 'SecurityError';
+
+  if (policyBlocked) {
+    return 'preview_blocked';
+  }
+
+  const inIframe = typeof window !== 'undefined' && window.self !== window.top;
+  if (inIframe) {
+    try {
+      if (navigator.permissions && typeof navigator.permissions.query === 'function') {
+        const perm = await navigator.permissions.query({ name: 'camera' as PermissionName });
+        if (perm.state === 'denied') {
+          return 'permission_denied';
+        }
+      }
+    } catch {
+      // permissions.query peut ne pas supporter 'camera' sur certains navigateurs
+    }
+    if (errName === 'NotAllowedError' || errName === 'PermissionDeniedError') {
+      return 'preview_blocked';
+    }
+  }
+
+  return 'permission_denied';
+}
 
 interface CameraCaptureProps {
   onCapture: (dataUrl: string) => void;
+  onCaptureDual?: (rectoDataUrl: string, versoDataUrl: string) => void;
+  dualStepLabels?: [string, string];
   onClose: () => void;
   onErrorFallback?: () => void;
   title?: string;
@@ -11,16 +59,21 @@ interface CameraCaptureProps {
 
 export const CameraCapture: React.FC<CameraCaptureProps> = ({
   onCapture,
+  onCaptureDual,
+  dualStepLabels,
   onClose,
   onErrorFallback,
   title,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [errorKind, setErrorKind] = useState<CameraErrorKind | null>(null);
   const [isReady, setIsReady] = useState(false);
   const [isCadreValide, setIsCadreValide] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [dualStep, setDualStep] = useState<0 | 1>(0);
+  const [rectoCapture, setRectoCapture] = useState<string | null>(null);
+  const isDualMode = Boolean(onCaptureDual);
 
   useEffect(() => {
     if (isReady) {
@@ -77,10 +130,9 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
       } catch (err) {
         if (active) {
           stopStream();
-          if (onErrorFallback) {
-            onErrorFallback();
-          } else {
-            setError(fr.dossier.cameraError);
+          const kind = await detectCameraErrorKind(err);
+          if (active) {
+            setErrorKind(kind);
           }
         }
       }
@@ -90,18 +142,15 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
       initCamera();
     } else {
       stopStream();
-      if (onErrorFallback) {
-        onErrorFallback();
-      } else {
-        setError(fr.dossier.cameraError);
-      }
+      const inIframe = typeof window !== 'undefined' && window.self !== window.top;
+      setErrorKind(inIframe ? 'preview_blocked' : 'permission_denied');
     }
 
     return () => {
       active = false;
       stopStream();
     };
-  }, [onErrorFallback]);
+  }, []);
 
   const handleCapture = () => {
     const video = videoRef.current;
@@ -125,6 +174,17 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
     ctx.drawImage(video, 0, 0, width, height);
     const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
 
+    if (isDualMode && onCaptureDual) {
+      if (dualStep === 0) {
+        setRectoCapture(dataUrl);
+        setDualStep(1);
+      } else {
+        stopStream();
+        onCaptureDual(rectoCapture || dataUrl, dataUrl);
+      }
+      return;
+    }
+
     setPreviewUrl(dataUrl);
   };
 
@@ -133,13 +193,28 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
     onClose();
   };
 
+  const stepLabel = isDualMode
+    ? dualStepLabels
+      ? dualStepLabels[dualStep]
+      : dualStep === 0
+      ? fr.dossier.cinScanRectoStep
+      : fr.dossier.cinScanVersoStep
+    : null;
+
   return (
     <div className="fixed inset-0 z-50 bg-black/95 flex flex-col justify-between text-white p-4">
       {/* En-tête sobre */}
       <div className="flex items-center justify-between z-10">
-        <h2 className="text-sm font-semibold truncate max-w-[80%] text-slate-100">
-          {title || fr.dossier.title}
-        </h2>
+        <div className="flex items-center gap-2 min-w-0 max-w-[85%]">
+          <h2 className="text-sm font-semibold truncate text-slate-100">
+            {title || fr.dossier.title}
+          </h2>
+          {stepLabel && (
+            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-600 text-white shrink-0">
+              {stepLabel}
+            </span>
+          )}
+        </div>
         <button
           type="button"
           onClick={handleClose}
@@ -152,11 +227,25 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
 
       {/* Cadre vidéo ou aperçu capturé */}
       <div className="relative flex-1 my-3 flex items-center justify-center overflow-hidden rounded-2xl bg-black">
-        {error ? (
-          <div className="text-center p-6 max-w-sm space-y-3 bg-slate-900/80 rounded-2xl border border-slate-800">
+        {errorKind ? (
+          <div className="text-center p-6 max-w-sm space-y-3 bg-slate-900/90 rounded-2xl border border-slate-800">
             <AlertCircle size={32} className="mx-auto text-amber-400" />
-            <p className="text-xs text-slate-300 leading-relaxed">{error}</p>
-            <div className="flex items-center justify-center gap-2 pt-2">
+            <p className="text-xs text-slate-200 leading-relaxed font-medium">
+              {errorKind === 'preview_blocked'
+                ? fr.dossier.cameraBloqueeApercu
+                : fr.dossier.cameraRefusee}
+            </p>
+            <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+              {errorKind === 'preview_blocked' && (
+                <button
+                  type="button"
+                  onClick={() => window.open(window.location.href, '_blank')}
+                  className="px-4 py-2 text-xs font-semibold rounded-xl bg-amber-500 text-slate-950 hover:bg-amber-400 transition-colors cursor-pointer flex items-center gap-1.5 shadow-sm"
+                >
+                  <ExternalLink size={14} />
+                  <span>{fr.dossier.ouvrirNouvelOnglet}</span>
+                </button>
+              )}
               {onErrorFallback && (
                 <button
                   type="button"
@@ -175,7 +264,7 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
                 onClick={handleClose}
                 className="px-4 py-2 text-xs font-semibold rounded-xl bg-white/10 text-white hover:bg-white/20 transition-colors cursor-pointer"
               >
-                {fr.dossier.close}
+                {fr.dossier.cancel}
               </button>
             </div>
           </div>
@@ -244,7 +333,7 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
       </div>
 
       {/* Barre de contrôle inférieure */}
-      {!error && (
+      {!errorKind && (
         <div className="px-6 pb-2 pt-1 z-10 w-full">
           {previewUrl ? (
             <div className="flex items-center justify-between gap-3 max-w-sm mx-auto">
@@ -267,47 +356,29 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
               </button>
             </div>
           ) : (
-            <div className="flex flex-col items-center gap-2 max-w-sm mx-auto">
-              <div className="flex items-center justify-between w-full">
-                <button
-                  type="button"
-                  onClick={handleClose}
-                  className="text-xs font-medium text-slate-300 hover:text-white px-3 py-2 cursor-pointer"
-                >
-                  {fr.dossier.cancel}
-                </button>
+            <div className="flex items-center justify-center gap-3 max-w-sm mx-auto">
+              <button
+                type="button"
+                onClick={handleClose}
+                className="flex-1 min-h-[44px] px-4 py-2 text-xs font-semibold rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer"
+              >
+                {fr.dossier.cancel}
+              </button>
 
-                <button
-                  type="button"
-                  onClick={handleCapture}
-                  disabled={!isReady || !isCadreValide}
-                  className={`w-16 h-16 rounded-full border-4 flex items-center justify-center transition-all ${
-                    isReady && isCadreValide
-                      ? 'border-white bg-white/20 hover:bg-white/30 active:scale-95 cursor-pointer'
-                      : 'border-slate-500 bg-slate-800/60 opacity-50 cursor-not-allowed'
-                  }`}
-                  aria-label={fr.dossier.capturePhoto}
-                >
-                  <div
-                    className={`w-12 h-12 rounded-full flex items-center justify-center shadow-md ${
-                      isReady && isCadreValide
-                        ? 'bg-white text-slate-900'
-                        : 'bg-slate-600 text-slate-400'
-                    }`}
-                  >
-                    <Camera size={22} />
-                  </div>
-                </button>
-
-                <div className="w-12" />
-              </div>
-
-              {!isCadreValide && isReady && (
-                <div className="text-[11px] text-amber-300 flex items-center gap-1.5 font-medium bg-black/75 px-3 py-1 rounded-full border border-amber-400/30">
-                  <AlertCircle size={12} className="shrink-0 text-amber-400" />
-                  <span>{fr.dossier.cadreNonValideRaison}</span>
-                </div>
-              )}
+              <button
+                type="button"
+                onClick={handleCapture}
+                disabled={!isReady}
+                className={`flex-1 min-h-[44px] px-4 py-2 text-xs font-semibold rounded-xl flex items-center justify-center gap-2 transition-all ${
+                  isReady
+                    ? 'bg-emerald-600 hover:bg-emerald-500 text-white active:scale-95 cursor-pointer shadow-md'
+                    : 'bg-slate-700 text-slate-400 cursor-not-allowed'
+                }`}
+                aria-label={fr.dossier.btnCapturer}
+              >
+                <Camera size={16} />
+                <span>{fr.dossier.btnCapturer}</span>
+              </button>
             </div>
           )}
         </div>

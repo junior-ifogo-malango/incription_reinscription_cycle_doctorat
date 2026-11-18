@@ -299,8 +299,6 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
             targetId = 'carte-piece-diplome';
           } else if (check.manques.includes('Relevés')) {
             targetId = 'carte-piece-releves';
-          } else if (check.manques.includes('CV')) {
-            targetId = 'carte-piece-cv';
           }
           const el = targetId ? document.getElementById(targetId) : null;
           if (el) {

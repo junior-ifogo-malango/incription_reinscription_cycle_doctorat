@@ -1030,16 +1030,20 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
   };
 
   // Validation finale des candidatures avec contrôle du profil (demandé une seule fois)
+  const resolvedCandidateNom =
+    candidat.nom?.trim() ||
+    [candidat.prenom, candidat.nomFamille].filter((v) => v && v.trim()).join(' ').trim();
+
   const handleValidateCandidatures = () => {
-    const isProfileIncomplete = !candidat.nom?.trim() || !candidat.tel?.trim();
+    const isProfileIncomplete = !resolvedCandidateNom || !candidat.tel?.trim();
     if (isProfileIncomplete) {
-      setProfileNom(candidat.nom || '');
+      setProfileNom(resolvedCandidateNom);
       setProfileTel(candidat.tel || '');
       setProfileErrors({});
       setIsProfileModalOpen(true);
       return;
     }
-    finalizeValidateCandidatures(candidat);
+    finalizeValidateCandidatures({ ...candidat, nom: resolvedCandidateNom });
   };
 
   const handleProfileModalSubmit = (e: React.FormEvent) => {
@@ -1505,29 +1509,31 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
                   {fr.sujetsModule.completeProfileSub}
                 </p>
 
-                <div>
-                  <label htmlFor="profile-nom-input" className="block text-[11px] font-bold text-slate-700 mb-1">
-                    {fr.sujetsModule.nameLabel} *
-                  </label>
-                  <input
-                    id="profile-nom-input"
-                    type="text"
-                    value={profileNom}
-                    onChange={(e) => {
-                      setProfileNom(e.target.value);
-                      if (profileErrors.nom) setProfileErrors((prev) => ({ ...prev, nom: undefined }));
-                    }}
-                    className={`w-full text-xs p-2.5 rounded-lg border focus:outline-none focus:ring-1 bg-white ${
-                      profileErrors.nom
-                        ? 'border-rose-400 focus:ring-rose-500'
-                        : 'border-slate-300 focus:ring-emerald-600'
-                    }`}
-                    required
-                  />
-                  {profileErrors.nom && (
-                    <p className="text-[11px] text-rose-600 font-medium mt-1">{profileErrors.nom}</p>
-                  )}
-                </div>
+                {!resolvedCandidateNom && (
+                  <div>
+                    <label htmlFor="profile-nom-input" className="block text-[11px] font-bold text-slate-700 mb-1">
+                      {fr.sujetsModule.nameLabel} *
+                    </label>
+                    <input
+                      id="profile-nom-input"
+                      type="text"
+                      value={profileNom}
+                      onChange={(e) => {
+                        setProfileNom(e.target.value);
+                        if (profileErrors.nom) setProfileErrors((prev) => ({ ...prev, nom: undefined }));
+                      }}
+                      className={`w-full text-xs p-2.5 rounded-lg border focus:outline-none focus:ring-1 bg-white ${
+                        profileErrors.nom
+                          ? 'border-rose-400 focus:ring-rose-500'
+                          : 'border-slate-300 focus:ring-emerald-600'
+                      }`}
+                      required
+                    />
+                    {profileErrors.nom && (
+                      <p className="text-[11px] text-rose-600 font-medium mt-1">{profileErrors.nom}</p>
+                    )}
+                  </div>
+                )}
 
                 <div>
                   <label htmlFor="profile-tel-input" className="block text-[11px] font-bold text-slate-700 mb-1">

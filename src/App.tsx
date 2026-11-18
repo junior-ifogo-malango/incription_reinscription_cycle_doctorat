@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   CheckCircle2,
   Calendar,
@@ -50,6 +50,13 @@ import { CedSujets } from './components/CedSujets';
 import { VerifPV } from './components/VerifPV';
 import { Guichet } from './components/Guichet';
 import { Admin } from './components/Admin';
+import {
+  auth,
+  onAuthStateChanged,
+  signOutFirebase,
+  syncGoogleUserProfile,
+} from './firebase';
+import { resolveGoogleSession } from './utils/googleAuthResolver';
 
 export type AppTabType =
   | TabType
@@ -165,6 +172,9 @@ export default function App() {
   const estMobile = useEstMobile();
   const [role, setRole] = useState<UserRole>('candidat');
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const isLoggedInRef = useRef(false);
+  isLoggedInRef.current = isLoggedIn;
+  const [googleUserPhoto, setGoogleUserPhoto] = useState<string | null>(null);
   const [activeCompte, setActiveCompte] = useState<Compte | null>(() => {
     try {
       const raw = localStorage.getItem('usmba_active_account');
@@ -313,6 +323,35 @@ export default function App() {
     };
   }, []);
 
+  // Restauration automatique de la session Google Firebase Auth
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (!firebaseUser) {
+        setGoogleUserPhoto(null);
+        return;
+      }
+      setGoogleUserPhoto(firebaseUser.photoURL || null);
+      if (isLoggedInRef.current) return;
+      try {
+        const profile = await syncGoogleUserProfile(firebaseUser);
+        const resolved = resolveGoogleSession(profile);
+        if (resolved.error) {
+          await signOutFirebase();
+          return;
+        }
+        handleLoginSuccess(
+          resolved.role,
+          resolved.email,
+          resolved.candidateData,
+          resolved.compte
+        );
+      } catch (err) {
+        console.error('Firebase Auth session restore error:', err);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
   const refreshState = () => {
     setCandidat(storageService.getCandidat());
     setSujets(storageService.getSujets());
@@ -335,6 +374,7 @@ export default function App() {
     connectedCompte?: Compte
   ) => {
     setIsLoggedIn(true);
+    isLoggedInRef.current = true;
     setRole(userRole);
     setRestrictionMsg(undefined);
 
@@ -403,8 +443,13 @@ export default function App() {
 
   const handleLogout = () => {
     setIsLoggedIn(false);
+    isLoggedInRef.current = false;
     setRole('candidat');
     setActiveCompte(null);
+    setGoogleUserPhoto(null);
+    void signOutFirebase().catch((err) => {
+      console.error('Firebase signOut error:', err);
+    });
     try {
       localStorage.removeItem('usmba_active_account');
       window.dispatchEvent(new CustomEvent('usmba_account_updated'));
@@ -800,10 +845,15 @@ export default function App() {
   }, [isLoggedIn, role, candidat, simulatedStatuts]);
 
   const candidatePieces = useMemo(() => {
-    if (candidat.pieces && Array.isArray(candidat.pieces) && candidat.pieces.length === 4) {
-      return candidat.pieces;
-    }
-    return pieces;
+    const required = ['CIN', 'DIPLOME', 'RELEVES'];
+    const source =
+      candidat.pieces && Array.isArray(candidat.pieces) && candidat.pieces.length > 0
+        ? candidat.pieces
+        : pieces;
+    return required.map((t) => {
+      const found = source.find((p) => p && p.type && p.type.toUpperCase() === t);
+      return found || { type: t as any, statut: 'absente' as const };
+    });
   }, [candidat.pieces, pieces]);
 
   const piecesAProverCount = useMemo(() => {
@@ -1230,52 +1280,13 @@ export default function App() {
 
                 {/* Se connecter ou Mon compte */}
                 {!isLoggedIn ? (
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => setIsLoginOpen(true)}
-                      className="px-3 py-1.5 rounded-lg text-xs font-semibold transition text-emerald-100 hover:text-white hover:bg-emerald-900/60 flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <LogIn size={14} />
-                      <span className="hidden sm:inline">{fr.auth.login}</span>
-                    </button>
-                    <div className="relative">
-                      <button
-                        onClick={() => setAccountMenuOpen(!accountMenuOpen)}
-                        className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
-                          accountMenuOpen
-                            ? 'bg-emerald-800 text-amber-300'
-                            : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
-                        }`}
-                        title={fr.auth.accountMenu}
-                      >
-                        <User size={14} className="text-emerald-300 shrink-0" />
-                        <span className="hidden sm:inline">{fr.nav.court.compte}</span>
-                        <ChevronDown size={13} className="hidden sm:inline text-emerald-400 shrink-0" />
-                      </button>
-
-                      {accountMenuOpen && (
-                        <div
-                          className="absolute right-0 top-full mt-1.5 w-60 bg-white text-slate-800 rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 text-xs"
-                        >
-                          <div className="px-3 py-2 border-b border-slate-100">
-                            <p className="font-bold text-slate-900">{fr.auth.visitorBadge}</p>
-                            <span className="text-[10px] font-semibold text-slate-500">{fr.auth.visitorNotConnected}</span>
-                          </div>
-
-                          <button
-                            onClick={() => {
-                              setAccountMenuOpen(false);
-                              setIsLoginOpen(true);
-                            }}
-                            className="w-full text-left px-3 py-2 text-emerald-700 hover:bg-emerald-50 flex items-center gap-2 font-semibold cursor-pointer"
-                          >
-                            <LogIn size={13} />
-                            <span>{fr.auth.login}</span>
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
+                  <button
+                    onClick={() => setIsLoginOpen(true)}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold transition text-emerald-100 hover:text-white hover:bg-emerald-900/60 flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <LogIn size={14} />
+                    <span>{fr.auth.login}</span>
+                  </button>
                 ) : (
                   <div className="relative">
                     <button
@@ -1287,7 +1298,16 @@ export default function App() {
                       }`}
                       title={currentUserEmail || fr.auth.accountMenu}
                     >
-                      <User size={14} className="text-emerald-300 shrink-0" />
+                      {googleUserPhoto ? (
+                        <img
+                          src={googleUserPhoto}
+                          alt={currentUserName || currentUserEmail || fr.auth.accountMenu}
+                          referrerPolicy="no-referrer"
+                          className="w-5 h-5 rounded-full object-cover border border-emerald-400/50 shrink-0"
+                        />
+                      ) : (
+                        <User size={14} className="text-emerald-300 shrink-0" />
+                      )}
                       <span className="hidden sm:inline max-w-[140px] truncate">{currentUserEmail}</span>
                       <ChevronDown size={13} className="hidden sm:inline text-emerald-400 shrink-0" />
                     </button>
@@ -1297,7 +1317,10 @@ export default function App() {
                         className="absolute right-0 top-full mt-1.5 w-60 bg-white text-slate-800 rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 text-xs"
                       >
                         <div className="px-3 py-2 border-b border-slate-100">
-                          <p className="font-bold text-slate-900 break-all">{currentUserEmail}</p>
+                          {currentUserName && (
+                            <p className="font-bold text-slate-900 truncate">{currentUserName}</p>
+                          )}
+                          <p className="text-[11px] font-medium text-slate-600 break-all">{currentUserEmail}</p>
                           {role === 'enseignant' && (
                             <div className="mt-1.5 pt-1.5 border-t border-slate-100">
                               <span className="text-[9px] uppercase font-bold text-slate-400 block tracking-wider">
@@ -1606,7 +1629,7 @@ export default function App() {
                           cne: item.cne,
                           pieces: [
                             { type: 'CIN', statut: item.piecesProuvees >= 1 ? 'prouvee' : 'absente' },
-                            { type: 'CV', statut: item.piecesProuvees >= 2 ? 'prouvee' : 'absente' },
+                            { type: 'RELEVES', statut: item.piecesProuvees >= 2 ? 'prouvee' : 'absente' },
                             { type: 'DIPLOME', statut: item.piecesProuvees >= 3 ? 'prouvee' : 'absente', source: 'apogee' },
                           ],
                         });
@@ -1868,13 +1891,6 @@ export default function App() {
         {/* Pied de page sobre et discret */}
         <footer className="mt-auto px-4 py-5 border-t border-slate-100 text-center text-xs text-slate-500 flex flex-col sm:flex-row items-center justify-between gap-3">
           <span>{fr.footer.copyright}</span>
-          <button
-            type="button"
-            onClick={handleResetData}
-            className="text-[11px] text-slate-500 hover:text-slate-800 underline underline-offset-2 transition-colors cursor-pointer"
-          >
-            {fr.footer.resetDemo}
-          </button>
         </footer>
 
         {/* Barre de navigation mobile inférieure tactile (5 max + Plus) via MobileNav */}

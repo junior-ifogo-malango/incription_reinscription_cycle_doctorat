@@ -1,0 +1,154 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // Global Hardened Primitives
+    // =========================================================================
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedEmail() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerifiedEmail() && request.auth.token.email == 'ifogojunior168@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (
+        isVerifiedEmail() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // =========================================================================
+    // Validation Blueprints
+    // =========================================================================
+    function isValidRole(role) {
+      return role is string && role in ['candidat', 'enseignant', 'directeur_ced', 'doctorant', 'agent', 'admin'];
+    }
+
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'role', 'authProvider', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'displayName', 'photoURL', 'role', 'authProvider', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 254
+        && data.displayName is string && data.displayName.size() <= 120
+        && (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 500))
+        && isValidRole(data.role)
+        && data.authProvider is string && data.authProvider == 'google'
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdminMarker(data) {
+      return data.keys().hasAll(['uid', 'email', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'email', 'createdAt'])
+        && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 254
+        && data.createdAt is timestamp;
+    }
+
+    // =========================================================================
+    // Collection: /users/{userId} (PII isolated to owner or verified admin)
+    // =========================================================================
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isSignedIn() && (isOwner(userId) || isAdmin());
+      allow list: if isSignedIn() && (resource.data.uid == request.auth.uid || isBootstrappedAdmin());
+
+      allow create: if isValidId(userId)
+        && isVerifiedEmail()
+        && isValidUserProfile(incoming())
+        && (
+          (
+            isOwner(userId)
+            && incoming().uid == request.auth.uid
+            && incoming().email == request.auth.token.email
+            && incoming().role == 'candidat'
+            && incoming().createdAt == request.time
+            && incoming().updatedAt == request.time
+          ) || (
+            isAdmin()
+            && incoming().uid == userId
+            && incoming().createdAt == request.time
+            && incoming().updatedAt == request.time
+          )
+        );
+
+      allow update: if isValidId(userId)
+        && isVerifiedEmail()
+        && isValidUserProfile(incoming())
+        && incoming().uid == existing().uid
+        && incoming().email == existing().email
+        && incoming().authProvider == existing().authProvider
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (
+            isAdmin()
+            && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'role', 'updatedAt'])
+          ) || (
+            isOwner(userId)
+            && incoming().role == existing().role
+            && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'updatedAt'])
+          )
+        );
+
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    // =========================================================================
+    // Collection: /admins/{userId}
+    // =========================================================================
+    match /admins/{userId} {
+      allow get: if isValidId(userId) && isSignedIn() && (isOwner(userId) || isAdmin());
+      allow list: if isSignedIn() && (resource.data.uid == request.auth.uid || isBootstrappedAdmin());
+
+      allow create: if isValidId(userId)
+        && isAdmin()
+        && isValidAdminMarker(incoming())
+        && incoming().uid == userId
+        && incoming().createdAt == request.time;
+
+      allow update: if isValidId(userId)
+        && isAdmin()
+        && isValidAdminMarker(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['email']);
+
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    // =========================================================================
+    // Connection Probe: /test/connection
+    // =========================================================================
+    match /test/connection {
+      allow get: if isSignedIn();
+    }
+  }
+}

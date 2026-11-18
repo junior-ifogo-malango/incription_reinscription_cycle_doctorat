@@ -107,7 +107,7 @@ export const MobileNav: React.FC<MobileNavProps> = ({
       icon: <FolderKanban size={18} />,
       badge:
         badgeCounts.piecesPretes !== undefined
-          ? `${badgeCounts.piecesPretes}/4`
+          ? `${badgeCounts.piecesPretes}/3`
           : undefined,
     },
     candidatures_recues: {
