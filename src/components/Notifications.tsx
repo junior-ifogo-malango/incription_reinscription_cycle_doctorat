@@ -157,9 +157,6 @@ export const Notifications: React.FC<NotificationsProps> = ({
                   <div key={notif.id} className="p-2.5 hover:bg-slate-50 rounded-xl transition space-y-2">
                     <div className="flex items-center justify-between text-[10px] text-slate-400">
                       <span>{formatDate(notif.date)}</span>
-                      <span className="text-[10px] text-slate-400 font-medium italic">
-                        {fr.notifications.emailSimule}
-                      </span>
                     </div>
                     <p className="text-xs text-slate-700 leading-snug font-medium">
                       {notif.texte}
@@ -185,13 +182,6 @@ export const Notifications: React.FC<NotificationsProps> = ({
                 );
               })
             )}
-          </div>
-
-          {/* Mention discrète sous la liste */}
-          <div className="pt-2 px-3 border-t border-slate-100 text-center">
-            <span className="text-[10px] text-slate-400 italic">
-              {fr.notifications.emailSimule}
-            </span>
           </div>
         </div>
       )}

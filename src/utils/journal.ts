@@ -77,3 +77,70 @@ export function logCompteCree(
   );
 }
 
+export function logDossierEnvoye(
+  acteur: ActeurJournal,
+  cible: string,
+  detail?: string
+): EvenementJournal | null {
+  return logEvent(
+    acteur,
+    'Dossier envoyé',
+    cible,
+    detail
+  );
+}
+
+export function logCandidatureEnvoyee(
+  acteur: ActeurJournal,
+  cible: string,
+  detail?: string
+): EvenementJournal | null {
+  return logEvent(
+    acteur,
+    'Candidature envoyée',
+    cible,
+    detail
+  );
+}
+
+export function logConvocationEnvoyee(
+  acteur: ActeurJournal,
+  candidatNom: string,
+  canal: string,
+  date: string,
+  resultat: string
+): EvenementJournal | null {
+  return logEvent(
+    acteur,
+    'Convocation envoyée',
+    candidatNom,
+    `${canal} • ${date} • ${resultat}`
+  );
+}
+
+export function logPresenceConstatee(
+  acteur: ActeurJournal,
+  candidatNom: string,
+  date: string
+): EvenementJournal | null {
+  return logEvent(
+    acteur,
+    'Présence constatée',
+    candidatNom,
+    date
+  );
+}
+
+export function logAbsenceConstatee(
+  acteur: ActeurJournal,
+  candidatNom: string,
+  date: string,
+  motif: string
+): EvenementJournal | null {
+  return logEvent(
+    acteur,
+    'Absence constatée',
+    candidatNom,
+    `${date} • Motif : ${motif}`
+  );
+}

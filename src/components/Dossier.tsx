@@ -1,14 +1,24 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Camera, Upload, FileText, CheckCircle2, AlertCircle, X, Eye, RotateCcw, Award, AlertTriangle, ArrowRight, Info, Loader2 } from 'lucide-react';
-import { Piece, PieceType, PieceSource, Candidat, MotifCasParticulier, PV, dossierComplet, AnomalieCandidature, CandidatureStatut, Notification, Periode } from '../types';
-import { ApogeeFictif, MOCK_CANDIDATS, getPeriodeCandidature, aujourdhui } from '../data/mockData';
+import { Camera, Upload, FileText, CheckCircle2, AlertCircle, X, Eye, RotateCcw, Award, AlertTriangle, Info, Loader2, Pencil, Send, ArrowLeft } from 'lucide-react';
+import { Piece, PieceType, PieceSource, Candidat, MotifCasParticulier, PV, dossierComplet, AnomalieCandidature, CandidatureStatut } from '../types';
+import { ApogeeFictif, MOCK_CANDIDATS } from '../data/mockData';
 import { storageService } from '../services/storage';
 import { CameraCapture } from './CameraCapture';
 import { fr } from '../i18n/fr';
-import { logEvent } from '../utils/journal';
-import { normaliserTel } from '../utils/messages';
-import { lireCinLocalement } from '../utils/ocrCin';
+import { logCandidatureEnvoyee } from '../utils/journal';
+import { normaliserTel, notifierDirecteurCandidatureEnvoyee } from '../utils/messages';
+import { lireCinDeuxFaces } from '../utils/ocrCin';
 import { ProgressionCandidat } from './ProgressionCandidat';
+
+function formatDateJJMMAAAA(iso?: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const jj = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const aaaa = d.getFullYear();
+  return `${jj}/${mm}/${aaaa}`;
+}
 
 function findCandidateById(id?: string): Candidat | null {
   if (!id) return null;
@@ -150,8 +160,9 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
     side?: 'recto' | 'verso';
     dual?: boolean;
   } | null>(null);
-  const [cinUploadModalOpen, setCinUploadModalOpen] = useState<boolean>(false);
-  const [cinUploadError, setCinUploadError] = useState<string | null>(null);
+  const [cinUploadSplitOpen, setCinUploadSplitOpen] = useState<boolean>(false);
+  const [cinRectoUploadError, setCinRectoUploadError] = useState<string | null>(null);
+  const [cinVersoUploadError, setCinVersoUploadError] = useState<string | null>(null);
   const [feedbackMessage, setFeedbackMessage] = useState<{ type: 'error' | 'warning'; text: string } | null>(null);
   const [apogeeCne, setApogeeCne] = useState<string>('');
   const [apogeeConsent, setApogeeConsent] = useState<boolean>(false);
@@ -177,6 +188,8 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
   const [provenCinVersoImgError, setProvenCinVersoImgError] = useState<boolean>(false);
   const [pvs, setPvs] = useState<PV[]>([]);
   const [viewingPiece, setViewingPiece] = useState<{ piece: Piece; side?: 'recto' | 'verso' } | null>(null);
+  const [isCinEditing, setIsCinEditing] = useState<boolean>(false);
+  const [confirmEnvoiOpen, setConfirmEnvoiOpen] = useState<boolean>(false);
 
   // Cas particulier state
   const [casParticulier, setCasParticulier] = useState<boolean>(false);
@@ -188,18 +201,18 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
   const ocrRunIdRef = useRef<number>(0);
   const loadedCandidatIdRef = useRef<string | null>(null);
 
-  // Fermeture de l'aperçu de pièce ou de la fenêtre de téléversement CIN par la touche Échap
+  // Fermeture de l'aperçu de pièce ou confirmation d'envoi par la touche Échap
   useEffect(() => {
-    if (!viewingPiece && !cinUploadModalOpen) return;
+    if (!viewingPiece && !confirmEnvoiOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (viewingPiece) setViewingPiece(null);
-        if (cinUploadModalOpen) setCinUploadModalOpen(false);
+        if (confirmEnvoiOpen) setConfirmEnvoiOpen(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [viewingPiece, cinUploadModalOpen]);
+  }, [viewingPiece, confirmEnvoiOpen]);
 
   // Charger le candidat et ses données depuis le localStorage ou via candidatId
   useEffect(() => {
@@ -294,10 +307,14 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
     loadData();
     window.addEventListener('usmba_pvs_updated', loadData);
     window.addEventListener('usmba_pieces_updated', loadData);
+    window.addEventListener('usmba_candidat_updated', loadData);
+    window.addEventListener('usmba_dossier_updated', loadData);
     window.addEventListener('storage', loadData);
     return () => {
       window.removeEventListener('usmba_pvs_updated', loadData);
       window.removeEventListener('usmba_pieces_updated', loadData);
+      window.removeEventListener('usmba_candidat_updated', loadData);
+      window.removeEventListener('usmba_dossier_updated', loadData);
       window.removeEventListener('storage', loadData);
     };
   }, [candidatId]);
@@ -323,18 +340,8 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
   const isAgentMode = Boolean(candidatId);
   const peutProuver = hasRetenueCandidature || isAdmisPv || isAgentMode;
 
-  // Règle : boutons CIN/CV dès qu'une candidature est 'brouillon', 'deposee', 'a_corriger' ou 'retenue'
-  const hasCandidatureActive = Boolean(
-    (candidat?.candidatures && candidat.candidatures.length > 0) ||
-    (candidat?.candidaturesStatuts &&
-      Object.values(candidat.candidaturesStatuts).some(
-        (s) => s === 'brouillon' || s === 'deposee' || s === 'a_corriger' || s === 'retenue'
-      ))
-  );
-
   const candidatures = candidat?.candidatures || [];
   const statuts = candidat?.candidaturesStatuts || {};
-  const hasBrouillon = candidatures.some((id) => statuts[id] === 'brouillon');
   const hasACorriger = candidatures.some((id) => statuts[id] === 'a_corriger');
 
   // Anomalie active éventuelle
@@ -349,50 +356,21 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
     (typeof localStorage !== 'undefined' && localStorage.getItem('usmba_doctorat_role') === 'enseignant')
   );
 
-  // Période de candidature et date du jour (démo)
-  const [periode, setPeriode] = useState<Periode>(() => getPeriodeCandidature());
-  const [today, setToday] = useState<string>(() => aujourdhui());
-
-  useEffect(() => {
-    const handlePeriodeUpdate = () => {
-      setPeriode(getPeriodeCandidature());
-    };
-    const handleDateUpdate = () => {
-      setToday(aujourdhui());
-    };
-    window.addEventListener('usmba_periode_updated', handlePeriodeUpdate);
-    window.addEventListener('usmba_demo_date_updated', handleDateUpdate);
-    window.addEventListener('storage', handlePeriodeUpdate);
-    window.addEventListener('storage', handleDateUpdate);
-    return () => {
-      window.removeEventListener('usmba_periode_updated', handlePeriodeUpdate);
-      window.removeEventListener('usmba_demo_date_updated', handleDateUpdate);
-      window.removeEventListener('storage', handlePeriodeUpdate);
-      window.removeEventListener('storage', handleDateUpdate);
-    };
-  }, []);
-
-  const debutPeriode = periode?.debut || '2026-07-01';
-  const finPeriode = periode?.fin || '2026-09-09';
-  const isBeforePeriod = today < debutPeriode;
-  const isAfterPeriod = today > finPeriode;
-  const isPeriodOpen = !isBeforePeriod && !isAfterPeriod;
-
-  // Calcul 48 h après signalement si après la date de fin
-  const isWithin48h = useMemo(() => {
-    if (!activeAnomalie?.le) return true;
-    const anomalieDay = activeAnomalie.le.slice(0, 10);
-    if (today <= anomalieDay) return true;
-    const dToday = new Date(today + 'T12:00:00Z').getTime();
-    const dAnomalie = new Date(anomalieDay + 'T12:00:00Z').getTime();
-    const diffHours = (dToday - dAnomalie) / (1000 * 60 * 60);
-    return diffHours <= 48;
-  }, [activeAnomalie, today]);
-
-  const handleEnvoyerCandidature = () => {
+  const handleConfirmEnvoyerDossier = () => {
     const cur = resolveCandidate(candidatId, candidat);
+    if (cur.dossier?.dateEnvoi) return;
     const check = dossierComplet(cur);
-    if (!check.complet || !isPeriodOpen) return;
+    const hasThreeSubjectsCur = Array.isArray(cur.candidatures) && cur.candidatures.length >= 3;
+    const cinOk = Boolean(
+      cur.nomFamille?.trim() &&
+      cur.prenom?.trim() &&
+      cur.cin?.trim() &&
+      /^[A-Za-z]{1,2}[0-9]{5,6}$/.test(cur.cin.trim()) &&
+      cur.dateNaissance?.trim()
+    );
+    const massarOk = Boolean(cur.cne?.trim() && /^[A-Za-z][0-9]{9}$/.test(cur.cne.trim()));
+    const whatsappOk = Boolean(cur.tel?.trim() && normaliserTel(cur.tel.trim()));
+    if (!hasThreeSubjectsCur || !check.complet || !cinOk || !massarOk || !whatsappOk) return;
 
     const nowIso = new Date().toISOString();
     const updatedStatuts: Record<string, CandidatureStatut> = {
@@ -403,7 +381,8 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
     };
 
     (cur.candidatures || []).forEach((id) => {
-      if (updatedStatuts[id] === 'brouillon' || !updatedStatuts[id]) {
+      const st = updatedStatuts[id];
+      if (!st || st === 'brouillon' || st === 'a_corriger') {
         updatedStatuts[id] = 'deposee';
         updatedEnvoyeLe[id] = nowIso;
       }
@@ -411,95 +390,62 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
 
     cur.candidaturesStatuts = updatedStatuts;
     cur.candidaturesEnvoyeLe = updatedEnvoyeLe;
-    cur.envoyeLe = nowIso;
+    cur.envoyeLe = cur.envoyeLe || nowIso;
+    cur.anomalie = undefined;
+    cur.dossier = {
+      casParticulier: Boolean(cur.dossier?.casParticulier),
+      motif: cur.dossier?.motif,
+      motifAutre: cur.dossier?.motifAutre,
+      guichet: Boolean(cur.dossier?.guichet),
+      guichetStatut: cur.dossier?.guichetStatut,
+      journalGuichet: cur.dossier?.journalGuichet,
+      saisiPar: cur.dossier?.saisiPar,
+      saisiLe: cur.dossier?.saisiLe,
+      consentementGuichet: cur.dossier?.consentementGuichet,
+      dateEnvoi: nowIso,
+    };
+
     persistCandidate(cur);
     setCandidat({ ...cur });
+    setIsCinEditing(false);
+    setConfirmEnvoiOpen(false);
+
+    try {
+      const rawDossier = localStorage.getItem('usmba_doctorat_dossier');
+      if (rawDossier) {
+        const parsedDossier = JSON.parse(rawDossier);
+        if (!parsedDossier.candidatId || parsedDossier.candidatId === cur.id) {
+          parsedDossier.dateEnvoi = nowIso;
+          localStorage.setItem('usmba_doctorat_dossier', JSON.stringify(parsedDossier));
+        }
+      }
+    } catch {}
 
     try {
       const rawSujets = localStorage.getItem('usmba_doctorat_sujets');
       const allSujets = rawSujets ? JSON.parse(rawSujets) : [];
-      const teacherIds = new Set<string>();
+      const teacherIds: string[] = [];
       (cur.candidatures || []).forEach((sId) => {
         const s = allSujets.find((x: any) => x.id === sId);
-        if (s?.enseignantId) teacherIds.add(s.enseignantId);
+        if (s?.enseignantId) teacherIds.push(s.enseignantId);
       });
-      if (teacherIds.size === 0) teacherIds.add('ens-1');
-
-      const rawNotifs = localStorage.getItem('usmba_notifications');
-      const notifs: Notification[] = rawNotifs ? JSON.parse(rawNotifs) : [];
-      teacherIds.forEach((tId) => {
-        notifs.unshift({
-          id: `notif-depot-${Date.now()}-${tId}`,
-          destinataireId: tId,
-          texte: `Nouvelle candidature envoyée par ${cur.nom || 'un candidat'} (dossier complet).`,
-          date: nowIso,
-          lue: false,
-          type: 'info',
-        });
-      });
-      localStorage.setItem('usmba_notifications', JSON.stringify(notifs));
-      window.dispatchEvent(new CustomEvent('usmba_notifications_updated'));
+      notifierDirecteurCandidatureEnvoyee(
+        teacherIds,
+        fr.dossier.notifCandidatureEnvoyee.replace('{nom}', cur.nom || 'un candidat')
+      );
     } catch {}
 
-    logEvent(
-      { id: cur.id, nom: cur.nom, role: 'candidat' },
-      fr.journalActions.candidatureEnvoyee,
-      `${(cur.candidatures || []).length} sujet(s)`
+    logCandidatureEnvoyee(
+      { id: cur.id, nom: cur.nom || cur.email || 'Candidat', role: 'candidat' },
+      cur.nom || cur.id,
+      formatDateJJMMAAAA(nowIso)
     );
+
+    window.dispatchEvent(new CustomEvent('usmba_candidat_updated', { detail: cur }));
+    window.dispatchEvent(new CustomEvent('usmba_pieces_updated'));
+    window.dispatchEvent(new CustomEvent('usmba_dossier_updated'));
 
     setTransmissionSuccess(fr.dossier.candidatureEnvoyeeSucces);
-    setTimeout(() => setTransmissionSuccess(null), 5000);
-  };
-
-  const handleRenvoyerCandidature = () => {
-    const cur = resolveCandidate(candidatId, candidat);
-    const check = dossierComplet(cur);
-    if (!check.complet || (isAfterPeriod && !isWithin48h)) return;
-
-    const nowIso = new Date().toISOString();
-    const updatedStatuts: Record<string, CandidatureStatut> = {
-      ...(cur.candidaturesStatuts || {}),
-    };
-    const updatedRenvoyeLe: Record<string, string> = {
-      ...(cur.candidaturesRenvoyeLe || {}),
-    };
-
-    (cur.candidatures || []).forEach((id) => {
-      if (updatedStatuts[id] === 'a_corriger') {
-        updatedStatuts[id] = 'deposee';
-        updatedRenvoyeLe[id] = nowIso;
-      }
-    });
-
-    cur.candidaturesStatuts = updatedStatuts;
-    cur.candidaturesRenvoyeLe = updatedRenvoyeLe;
-    cur.renvoyeLe = nowIso;
-    cur.anomalie = undefined;
-    persistCandidate(cur);
-    setCandidat({ ...cur });
-
-    try {
-      const rawNotifs = localStorage.getItem('usmba_notifications');
-      const notifs: Notification[] = rawNotifs ? JSON.parse(rawNotifs) : [];
-      notifs.unshift({
-        id: `notif-renvoi-${Date.now()}`,
-        destinataireId: 'ens-1',
-        texte: `Candidature corrigée et renvoyée par ${cur.nom || 'le candidat'}.`,
-        date: nowIso,
-        lue: false,
-        type: 'info',
-      });
-      localStorage.setItem('usmba_notifications', JSON.stringify(notifs));
-      window.dispatchEvent(new CustomEvent('usmba_notifications_updated'));
-    } catch {}
-
-    logEvent(
-      { id: cur.id, nom: cur.nom, role: 'candidat' },
-      fr.journalActions.candidatureRenvoyee,
-      `${(cur.candidatures || []).length} sujet(s)`
-    );
-
-    setTransmissionSuccess(fr.dossier.candidatureRenvoyeeSucces);
     setTimeout(() => setTransmissionSuccess(null), 5000);
   };
 
@@ -541,7 +487,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
     updates: Partial<Piece>
   ) => {
     const currentList =
-      pieces.length === 3
+      pieces.length === ORDERED_TYPES.length
         ? pieces
         : ORDERED_TYPES.map((t) => {
             const found = pieces.find((p) => p.type.toUpperCase() === t.toUpperCase());
@@ -567,7 +513,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
     source: PieceSource | undefined
   ) => {
     const currentList =
-      pieces.length === 3
+      pieces.length === ORDERED_TYPES.length
         ? pieces
         : ORDERED_TYPES.map((t) => {
             const found = pieces.find((p) => p.type.toUpperCase() === t.toUpperCase());
@@ -660,10 +606,10 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
     setCinVerifySaved(false);
   };
 
-  const runCinOcr = async (imageSource: string) => {
+  const runCinOcr = async (rectoSource?: string, versoSource?: string) => {
     const runId = ++ocrRunIdRef.current;
     setCinOcrStatus('loading');
-    const ocrResult = await lireCinLocalement(imageSource);
+    const ocrResult = await lireCinDeuxFaces(rectoSource, versoSource);
     if (runId !== ocrRunIdRef.current) return;
 
     if (!ocrResult.success) {
@@ -743,6 +689,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
       }
 
       setCinVerifySaved(true);
+      setIsCinEditing(false);
       window.dispatchEvent(new CustomEvent('usmba_pieces_updated'));
       setTimeout(() => {
         setCinVerifySaved(false);
@@ -752,20 +699,32 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
     }
   };
 
+  const cleanMassarInput = massarInput.trim().toUpperCase();
+  const cleanWhatsappInput = whatsappInput.trim();
+  const isMassarInputValid = Boolean(cleanMassarInput && /^[A-Z][0-9]{9}$/.test(cleanMassarInput));
+  const isWhatsappInputValid = Boolean(cleanWhatsappInput && normaliserTel(cleanWhatsappInput));
+  const isInfosCandidatFormValid = isMassarInputValid && isWhatsappInputValid;
+
   const handleSaveInfosCandidat = (e: React.FormEvent) => {
     e.preventDefault();
     const cleanMassar = massarInput.trim().toUpperCase();
     const cleanWhatsapp = whatsappInput.trim();
 
     let hasErr = false;
-    if (cleanMassar && !/^[A-Z][0-9]{9}$/.test(cleanMassar)) {
+    if (!cleanMassar) {
+      setMassarError(fr.dossier.codeMassarRequired);
+      hasErr = true;
+    } else if (!/^[A-Z][0-9]{9}$/.test(cleanMassar)) {
       setMassarError(fr.dossier.codeMassarFormatError);
       hasErr = true;
     } else {
       setMassarError(null);
     }
 
-    if (cleanWhatsapp && !normaliserTel(cleanWhatsapp)) {
+    if (!cleanWhatsapp) {
+      setWhatsappError(fr.dossier.whatsappRequired);
+      hasErr = true;
+    } else if (!normaliserTel(cleanWhatsapp)) {
       setWhatsappError(fr.dossier.whatsappFormatError);
       hasErr = true;
     } else {
@@ -803,11 +762,19 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
   };
 
   const handleCinModalFileUpload = (
-    target: 'recto' | 'verso' | 'single_pdf',
+    target: 'recto' | 'verso',
     e: React.ChangeEvent<HTMLInputElement>
   ) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    const setSideError = (msg: string | null) => {
+      if (target === 'recto') {
+        setCinRectoUploadError(msg);
+      } else {
+        setCinVersoUploadError(msg);
+      }
+    };
 
     const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
     const isJpegOrPng =
@@ -815,19 +782,19 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
       file.type === 'image/png' ||
       /\.(jpe?g|png)$/i.test(file.name);
 
-    if (target === 'single_pdf' ? !isPdf : !isPdf && !isJpegOrPng) {
-      setCinUploadError(fr.dossier.cinUploadFormatError);
+    if (!isPdf && !isJpegOrPng) {
+      setSideError(fr.dossier.cinUploadFormatError);
       e.target.value = '';
       return;
     }
 
     if (file.size > 1.5 * 1024 * 1024) {
-      setCinUploadError(fr.dossier.cinUploadSizeError);
+      setSideError(fr.dossier.cinUploadSizeError);
       e.target.value = '';
       return;
     }
 
-    setCinUploadError(null);
+    setSideError(null);
     setFeedbackMessage(null);
 
     const reader = new FileReader();
@@ -837,35 +804,23 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
         result = await compressImageDataUrl(result);
       }
       try {
-        if (target === 'single_pdf') {
-          handleUpdatePiece('CIN', {
-            statut: 'prouvee',
-            source: 'televersement',
-            fichier: result,
-            sourceVerso: 'televersement',
-            fichierVerso: result,
-            ocrResultat: undefined,
-          });
+        const currentCin = pieces.find((p) => p && p.type && p.type.toUpperCase() === 'CIN');
+        const nextRecto = target === 'recto' ? result : currentCin?.fichier;
+        const nextVerso = target === 'verso' ? result : currentCin?.fichierVerso;
+
+        handleUpdateCinSide(target, result, 'televersement');
+        if (target === 'recto') {
           setProvenCinRectoImgError(false);
-          setProvenCinVersoImgError(false);
-          setCinUploadModalOpen(false);
-          openCinVerifyForm();
-          void runCinOcr(result);
         } else {
-          handleUpdateCinSide(target, result, 'televersement');
-          if (target === 'recto') {
-            setProvenCinRectoImgError(false);
-            setCinUploadModalOpen(false);
-            openCinVerifyForm();
-            void runCinOcr(result);
-          } else {
-            setProvenCinVersoImgError(false);
-            setCinUploadModalOpen(false);
-            openCinVerifyForm();
-          }
+          setProvenCinVersoImgError(false);
         }
+        if (nextRecto && nextVerso) {
+          setCinUploadSplitOpen(false);
+        }
+        openCinVerifyForm();
+        void runCinOcr(nextRecto, nextVerso);
       } catch {
-        setCinUploadError(fr.dossier.quotaExceededSupprime);
+        setSideError(fr.dossier.quotaExceededSupprime);
       }
     };
     reader.readAsDataURL(file);
@@ -930,6 +885,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
 
   const handleDualCinCaptureSuccess = (rectoDataUrl: string, versoDataUrl: string) => {
     setActiveCameraTarget(null);
+    setCinUploadSplitOpen(false);
     handleUpdatePiece('CIN', {
       statut: 'prouvee',
       source: 'camera',
@@ -941,7 +897,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
     setProvenCinRectoImgError(false);
     setProvenCinVersoImgError(false);
     openCinVerifyForm();
-    void runCinOcr(rectoDataUrl);
+    void runCinOcr(rectoDataUrl, versoDataUrl);
   };
 
   const handleCaptureSuccess = (dataUrl: string) => {
@@ -950,15 +906,17 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
       setActiveCameraTarget(null);
       if (targetPiece.toUpperCase() === 'CIN') {
         const targetSide = side || 'recto';
+        const currentCin = pieces.find((p) => p && p.type && p.type.toUpperCase() === 'CIN');
+        const nextRecto = targetSide === 'recto' ? dataUrl : currentCin?.fichier;
+        const nextVerso = targetSide === 'verso' ? dataUrl : currentCin?.fichierVerso;
         handleUpdateCinSide(targetSide, dataUrl, 'camera');
         if (targetSide === 'recto') {
           setProvenCinRectoImgError(false);
-          openCinVerifyForm();
-          void runCinOcr(dataUrl);
         } else {
           setProvenCinVersoImgError(false);
-          openCinVerifyForm();
         }
+        openCinVerifyForm();
+        void runCinOcr(nextRecto, nextVerso);
       } else {
         handleUpdatePiece(targetPiece, {
           statut: 'prouvee',
@@ -976,8 +934,9 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
     setActiveCameraTarget(null);
     if (target) {
       if (target.type.toUpperCase() === 'CIN') {
-        setCinUploadError(null);
-        setCinUploadModalOpen(true);
+        setCinRectoUploadError(null);
+        setCinVersoUploadError(null);
+        setCinUploadSplitOpen(true);
         return;
       }
       setTimeout(() => {
@@ -1050,6 +1009,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
         saisiPar: curCandidat.dossier?.saisiPar,
         saisiLe: curCandidat.dossier?.saisiLe,
         consentementGuichet: curCandidat.dossier?.consentementGuichet,
+        dateEnvoi: curCandidat.dossier?.dateEnvoi,
       };
       persistCandidate(curCandidat);
       setCandidat(curCandidat);
@@ -1088,6 +1048,60 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
   // Compteur unique "N/3 pièces fournies"
   const piecesFourniesCount = Math.max(0, 3 - checkDossier.manques.length);
   const percentFournies = Math.round((piecesFourniesCount / 3) * 100);
+
+  const hasSavedCinInfos = Boolean(
+    candidat?.nomFamille?.trim() &&
+    candidat?.prenom?.trim() &&
+    candidat?.cin?.trim() &&
+    /^[A-Za-z]{1,2}[0-9]{5,6}$/.test(candidat.cin.trim()) &&
+    candidat?.dateNaissance?.trim() &&
+    !validateDateNaissance(candidat.dateNaissance)
+  );
+
+  const candidaturesCount = candidatures.length;
+  const hasThreeSubjects = candidaturesCount >= 3;
+  const missingSubjectsCount = Math.max(0, 3 - candidaturesCount);
+  const hasLegacyRetenue = Object.values(statuts).some((s) => s === 'retenue');
+  const dateEnvoi =
+    candidat?.dossier?.dateEnvoi ||
+    (!hasACorriger
+      ? candidat?.envoyeLe || Object.values(candidat?.candidaturesEnvoyeLe || {})[0]
+      : undefined);
+  const isDossierEnvoye = Boolean(dateEnvoi || (hasLegacyRetenue && !hasACorriger));
+  const hasSavedMassar = Boolean(
+    candidat?.cne?.trim() && /^[A-Za-z][0-9]{9}$/.test(candidat.cne.trim())
+  );
+  const hasSavedWhatsapp = Boolean(
+    candidat?.tel?.trim() && normaliserTel(candidat.tel.trim())
+  );
+  const canSendDossier =
+    hasThreeSubjects && checkDossier.complet && hasSavedCinInfos && hasSavedMassar && hasSavedWhatsapp;
+
+  const missingItems: string[] = [];
+  if (!hasThreeSubjects) {
+    missingItems.push(
+      missingSubjectsCount === 1
+        ? fr.dossier.raisonSujetSingulier
+        : fr.dossier.raisonSujetsPluriel.replace('{count}', String(missingSubjectsCount))
+    );
+  }
+  if (!checkDossier.complet) {
+    missingItems.push(...checkDossier.manques);
+  }
+  if (!hasSavedMassar) {
+    missingItems.push(fr.dossier.codeMassarManque);
+  }
+  if (!hasSavedWhatsapp) {
+    missingItems.push(fr.dossier.whatsappManque);
+  }
+  const sendDisabledReason =
+    missingItems.length > 0 && !hasSavedCinInfos
+      ? `${fr.dossier.raisonManquePieces.replace('{manques}', missingItems.join(', '))} ${fr.dossier.raisonCinNonEnregistree}`
+      : missingItems.length > 0
+      ? fr.dossier.raisonManquePieces.replace('{manques}', missingItems.join(', '))
+      : !hasSavedCinInfos
+      ? fr.dossier.raisonCinNonEnregistree
+      : null;
 
   const getPieceName = (type: PieceType): string => {
     const key = type.toUpperCase() as keyof typeof fr.dossier.pieces;
@@ -1154,6 +1168,12 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
             <span className="text-sm font-extrabold text-slate-900">
               {fr.dossier.compteurPiecesFournies.replace('{count}', String(piecesFourniesCount))}
             </span>
+            {isDossierEnvoye && (
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-emerald-800 bg-emerald-100 px-2.5 py-0.5 rounded-full border border-emerald-300">
+                <Send size={12} className="text-emerald-700 shrink-0" />
+                <span>{fr.dossier.envoyeLeBadge.replace('{date}', formatDateJJMMAAAA(dateEnvoi))}</span>
+              </span>
+            )}
             {checkDossier.complet ? (
               <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
                 <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />
@@ -1176,86 +1196,6 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
             style={{ width: `${percentFournies}%` }}
           />
         </div>
-
-        {/* Bouton Envoyer ma candidature si candidature en brouillon */}
-        {!isDirecteur && hasBrouillon && (
-          <div id="action-envoyer-candidature" className="pt-2 border-t border-slate-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
-            <div>
-              <p className="text-xs font-bold text-slate-800">
-                Prêt à envoyer votre candidature ?
-              </p>
-              {!isPeriodOpen ? (
-                <p className="text-[11px] font-semibold text-rose-700 flex items-center gap-1.5 mt-0.5">
-                  <AlertCircle size={13} className="shrink-0" />
-                  <span>
-                    {isAfterPeriod
-                      ? fr.dossier.candidaturesCloses.replace('{fin}', finPeriode)
-                      : fr.dossier.candidaturesOuvertes.replace('{debut}', debutPeriode)}
-                  </span>
-                </p>
-              ) : !checkDossier.complet ? (
-                <p className="text-[11px] font-semibold text-rose-700 flex items-center gap-1.5 mt-0.5">
-                  <AlertCircle size={13} className="shrink-0" />
-                  <span>Dossier incomplet : {checkDossier.manques.join(', ')}</span>
-                </p>
-              ) : null}
-            </div>
-            <button
-              type="button"
-              disabled={!checkDossier.complet || !isPeriodOpen}
-              onClick={handleEnvoyerCandidature}
-              className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs shrink-0 ${
-                checkDossier.complet && isPeriodOpen
-                  ? 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer active:scale-98'
-                  : 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
-              }`}
-            >
-              <span>{fr.dossier.btnEnvoyerCandidature}</span>
-              <ArrowRight size={14} />
-            </button>
-          </div>
-        )}
-
-        {/* 5. Bouton Renvoyer ma candidature si candidature à corriger */}
-        {!isDirecteur && hasACorriger && (
-          <div className="pt-2 border-t border-slate-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
-            <div>
-              <p className="text-xs font-bold text-slate-800">
-                Renvoyer votre candidature après correction
-              </p>
-              {isAfterPeriod && !isWithin48h ? (
-                <p className="text-[11px] font-semibold text-rose-700 flex items-center gap-1.5 mt-0.5">
-                  <AlertCircle size={13} className="shrink-0" />
-                  <span>{fr.dossier.delaiCorrectionExpire}</span>
-                </p>
-              ) : isAfterPeriod && isWithin48h ? (
-                <p className="text-[11px] font-semibold text-amber-700 flex items-center gap-1.5 mt-0.5">
-                  <AlertTriangle size={13} className="shrink-0 text-amber-600" />
-                  <span>{fr.dossier.delai48hActif}</span>
-                </p>
-              ) : null}
-              {!checkDossier.complet && (
-                <p className="text-[11px] font-semibold text-rose-700 flex items-center gap-1.5 mt-0.5">
-                  <AlertCircle size={13} className="shrink-0" />
-                  <span>Dossier incomplet : {checkDossier.manques.join(', ')}</span>
-                </p>
-              )}
-            </div>
-            <button
-              type="button"
-              disabled={!checkDossier.complet || (isAfterPeriod && !isWithin48h)}
-              onClick={handleRenvoyerCandidature}
-              className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs shrink-0 ${
-                checkDossier.complet && (!isAfterPeriod || isWithin48h)
-                  ? 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer active:scale-98'
-                  : 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
-              }`}
-            >
-              <span>{fr.dossier.btnRenvoyerCandidature}</span>
-              <RotateCcw size={14} />
-            </button>
-          </div>
-        )}
       </div>
 
       {/* Coordonnées du candidat : Code Massar et Numéro WhatsApp */}
@@ -1316,18 +1256,30 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            <button
-              type="submit"
-              className="min-h-[36px] px-4 py-1.5 text-xs font-semibold rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white transition-colors cursor-pointer active:scale-98"
-            >
-              {fr.dossier.enregistrerInfos}
-            </button>
-            {infosSaved && (
-              <span className="text-xs text-emerald-700 font-medium flex items-center gap-1">
-                <CheckCircle2 size={13} />
-                <span>{fr.dossier.infosEnregistrees}</span>
-              </span>
+          <div className="space-y-1">
+            <div className="flex items-center gap-3">
+              <button
+                type="submit"
+                disabled={!isInfosCandidatFormValid}
+                className={`min-h-[36px] px-4 py-1.5 text-xs font-semibold rounded-xl transition-colors ${
+                  isInfosCandidatFormValid
+                    ? 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer active:scale-98'
+                    : 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
+                }`}
+              >
+                {fr.dossier.enregistrerInfos}
+              </button>
+              {infosSaved && (
+                <span className="text-xs text-emerald-700 font-medium flex items-center gap-1">
+                  <CheckCircle2 size={13} />
+                  <span>{fr.dossier.infosEnregistrees}</span>
+                </span>
+              )}
+            </div>
+            {!isInfosCandidatFormValid && (
+              <p className="text-[11px] text-slate-500">
+                {fr.dossier.infosCandidatDisabledReason}
+              </p>
             )}
           </div>
         </form>
@@ -1387,6 +1339,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
             (activeAnomalie && (
               (activeAnomalie.piece === 'CIN' && isCin) ||
               (activeAnomalie.piece === 'DIPLOME' && isDiplome) ||
+              (activeAnomalie.piece === 'RELEVES' && type === 'RELEVES') ||
               (activeAnomalie.piece === 'CURSUS' && isDiplome)
             )) || piece.statut === 'illisible'
           );
@@ -1396,6 +1349,69 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
             : isCin
             ? 'carte-piece-cin'
             : 'carte-piece-releves';
+
+          const isCinCollapsed = isCin && hasSavedCinInfos && !isCinEditing && (isProven || isDossierEnvoye);
+
+          if (isCinCollapsed) {
+            const nomMaj = (candidat?.nomFamille || '').trim().toUpperCase();
+            const prenomTrim = (candidat?.prenom || '').trim();
+            const cinTrim = (candidat?.cin || '').trim().toUpperCase();
+            return (
+              <React.Fragment key={type}>
+                <div
+                  id={cardId}
+                  className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs flex items-center justify-between gap-3 flex-wrap"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+                    <span className="text-xs font-bold text-slate-900 truncate">
+                      {`${fr.dossier.cinCollapsedLabel} · ${fr.dossier.fournieBadge} · ${nomMaj} ${prenomTrim} · ${cinTrim}`}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {isDossierEnvoye ? (
+                      <>
+                        {hasCinRecto && (
+                          <button
+                            type="button"
+                            onClick={() => setViewingPiece({ piece, side: 'recto' })}
+                            className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer flex items-center gap-1"
+                          >
+                            <Eye size={13} className="text-slate-500" />
+                            <span>{fr.dossier.btnVoirPiece}</span>
+                          </button>
+                        )}
+                        {hasCinVerso && piece.fichierVerso !== piece.fichier && (
+                          <button
+                            type="button"
+                            onClick={() => setViewingPiece({ piece, side: 'verso' })}
+                            className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer flex items-center gap-1"
+                          >
+                            <Eye size={13} className="text-slate-500" />
+                            <span>{fr.dossierDirecteur.btnVoirVerso}</span>
+                          </button>
+                        )}
+                      </>
+                    ) : (
+                      !isDirecteur && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            openCinVerifyForm();
+                            setIsCinEditing(true);
+                          }}
+                          className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 hover:border-slate-400 transition-colors cursor-pointer flex items-center gap-1.5 active:scale-98"
+                        >
+                          <Pencil size={13} className="text-slate-500" />
+                          <span>{fr.dossier.btnModifier}</span>
+                        </button>
+                      )
+                    )}
+                  </div>
+                </div>
+              </React.Fragment>
+            );
+          }
 
           return (
             <React.Fragment key={type}>
@@ -1407,7 +1423,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
               <div className="flex items-start justify-between gap-3">
                 <div className="space-y-0.5">
                   <h3 className="text-xs font-bold text-slate-900 leading-snug">
-                    {getPieceName(type)}
+                    {isCin ? fr.dossier.cinCardTitle : getPieceName(type)}
                   </h3>
                   {!isCin && piece.source && isProven && (
                     <p className="text-[10px] text-slate-400">
@@ -1450,201 +1466,367 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                 </div>
               )}
 
-              {/* Carte CIN : blocs Recto & Verso + un seul Scanner ma CIN et un seul Téléverser */}
+              {/* Carte CIN : départ (Scanner + Téléverser), champs recto/verso uniquement au clic sur Téléverser, miniatures si chargée */}
               {isCin && (
                 <div className="pt-2 border-t border-slate-100 space-y-3">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {/* Face 1 : Recto */}
-                    <div className="border border-slate-200 rounded-xl p-3 bg-slate-50/70 space-y-2.5">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[11px] font-bold text-slate-800">
-                          {fr.dossier.cinRectoLabel}
-                        </span>
-                        {hasCinRecto ? (
-                          <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5">
-                            <CheckCircle2 size={11} className="shrink-0" />
-                            <span>{fr.dossier.fournieBadge}</span>
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 text-[10px] font-medium text-slate-500 bg-white border border-slate-200 rounded-full px-2 py-0.5">
-                            <span>{fr.statutsPiece.absente.label}</span>
-                          </span>
-                        )}
-                      </div>
-
+                  {/* Aperçus des faces chargées (uniquement quand le panneau Téléverser n'est pas ouvert, ou si une face existe déjà) */}
+                  {(hasCinRecto || hasCinVerso) && !cinUploadSplitOpen && (
+                    <div className={`grid grid-cols-1 ${hasCinRecto && hasCinVerso ? 'sm:grid-cols-2' : ''} gap-3`}>
                       {hasCinRecto && (
-                        <div className="flex items-center gap-2 flex-wrap justify-between">
-                          {isImage && piece.fichier ? (
-                            <div className="flex items-center gap-2">
-                              {!provenCinRectoImgError ? (
-                                <img
-                                  src={piece.fichier}
-                                  alt={`${getPieceName(type)} — ${fr.dossier.cinRectoLabel}`}
-                                  onClick={() => setViewingPiece({ piece, side: 'recto' })}
-                                  onError={() => setProvenCinRectoImgError(true)}
-                                  className="w-16 h-11 object-cover rounded-lg border border-slate-200 shadow-xs cursor-pointer hover:opacity-90 transition-opacity bg-white"
-                                />
-                              ) : (
-                                <div
-                                  onClick={() => setViewingPiece({ piece, side: 'recto' })}
-                                  className="w-16 h-11 rounded-lg border border-slate-200 bg-white flex flex-col items-center justify-center p-1 cursor-pointer hover:bg-slate-100 transition-colors"
-                                >
-                                  <FileText size={16} className="text-slate-400" />
-                                </div>
-                              )}
-                              <span className="text-[11px] text-slate-500 font-medium truncate max-w-[110px]">
-                                {piece.source === 'camera' ? 'Photo prise' : 'Fichier image'}
-                              </span>
-                            </div>
-                          ) : isPdf ? (
-                            <div className="flex items-center gap-1.5 text-xs text-slate-700 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 flex-1 min-w-0">
-                              <FileText size={14} className="text-slate-400 shrink-0" />
-                              <span className="truncate font-medium">
-                                {piece.fichier?.startsWith('data:') ? fr.dossier.pdfDocument : (piece.fichier || fr.dossier.pdfDocument)}
-                              </span>
-                            </div>
-                          ) : (
-                            <div className="flex items-center gap-1.5 text-xs text-slate-700 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 flex-1 min-w-0">
-                              <CheckCircle2 size={14} className="text-emerald-600 shrink-0" />
-                              <span className="truncate font-medium">{piece.fichier || 'Pièce validée'}</span>
-                            </div>
-                          )}
+                        <div className="border border-slate-200 rounded-xl p-3 bg-slate-50/70 space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[11px] font-bold text-slate-800">
+                              {fr.dossier.cinRectoLabel}
+                            </span>
+                            <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5">
+                              <CheckCircle2 size={11} className="shrink-0" />
+                              <span>{fr.dossier.fournieBadge}</span>
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 flex-wrap justify-between">
+                            {isImage && piece.fichier ? (
+                              <div className="flex items-center gap-2">
+                                {!provenCinRectoImgError ? (
+                                  <img
+                                    src={piece.fichier}
+                                    alt={`${fr.dossier.cinCardTitle} — ${fr.dossier.cinRectoLabel}`}
+                                    onClick={() => setViewingPiece({ piece, side: 'recto' })}
+                                    onError={() => setProvenCinRectoImgError(true)}
+                                    className="w-16 h-11 object-cover rounded-lg border border-slate-200 shadow-xs cursor-pointer hover:opacity-90 transition-opacity bg-white"
+                                  />
+                                ) : (
+                                  <div
+                                    onClick={() => setViewingPiece({ piece, side: 'recto' })}
+                                    className="w-16 h-11 rounded-lg border border-slate-200 bg-white flex flex-col items-center justify-center p-1 cursor-pointer hover:bg-slate-100 transition-colors"
+                                  >
+                                    <FileText size={16} className="text-slate-400" />
+                                  </div>
+                                )}
+                                <span className="text-[11px] text-slate-500 font-medium truncate max-w-[110px]">
+                                  {piece.source === 'camera' ? 'Photo prise' : 'Fichier image'}
+                                </span>
+                              </div>
+                            ) : isPdf ? (
+                              <div className="flex items-center gap-1.5 text-xs text-slate-700 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 flex-1 min-w-0">
+                                <FileText size={14} className="text-slate-400 shrink-0" />
+                                <span className="truncate font-medium">
+                                  {piece.fichier?.startsWith('data:') ? fr.dossier.pdfDocument : (piece.fichier || fr.dossier.pdfDocument)}
+                                </span>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-1.5 text-xs text-slate-700 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 flex-1 min-w-0">
+                                <CheckCircle2 size={14} className="text-emerald-600 shrink-0" />
+                                <span className="truncate font-medium">{piece.fichier || 'Pièce validée'}</span>
+                              </div>
+                            )}
 
-                          <div className="flex items-center gap-1.5 ml-auto">
-                            <button
-                              type="button"
-                              onClick={() => setViewingPiece({ piece, side: 'recto' })}
-                              className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 hover:border-slate-400 transition-colors cursor-pointer flex items-center gap-1 active:scale-98"
-                            >
-                              <Eye size={13} className="text-slate-500" />
-                              <span>{fr.dossier.btnVoirPiece}</span>
-                            </button>
-                            {!isDirecteur && (
+                            <div className="flex items-center gap-1.5 ml-auto">
                               <button
                                 type="button"
-                                onClick={() => {
-                                  handleUpdateCinSide('recto', undefined, undefined);
-                                  ocrRunIdRef.current += 1;
-                                  setCinOcrStatus('idle');
-                                  setCinFormTouched({});
-                                  setCinVerifySaved(false);
-                                }}
-                                className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-white border border-rose-200 text-rose-700 hover:bg-rose-50 transition-colors cursor-pointer flex items-center gap-1 active:scale-98"
+                                onClick={() => setViewingPiece({ piece, side: 'recto' })}
+                                className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 hover:border-slate-400 transition-colors cursor-pointer flex items-center gap-1 active:scale-98"
                               >
-                                <RotateCcw size={13} className="text-rose-600" />
-                                <span>{fr.dossier.btnRemplacerPiece}</span>
+                                <Eye size={13} className="text-slate-500" />
+                                <span>{fr.dossier.btnVoirPiece}</span>
                               </button>
-                            )}
+                              {!isDirecteur && !isDossierEnvoye && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    handleUpdateCinSide('recto', undefined, undefined);
+                                    ocrRunIdRef.current += 1;
+                                    setCinOcrStatus('idle');
+                                    setCinFormTouched({});
+                                    setCinVerifySaved(false);
+                                  }}
+                                  className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-white border border-rose-200 text-rose-700 hover:bg-rose-50 transition-colors cursor-pointer flex items-center gap-1 active:scale-98"
+                                >
+                                  <RotateCcw size={13} className="text-rose-600" />
+                                  <span>{fr.dossier.btnRemplacerPiece}</span>
+                                </button>
+                              )}
+                            </div>
                           </div>
                         </div>
                       )}
-                    </div>
-
-                    {/* Face 2 : Verso */}
-                    <div className="border border-slate-200 rounded-xl p-3 bg-slate-50/70 space-y-2.5">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[11px] font-bold text-slate-800">
-                          {fr.dossier.cinVersoLabel}
-                        </span>
-                        {hasCinVerso ? (
-                          <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5">
-                            <CheckCircle2 size={11} className="shrink-0" />
-                            <span>{fr.dossier.fournieBadge}</span>
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 text-[10px] font-medium text-slate-500 bg-white border border-slate-200 rounded-full px-2 py-0.5">
-                            <span>{fr.statutsPiece.absente.label}</span>
-                          </span>
-                        )}
-                      </div>
 
                       {hasCinVerso && (
-                        <div className="flex items-center gap-2 flex-wrap justify-between">
-                          {isVersoImage && piece.fichierVerso ? (
-                            <div className="flex items-center gap-2">
-                              {!provenCinVersoImgError ? (
-                                <img
-                                  src={piece.fichierVerso}
-                                  alt={`${getPieceName(type)} — ${fr.dossier.cinVersoLabel}`}
-                                  onClick={() => setViewingPiece({ piece, side: 'verso' })}
-                                  onError={() => setProvenCinVersoImgError(true)}
-                                  className="w-16 h-11 object-cover rounded-lg border border-slate-200 shadow-xs cursor-pointer hover:opacity-90 transition-opacity bg-white"
-                                />
-                              ) : (
-                                <div
-                                  onClick={() => setViewingPiece({ piece, side: 'verso' })}
-                                  className="w-16 h-11 rounded-lg border border-slate-200 bg-white flex flex-col items-center justify-center p-1 cursor-pointer hover:bg-slate-100 transition-colors"
-                                >
-                                  <FileText size={16} className="text-slate-400" />
-                                </div>
-                              )}
-                              <span className="text-[11px] text-slate-500 font-medium truncate max-w-[110px]">
-                                {piece.sourceVerso === 'camera' ? 'Photo prise' : 'Fichier image'}
-                              </span>
-                            </div>
-                          ) : isVersoPdf ? (
-                            <div className="flex items-center gap-1.5 text-xs text-slate-700 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 flex-1 min-w-0">
-                              <FileText size={14} className="text-slate-400 shrink-0" />
-                              <span className="truncate font-medium">
-                                {piece.fichierVerso?.startsWith('data:') ? fr.dossier.pdfDocument : (piece.fichierVerso || fr.dossier.pdfDocument)}
-                              </span>
-                            </div>
-                          ) : (
-                            <div className="flex items-center gap-1.5 text-xs text-slate-700 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 flex-1 min-w-0">
-                              <CheckCircle2 size={14} className="text-emerald-600 shrink-0" />
-                              <span className="truncate font-medium">{piece.fichierVerso || 'Pièce validée'}</span>
-                            </div>
-                          )}
+                        <div className="border border-slate-200 rounded-xl p-3 bg-slate-50/70 space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[11px] font-bold text-slate-800">
+                              {fr.dossier.cinVersoLabel}
+                            </span>
+                            <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5">
+                              <CheckCircle2 size={11} className="shrink-0" />
+                              <span>{fr.dossier.fournieBadge}</span>
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 flex-wrap justify-between">
+                            {isVersoImage && piece.fichierVerso ? (
+                              <div className="flex items-center gap-2">
+                                {!provenCinVersoImgError ? (
+                                  <img
+                                    src={piece.fichierVerso}
+                                    alt={`${fr.dossier.cinCardTitle} — ${fr.dossier.cinVersoLabel}`}
+                                    onClick={() => setViewingPiece({ piece, side: 'verso' })}
+                                    onError={() => setProvenCinVersoImgError(true)}
+                                    className="w-16 h-11 object-cover rounded-lg border border-slate-200 shadow-xs cursor-pointer hover:opacity-90 transition-opacity bg-white"
+                                  />
+                                ) : (
+                                  <div
+                                    onClick={() => setViewingPiece({ piece, side: 'verso' })}
+                                    className="w-16 h-11 rounded-lg border border-slate-200 bg-white flex flex-col items-center justify-center p-1 cursor-pointer hover:bg-slate-100 transition-colors"
+                                  >
+                                    <FileText size={16} className="text-slate-400" />
+                                  </div>
+                                )}
+                                <span className="text-[11px] text-slate-500 font-medium truncate max-w-[110px]">
+                                  {piece.sourceVerso === 'camera' ? 'Photo prise' : 'Fichier image'}
+                                </span>
+                              </div>
+                            ) : isVersoPdf ? (
+                              <div className="flex items-center gap-1.5 text-xs text-slate-700 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 flex-1 min-w-0">
+                                <FileText size={14} className="text-slate-400 shrink-0" />
+                                <span className="truncate font-medium">
+                                  {piece.fichierVerso?.startsWith('data:') ? fr.dossier.pdfDocument : (piece.fichierVerso || fr.dossier.pdfDocument)}
+                                </span>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-1.5 text-xs text-slate-700 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 flex-1 min-w-0">
+                                <CheckCircle2 size={14} className="text-emerald-600 shrink-0" />
+                                <span className="truncate font-medium">{piece.fichierVerso || 'Pièce validée'}</span>
+                              </div>
+                            )}
 
-                          <div className="flex items-center gap-1.5 ml-auto">
-                            <button
-                              type="button"
-                              onClick={() => setViewingPiece({ piece, side: 'verso' })}
-                              className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 hover:border-slate-400 transition-colors cursor-pointer flex items-center gap-1 active:scale-98"
-                            >
-                              <Eye size={13} className="text-slate-500" />
-                              <span>{fr.dossier.btnVoirPiece}</span>
-                            </button>
-                            {!isDirecteur && (
+                            <div className="flex items-center gap-1.5 ml-auto">
                               <button
                                 type="button"
-                                onClick={() => handleUpdateCinSide('verso', undefined, undefined)}
-                                className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-white border border-rose-200 text-rose-700 hover:bg-rose-50 transition-colors cursor-pointer flex items-center gap-1 active:scale-98"
+                                onClick={() => setViewingPiece({ piece, side: 'verso' })}
+                                className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 hover:border-slate-400 transition-colors cursor-pointer flex items-center gap-1 active:scale-98"
                               >
-                                <RotateCcw size={13} className="text-rose-600" />
-                                <span>{fr.dossier.btnRemplacerPiece}</span>
+                                <Eye size={13} className="text-slate-500" />
+                                <span>{fr.dossier.btnVoirPiece}</span>
                               </button>
-                            )}
+                              {!isDirecteur && !isDossierEnvoye && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdateCinSide('verso', undefined, undefined)}
+                                  className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-white border border-rose-200 text-rose-700 hover:bg-rose-50 transition-colors cursor-pointer flex items-center gap-1 active:scale-98"
+                                >
+                                  <RotateCcw size={13} className="text-rose-600" />
+                                  <span>{fr.dossier.btnRemplacerPiece}</span>
+                                </button>
+                              )}
+                            </div>
                           </div>
                         </div>
                       )}
                     </div>
-                  </div>
+                  )}
 
-                  {!isDirecteur && !isProven && (
-                    <div className="space-y-1.5">
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setActiveCameraTarget({ type, dual: true })}
-                          className="flex-1 min-h-[40px] px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer active:scale-98"
-                        >
-                          <Camera size={15} />
-                          <span>{fr.dossier.scannerCin}</span>
-                        </button>
+                  {/* Boutons Scanner / Téléverser OU panneau divisé Recto / Verso avec Retour */}
+                  {!isDirecteur && !isDossierEnvoye && !isProven && (
+                    <div className="space-y-2">
+                      {!cinUploadSplitOpen ? (
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCinUploadSplitOpen(false);
+                              setActiveCameraTarget({ type, dual: true });
+                            }}
+                            className="flex-1 min-h-[40px] px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer active:scale-98"
+                          >
+                            <Camera size={15} />
+                            <span>{fr.dossier.scannerCin}</span>
+                          </button>
 
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setCinUploadError(null);
-                            setCinUploadModalOpen(true);
-                          }}
-                          className="flex-1 min-h-[40px] px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer active:scale-98"
-                        >
-                          <Upload size={15} />
-                          <span>{fr.dossier.upload}</span>
-                        </button>
-                      </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCinRectoUploadError(null);
+                              setCinVersoUploadError(null);
+                              setCinUploadSplitOpen(true);
+                            }}
+                            className="flex-1 min-h-[40px] px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer active:scale-98"
+                          >
+                            <Upload size={15} />
+                            <span>{fr.dossier.upload}</span>
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            {/* Champ 1 : Téléverser le recto */}
+                            <div className="space-y-1.5 bg-white border border-slate-200 rounded-xl p-2.5">
+                              <span className="block text-[11px] font-bold text-slate-800">
+                                {fr.dossier.cinUploadRectoLabel}
+                              </span>
+                              {hasCinRecto ? (
+                                <div className="flex items-center gap-2 flex-wrap justify-between pt-0.5">
+                                  {isImage && piece.fichier && !provenCinRectoImgError ? (
+                                    <img
+                                      src={piece.fichier}
+                                      alt={`${fr.dossier.cinCardTitle} — ${fr.dossier.cinRectoLabel}`}
+                                      onClick={() => setViewingPiece({ piece, side: 'recto' })}
+                                      onError={() => setProvenCinRectoImgError(true)}
+                                      className="w-14 h-10 object-cover rounded-lg border border-slate-200 cursor-pointer bg-white"
+                                    />
+                                  ) : (
+                                    <div
+                                      onClick={() => setViewingPiece({ piece, side: 'recto' })}
+                                      className="w-14 h-10 rounded-lg border border-slate-200 bg-slate-50 flex items-center justify-center cursor-pointer"
+                                    >
+                                      <FileText size={15} className="text-slate-500" />
+                                    </div>
+                                  )}
+                                  <div className="flex items-center gap-1.5 ml-auto">
+                                    <button
+                                      type="button"
+                                      onClick={() => setViewingPiece({ piece, side: 'recto' })}
+                                      className="px-2 py-1 rounded-lg text-xs font-semibold bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 cursor-pointer flex items-center gap-1"
+                                    >
+                                      <Eye size={12} />
+                                      <span>{fr.dossier.btnVoirPiece}</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        handleUpdateCinSide('recto', undefined, undefined);
+                                        ocrRunIdRef.current += 1;
+                                        setCinOcrStatus('idle');
+                                        setCinFormTouched({});
+                                        setCinVerifySaved(false);
+                                        setCinRectoUploadError(null);
+                                      }}
+                                      className="px-2 py-1 rounded-lg text-xs font-semibold bg-white border border-rose-200 text-rose-700 hover:bg-rose-50 cursor-pointer flex items-center gap-1"
+                                    >
+                                      <RotateCcw size={12} />
+                                      <span>{fr.dossier.btnRemplacerPiece}</span>
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => fileInputRefs.current['CIN_recto']?.click()}
+                                  className="w-full min-h-[38px] px-3 py-1.5 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-800 border border-slate-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer active:scale-98"
+                                >
+                                  <Upload size={14} className="text-emerald-700" />
+                                  <span>{fr.dossier.cinUploadChooseFile}</span>
+                                </button>
+                              )}
+                              {cinRectoUploadError && (
+                                <p className="text-[11px] font-medium text-rose-700 flex items-center gap-1 pt-0.5">
+                                  <AlertCircle size={13} className="shrink-0 text-rose-600" />
+                                  <span>{cinRectoUploadError}</span>
+                                </p>
+                              )}
+                            </div>
+
+                            {/* Champ 2 : Téléverser le verso */}
+                            <div className="space-y-1.5 bg-white border border-slate-200 rounded-xl p-2.5">
+                              <span className="block text-[11px] font-bold text-slate-800">
+                                {fr.dossier.cinUploadVersoLabel}
+                              </span>
+                              {hasCinVerso ? (
+                                <div className="flex items-center gap-2 flex-wrap justify-between pt-0.5">
+                                  {isVersoImage && piece.fichierVerso && !provenCinVersoImgError ? (
+                                    <img
+                                      src={piece.fichierVerso}
+                                      alt={`${fr.dossier.cinCardTitle} — ${fr.dossier.cinVersoLabel}`}
+                                      onClick={() => setViewingPiece({ piece, side: 'verso' })}
+                                      onError={() => setProvenCinVersoImgError(true)}
+                                      className="w-14 h-10 object-cover rounded-lg border border-slate-200 cursor-pointer bg-white"
+                                    />
+                                  ) : (
+                                    <div
+                                      onClick={() => setViewingPiece({ piece, side: 'verso' })}
+                                      className="w-14 h-10 rounded-lg border border-slate-200 bg-slate-50 flex items-center justify-center cursor-pointer"
+                                    >
+                                      <FileText size={15} className="text-slate-500" />
+                                    </div>
+                                  )}
+                                  <div className="flex items-center gap-1.5 ml-auto">
+                                    <button
+                                      type="button"
+                                      onClick={() => setViewingPiece({ piece, side: 'verso' })}
+                                      className="px-2 py-1 rounded-lg text-xs font-semibold bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 cursor-pointer flex items-center gap-1"
+                                    >
+                                      <Eye size={12} />
+                                      <span>{fr.dossier.btnVoirPiece}</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        handleUpdateCinSide('verso', undefined, undefined);
+                                        setCinVersoUploadError(null);
+                                      }}
+                                      className="px-2 py-1 rounded-lg text-xs font-semibold bg-white border border-rose-200 text-rose-700 hover:bg-rose-50 cursor-pointer flex items-center gap-1"
+                                    >
+                                      <RotateCcw size={12} />
+                                      <span>{fr.dossier.btnRemplacerPiece}</span>
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => fileInputRefs.current['CIN_verso']?.click()}
+                                  className="w-full min-h-[38px] px-3 py-1.5 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-800 border border-slate-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer active:scale-98"
+                                >
+                                  <Upload size={14} className="text-emerald-700" />
+                                  <span>{fr.dossier.cinUploadChooseFile}</span>
+                                </button>
+                              )}
+                              {cinVersoUploadError && (
+                                <p className="text-[11px] font-medium text-rose-700 flex items-center gap-1 pt-0.5">
+                                  <AlertCircle size={13} className="shrink-0 text-rose-600" />
+                                  <span>{cinVersoUploadError}</span>
+                                </p>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <p className="text-[11px] text-slate-500">
+                              {fr.dossier.cinUploadFormatsHint}
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setCinRectoUploadError(null);
+                                setCinVersoUploadError(null);
+                                setCinUploadSplitOpen(false);
+                              }}
+                              className="min-h-[34px] px-3 py-1 rounded-lg bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                            >
+                              <ArrowLeft size={13} />
+                              <span>{fr.dossier.btnRetour}</span>
+                            </button>
+                          </div>
+
+                          <input
+                            type="file"
+                            accept="image/jpeg,image/png,application/pdf,.jpg,.jpeg,.png,.pdf"
+                            ref={(el) => {
+                              fileInputRefs.current['CIN_recto'] = el;
+                            }}
+                            onChange={(e) => handleCinModalFileUpload('recto', e)}
+                            className="hidden"
+                          />
+                          <input
+                            type="file"
+                            accept="image/jpeg,image/png,application/pdf,.jpg,.jpeg,.png,.pdf"
+                            ref={(el) => {
+                              fileInputRefs.current['CIN_verso'] = el;
+                            }}
+                            onChange={(e) => handleCinModalFileUpload('verso', e)}
+                            className="hidden"
+                          />
+                        </div>
+                      )}
+
                       <p className="text-xs text-slate-500">
                         {fr.dossier.noteScanOriginal}
                       </p>
@@ -1693,7 +1875,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                         <span>{fr.dossier.btnVoirPiece}</span>
                       </button>
 
-                      {!isDirecteur && (
+                      {!isDirecteur && !isDossierEnvoye && (
                         <button
                           type="button"
                           onClick={() => {
@@ -1715,8 +1897,8 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                 </div>
               )}
 
-              {/* Formulaire Vos informations (sous la CIN, ouvert dès qu'au moins une face est fournie) */}
-              {isCin && hasAnyCinSide && !isDirecteur && (
+              {/* Formulaire Vos informations (sous la CIN, ouvert tant que non enregistré ou en édition, hors lecture seule après envoi) */}
+              {isCin && hasAnyCinSide && !isDirecteur && !isDossierEnvoye && (
                 <form
                   id="vos-informations-cin"
                   onSubmit={handleSaveVosInfos}
@@ -1936,8 +2118,8 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                 </form>
               )}
 
-              {/* Boutons Prendre en photo et Téléverser pour les autres pièces (Diplôme, Relevés) */}
-              {!isCin && !isDirecteur && !isProven && (
+              {/* Boutons Prendre en photo et Téléverser pour les autres pièces (Diplôme, Relevés, CV) */}
+              {!isCin && !isDirecteur && !isDossierEnvoye && !isProven && (
                 <div className="space-y-1.5 pt-2 border-t border-slate-100">
                   <div className="flex items-center gap-2">
                     <button
@@ -2087,6 +2269,104 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
         )}
       </div>
 
+      {/* 4. ENVOI DU DOSSIER (en bas de la page Dossier) */}
+      {!isDirecteur && (
+        <div
+          id="bloc-envoi-dossier"
+          className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-2.5"
+        >
+          {isDossierEnvoye ? (
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-800 bg-emerald-100 px-3 py-1 rounded-full border border-emerald-300 w-fit">
+                <CheckCircle2 size={14} className="text-emerald-700 shrink-0" />
+                <span>{fr.dossier.envoyeLeBadge.replace('{date}', formatDateJJMMAAAA(dateEnvoi))}</span>
+              </span>
+              <button
+                type="button"
+                disabled
+                className="min-h-[40px] px-4 py-2 rounded-xl text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 flex items-center justify-center gap-1.5 cursor-default shrink-0"
+              >
+                <CheckCircle2 size={15} className="text-emerald-700 shrink-0" />
+                <span>{fr.dossier.candidatureEnvoyeeBtn}</span>
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              <button
+                type="button"
+                disabled={!canSendDossier}
+                onClick={() => setConfirmEnvoiOpen(true)}
+                className={`w-full min-h-[42px] px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 shadow-xs ${
+                  canSendDossier
+                    ? 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer active:scale-98'
+                    : 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
+                }`}
+              >
+                <Send size={15} />
+                <span>{fr.dossier.btnEnvoyerCandidature}</span>
+              </button>
+              {!canSendDossier && sendDisabledReason && (
+                <p className="text-xs font-medium text-rose-700 flex items-center gap-1.5">
+                  <AlertCircle size={13} className="shrink-0" />
+                  <span>{sendDisabledReason}</span>
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Modal confirmation envoi de la candidature */}
+      {confirmEnvoiOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setConfirmEnvoiOpen(false);
+          }}
+          className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white rounded-2xl max-w-md w-full overflow-hidden shadow-2xl border border-slate-200 p-5 space-y-4"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-sm font-bold text-slate-900">
+                {fr.dossier.modalEnvoiCandidatureTitre}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setConfirmEnvoiOpen(false)}
+                aria-label={fr.dossier.close}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <p className="text-xs text-slate-600">
+              {fr.dossier.modalEnvoiCandidatureMessage}
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setConfirmEnvoiOpen(false)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer"
+              >
+                {fr.dossier.modalEnvoiCancel}
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmEnvoyerDossier}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-700 hover:bg-emerald-800 text-white transition-colors cursor-pointer flex items-center gap-1.5 shadow-xs"
+              >
+                <Send size={14} />
+                <span>{fr.dossier.modalEnvoiConfirm}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Modal Caméra */}
       {activeCameraTarget && (
         <CameraCapture
@@ -2111,130 +2391,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
         />
       )}
 
-      {/* Modal Téléversement CIN (Recto / Verso / Un seul PDF) */}
-      {cinUploadModalOpen && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setCinUploadModalOpen(false);
-          }}
-          className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-end md:items-center justify-center p-0 md:p-4"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="bg-white rounded-t-2xl md:rounded-2xl max-w-md w-full overflow-hidden shadow-2xl border border-slate-200 flex flex-col"
-          >
-            {/* En-tête modal */}
-            <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-              <div className="flex items-center gap-2 min-w-0">
-                <Upload size={16} className="text-emerald-700 shrink-0" />
-                <h3 className="text-xs font-bold text-slate-900 truncate">
-                  {fr.dossier.cinUploadModalTitle}
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setCinUploadModalOpen(false)}
-                aria-label={fr.dossier.close}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-200 transition-colors cursor-pointer"
-              >
-                <X size={18} />
-              </button>
-            </div>
 
-            {/* Corps modal */}
-            <div className="p-4 space-y-3">
-              <p className="text-xs text-slate-500">
-                {fr.dossier.cinUploadFormatsHint}
-              </p>
-
-              <div className="grid grid-cols-2 gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => fileInputRefs.current['CIN_recto']?.click()}
-                  className="min-h-[42px] px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer active:scale-98"
-                >
-                  <Upload size={14} />
-                  <span>{fr.dossier.cinUploadBtnRecto}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => fileInputRefs.current['CIN_verso']?.click()}
-                  className="min-h-[42px] px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer active:scale-98"
-                >
-                  <Upload size={14} />
-                  <span>{fr.dossier.cinUploadBtnVerso}</span>
-                </button>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <div className="h-px flex-1 bg-slate-200" />
-                <span className="text-[11px] font-semibold text-slate-400">
-                  {fr.auth.orSeparator}
-                </span>
-                <div className="h-px flex-1 bg-slate-200" />
-              </div>
-
-              <button
-                type="button"
-                onClick={() => fileInputRefs.current['CIN_single_pdf']?.click()}
-                className="w-full min-h-[42px] px-3 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer active:scale-98"
-              >
-                <FileText size={14} />
-                <span>{fr.dossier.cinUploadBtnSinglePdf}</span>
-              </button>
-
-              {cinUploadError && (
-                <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium flex items-center gap-2">
-                  <AlertCircle size={14} className="shrink-0 text-rose-600" />
-                  <span>{cinUploadError}</span>
-                </div>
-              )}
-
-              <input
-                type="file"
-                accept="image/jpeg,image/png,application/pdf,.jpg,.jpeg,.png,.pdf"
-                ref={(el) => {
-                  fileInputRefs.current['CIN_recto'] = el;
-                }}
-                onChange={(e) => handleCinModalFileUpload('recto', e)}
-                className="hidden"
-              />
-              <input
-                type="file"
-                accept="image/jpeg,image/png,application/pdf,.jpg,.jpeg,.png,.pdf"
-                ref={(el) => {
-                  fileInputRefs.current['CIN_verso'] = el;
-                }}
-                onChange={(e) => handleCinModalFileUpload('verso', e)}
-                className="hidden"
-              />
-              <input
-                type="file"
-                accept="application/pdf,.pdf"
-                ref={(el) => {
-                  fileInputRefs.current['CIN_single_pdf'] = el;
-                }}
-                onChange={(e) => handleCinModalFileUpload('single_pdf', e)}
-                className="hidden"
-              />
-            </div>
-
-            {/* Pied modal */}
-            <div className="px-4 py-2.5 border-t border-slate-200 bg-slate-50 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setCinUploadModalOpen(false)}
-                className="px-4 py-1.5 rounded-xl text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-white transition-colors cursor-pointer"
-              >
-                {fr.dossier.close}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Modal Aperçu Agrandie (Voir) */}
       {viewingPiece && (() => {

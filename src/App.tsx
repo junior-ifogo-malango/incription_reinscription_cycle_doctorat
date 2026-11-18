@@ -171,6 +171,8 @@ function getDoctorantNom(docId: string): string {
 export default function App() {
   const estMobile = useEstMobile();
   const [role, setRole] = useState<UserRole>('candidat');
+  const roleRef = useRef<UserRole>('candidat');
+  roleRef.current = role;
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const isLoggedInRef = useRef(false);
   isLoggedInRef.current = isLoggedIn;
@@ -183,6 +185,9 @@ export default function App() {
       return null;
     }
   });
+  const activeCompteRef = useRef<Compte | null>(activeCompte);
+  activeCompteRef.current = activeCompte;
+  const pendingTabRef = useRef<AppTabType | null>(null);
 
   const userRoles: Role[] = useMemo(() => {
     if (!isLoggedIn) return ['candidat'];
@@ -235,6 +240,7 @@ export default function App() {
   const [teacherFeedbackMsg, setTeacherFeedbackMsg] = useState<string | null>(null);
   const [showToast, setShowToast] = useState(false);
   const [simulatedStatuts, setSimulatedStatuts] = useState<Record<string, 'deposee' | 'retenue'>>({});
+  const [candidateSyncTick, setCandidateSyncTick] = useState(0);
   const [selectedCandidatForDossier, setSelectedCandidatForDossier] = useState<{ id: string; nom: string } | null>(null);
   const [viewingRapport, setViewingRapport] = useState<Rapport | null>(null);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
@@ -310,15 +316,34 @@ export default function App() {
 
     const handleSync = () => {
       refreshState();
+      setCandidateSyncTick((t) => t + 1);
+    };
+    const handleAccountUpdated = () => {
+      if (isLoggedInRef.current) return;
+      try {
+        const rawAcc = localStorage.getItem('usmba_active_account');
+        if (rawAcc) {
+          const parsedAcc: Compte = JSON.parse(rawAcc);
+          const roles = getCompteRoles(parsedAcc);
+          const primaryRole = normaliserRole(roles[0] || parsedAcc.role || 'candidat');
+          handleLoginSuccess(primaryRole, parsedAcc.email, undefined, parsedAcc);
+        }
+      } catch {}
     };
     window.addEventListener('usmba_pieces_updated', handleSync);
     window.addEventListener('usmba_rapports_updated', handleSync);
     window.addEventListener('usmba_sujets_updated', handleSync);
+    window.addEventListener('usmba_candidat_updated', handleSync);
+    window.addEventListener('usmba_dossier_updated', handleSync);
+    window.addEventListener('usmba_account_updated', handleAccountUpdated);
     window.addEventListener('storage', handleSync);
     return () => {
       window.removeEventListener('usmba_pieces_updated', handleSync);
       window.removeEventListener('usmba_rapports_updated', handleSync);
       window.removeEventListener('usmba_sujets_updated', handleSync);
+      window.removeEventListener('usmba_candidat_updated', handleSync);
+      window.removeEventListener('usmba_dossier_updated', handleSync);
+      window.removeEventListener('usmba_account_updated', handleAccountUpdated);
       window.removeEventListener('storage', handleSync);
     };
   }, []);
@@ -367,17 +392,60 @@ export default function App() {
     }
   };
 
+  const isTabAllowedForRoles = (targetTab: AppTabType, rolesList: UserRole[]): boolean => {
+    if (rolesList.includes('admin') && !rolesList.some((r) => r !== 'admin')) {
+      return targetTab === 'admin_comptes' || targetTab === 'admin_journal';
+    }
+    if (targetTab === 'admin_comptes' || targetTab === 'admin_journal') {
+      return rolesList.includes('admin');
+    }
+    if (targetTab === 'sujets' || targetTab === 'panier' || targetTab === 'vote_comite') {
+      return true;
+    }
+    if (targetTab === 'dossier') return rolesList.includes('candidat');
+    if (targetTab === 'candidatures_recues' || targetTab === 'commission') {
+      return rolesList.includes('enseignant');
+    }
+    if (targetTab === 'entretiens') {
+      return rolesList.includes('candidat') || rolesList.includes('enseignant');
+    }
+    if (targetTab === 'ced' || targetTab === 'seances' || targetTab === 'ced_sujets') {
+      return rolesList.includes('directeur_ced');
+    }
+    if (targetTab === 'reinscriptions') {
+      return rolesList.includes('directeur_ced') || rolesList.includes('enseignant');
+    }
+    if (targetTab === 'rapport' || targetTab === 'suivi') {
+      return rolesList.includes('doctorant');
+    }
+    if (targetTab === 'guichet') {
+      return rolesList.includes('agent');
+    }
+    return false;
+  };
+
+  const getEffectiveNormalizedRoles = (): UserRole[] => {
+    if (!isLoggedInRef.current) return ['candidat'];
+    const rolesList: Role[] = activeCompteRef.current
+      ? getCompteRoles(activeCompteRef.current)
+      : roleRef.current
+      ? [roleRef.current]
+      : ['candidat'];
+    return Array.from(new Set(rolesList.map((r) => normaliserRole(r))));
+  };
+
+  const openManualLogin = () => {
+    pendingTabRef.current = null;
+    setRestrictionMsg(undefined);
+    setIsLoginOpen(true);
+  };
+
   const handleLoginSuccess = (
     userRole: UserRole,
     userEmail?: string,
     candidateData?: Candidat,
     connectedCompte?: Compte
   ) => {
-    setIsLoggedIn(true);
-    isLoggedInRef.current = true;
-    setRole(userRole);
-    setRestrictionMsg(undefined);
-
     let compteToStore = connectedCompte || null;
     if (!compteToStore && userEmail) {
       const allComptes = getComptes();
@@ -406,7 +474,16 @@ export default function App() {
         statut: 'actif',
       };
     }
+
+    isLoggedInRef.current = true;
+    roleRef.current = userRole;
+    activeCompteRef.current = compteToStore;
+    setIsLoggedIn(true);
+    setRole(userRole);
     setActiveCompte(compteToStore);
+    setRestrictionMsg(undefined);
+    setIsLoginOpen(false);
+
     try {
       if (compteToStore) {
         localStorage.setItem('usmba_active_account', JSON.stringify(compteToStore));
@@ -418,13 +495,51 @@ export default function App() {
     } catch {}
 
     if (userRole === 'candidat') {
+      const storedBefore = storageService.getCandidat();
+      const visitorPanier = Array.from(
+        new Set([
+          ...(Array.isArray(candidat.panier) ? candidat.panier : []),
+          ...(Array.isArray(storedBefore?.panier) ? storedBefore.panier : []),
+        ])
+      );
       if (candidateData) {
-        setCandidat(candidateData);
-        storageService.setCandidat(candidateData);
+        const mergedPanier = Array.from(
+          new Set([...(candidateData.panier || []), ...visitorPanier])
+        ).filter((id) => !(candidateData.candidatures || []).includes(id));
+        const mergedCandidate: Candidat = {
+          ...candidateData,
+          panier: mergedPanier,
+          panierInteret: mergedPanier,
+        };
+        setCandidat(mergedCandidate);
+        storageService.setCandidat(mergedCandidate);
       } else {
         const demo = storageService.loginAsDemo();
-        setCandidat(demo);
+        const mergedPanier = Array.from(
+          new Set([...(demo.panier || []), ...visitorPanier])
+        ).filter((id) => !(demo.candidatures || []).includes(id));
+        const mergedDemo: Candidat = {
+          ...demo,
+          panier: mergedPanier,
+          panierInteret: mergedPanier,
+        };
+        setCandidat(mergedDemo);
+        storageService.setCandidat(mergedDemo);
       }
+    }
+
+    const effectiveRolesAfterLogin = Array.from(
+      new Set(
+        (compteToStore ? getCompteRoles(compteToStore) : [userRole]).map((r) => normaliserRole(r))
+      )
+    );
+    const pendingTarget = pendingTabRef.current;
+    pendingTabRef.current = null;
+
+    if (pendingTarget && isTabAllowedForRoles(pendingTarget, effectiveRolesAfterLogin)) {
+      setSelectedCandidatForDossier(null);
+      setTab(pendingTarget);
+    } else if (userRole === 'candidat') {
       setTab('sujets');
     } else if (userRole === 'admin') {
       setTab('admin_comptes');
@@ -442,10 +557,14 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    setIsLoggedIn(false);
     isLoggedInRef.current = false;
+    roleRef.current = 'candidat';
+    activeCompteRef.current = null;
+    pendingTabRef.current = null;
+    setIsLoggedIn(false);
     setRole('candidat');
     setActiveCompte(null);
+    setRestrictionMsg(undefined);
     setGoogleUserPhoto(null);
     void signOutFirebase().catch((err) => {
       console.error('Firebase signOut error:', err);
@@ -482,18 +601,14 @@ export default function App() {
       // safe fallback
     }
 
+    const currentLoggedIn = isLoggedInRef.current;
+    const currentRoles = getEffectiveNormalizedRoles();
+
     // Protection stricte Admin : navigation exclusive entre ses 2 onglets, aucun accès aux autres écrans
-    if (normalizedRoles.includes('admin') && !normalizedRoles.some((r) => r !== 'admin')) {
+    if (currentLoggedIn && currentRoles.includes('admin') && !currentRoles.some((r) => r !== 'admin')) {
       if (targetTab === 'admin_comptes' || targetTab === 'admin_journal') {
         setTab(targetTab);
       }
-      return;
-    }
-
-    // Protection des onglets admin pour les non-admins
-    if ((targetTab === 'admin_comptes' || targetTab === 'admin_journal') && !normalizedRoles.includes('admin')) {
-      setRestrictionMsg(fr.auth.accessRestricted);
-      setIsLoginOpen(true);
       return;
     }
 
@@ -503,65 +618,16 @@ export default function App() {
       return;
     }
 
-    // Protection des pages nécessitant un rôle
-    if (!isLoggedIn) {
-      setRestrictionMsg(fr.auth.accessRestricted);
+    // Visiteur non connecté qui tente une page ou action réservée : mémoriser et ouvrir la connexion
+    if (!currentLoggedIn) {
+      pendingTabRef.current = targetTab;
+      setRestrictionMsg(fr.auth.loginToContinue);
       setIsLoginOpen(true);
       return;
     }
 
-    if (targetTab === 'dossier' && !normalizedRoles.includes('candidat')) {
-      setRestrictionMsg(fr.auth.accessRestricted);
-      setIsLoginOpen(true);
-      return;
-    }
-
-    if (targetTab === 'candidatures_recues' && !normalizedRoles.includes('enseignant')) {
-      setRestrictionMsg(fr.auth.accessRestricted);
-      setIsLoginOpen(true);
-      return;
-    }
-
-    if (targetTab === 'entretiens' && !normalizedRoles.includes('candidat') && !normalizedRoles.includes('enseignant')) {
-      setRestrictionMsg(fr.auth.accessRestricted);
-      setIsLoginOpen(true);
-      return;
-    }
-
-    if (targetTab === 'commission' && !normalizedRoles.includes('enseignant')) {
-      setRestrictionMsg(fr.auth.accessRestricted);
-      setIsLoginOpen(true);
-      return;
-    }
-
-    if (
-      (targetTab === 'ced' || targetTab === 'seances' || targetTab === 'ced_sujets') &&
-      !normalizedRoles.includes('directeur_ced')
-    ) {
-      setRestrictionMsg(fr.auth.accessRestricted);
-      setIsLoginOpen(true);
-      return;
-    }
-
-    if (
-      targetTab === 'reinscriptions' &&
-      !normalizedRoles.includes('directeur_ced') &&
-      !normalizedRoles.includes('enseignant')
-    ) {
-      setRestrictionMsg(fr.auth.accessRestricted);
-      setIsLoginOpen(true);
-      return;
-    }
-
-    if ((targetTab === 'rapport' || targetTab === 'suivi') && !normalizedRoles.includes('doctorant')) {
-      setRestrictionMsg(fr.auth.accessRestricted);
-      setIsLoginOpen(true);
-      return;
-    }
-
-    if (targetTab === 'guichet' && !normalizedRoles.includes('agent')) {
-      setRestrictionMsg(fr.auth.accessRestricted);
-      setIsLoginOpen(true);
+    // Utilisateur déjà connecté : vérifier les droits sans jamais rouvrir de modale "Veuillez vous connecter"
+    if (!isTabAllowedForRoles(targetTab, currentRoles)) {
       return;
     }
 
@@ -628,6 +694,35 @@ export default function App() {
 
   // Candidatures reçues pour l'enseignant actif
   const teacherSubjectIds = sujetsEnseignant.map((s) => s.id);
+  const findCandidateApp = (id?: string): Candidat | null => {
+    if (!id) return null;
+    try {
+      const rawOverrides = localStorage.getItem('usmba_candidats_overrides');
+      if (rawOverrides) {
+        const overrides: Record<string, Candidat> = JSON.parse(rawOverrides);
+        if (overrides[id]) return overrides[id];
+      }
+      const rawCur = localStorage.getItem('usmba_doctorat_candidat');
+      if (rawCur) {
+        const parsedCur: Candidat = JSON.parse(rawCur);
+        if (parsedCur.id === id) return parsedCur;
+      }
+      const rawAccounts = localStorage.getItem('usmba_registered_accounts');
+      if (rawAccounts) {
+        const accounts: Candidat[] = JSON.parse(rawAccounts);
+        const foundAcc = accounts.find((a) => a.id === id);
+        if (foundAcc) return foundAcc;
+      }
+      const rawAll = localStorage.getItem('usmba_all_candidates');
+      if (rawAll) {
+        const parsed: Candidat[] = JSON.parse(rawAll);
+        const found = parsed.find((c) => c.id === id);
+        if (found) return found;
+      }
+    } catch {}
+    return MOCK_CANDIDATS.find((c) => c.id === id) || null;
+  };
+
   const candidaturesEnseignant = useMemo(() => {
     const list: {
       key: string;
@@ -637,7 +732,7 @@ export default function App() {
       cne: string;
       sujetTitre: string;
       date: string;
-      statut: 'deposee' | 'retenue' | 'a_corriger';
+      statut: CandidatureStatut;
       piecesDeclarees: number;
       piecesProuvees: number;
       motifCasParticulier?: string;
@@ -645,58 +740,78 @@ export default function App() {
       isCurrentCandidat: boolean;
     }[] = [];
 
-    // Candidatures de l'étudiant actif
-    if (candidat.compteCree && candidat.candidatures) {
-      const activePiecesDeclarees = (candidat.pieces || []).filter(
+    const candidatesById = new Map<string, Candidat>();
+    try {
+      const rawAccounts = localStorage.getItem('usmba_registered_accounts');
+      if (rawAccounts) {
+        const accounts: Candidat[] = JSON.parse(rawAccounts);
+        accounts.forEach((a) => {
+          if (a && a.id) candidatesById.set(a.id, a);
+        });
+      }
+      const rawOverrides = localStorage.getItem('usmba_candidats_overrides');
+      if (rawOverrides) {
+        const overrides: Record<string, Candidat> = JSON.parse(rawOverrides);
+        Object.values(overrides).forEach((c) => {
+          if (c && c.id) candidatesById.set(c.id, c);
+        });
+      }
+    } catch {}
+
+    if (candidat.compteCree && candidat.id) {
+      candidatesById.set(candidat.id, candidat);
+    }
+
+    candidatesById.forEach((cand) => {
+      if (!cand.compteCree || !Array.isArray(cand.candidatures)) return;
+      const activePiecesDeclarees = (cand.pieces || []).filter(
         (p) => p.statut === 'declaree' || p.statut === 'prouvee'
       ).length;
-      const activePiecesProuvees = (candidat.pieces || []).filter(
+      const activePiecesProuvees = (cand.pieces || []).filter(
         (p) => p.statut === 'prouvee'
       ).length;
 
       let motifLabel: string | undefined = undefined;
-      if (candidat.dossier?.casParticulier && candidat.dossier?.motif) {
-        if (candidat.dossier.motif === 'AUTRE') {
-          motifLabel = candidat.dossier.motifAutre
-            ? `Autre : ${candidat.dossier.motifAutre}`
+      if (cand.dossier?.casParticulier && cand.dossier?.motif) {
+        if (cand.dossier.motif === 'AUTRE') {
+          motifLabel = cand.dossier.motifAutre
+            ? `Autre : ${cand.dossier.motifAutre}`
             : fr.dossier.casParticulierMotifs.AUTRE;
         } else {
-          motifLabel = fr.dossier.casParticulierMotifs[candidat.dossier.motif];
+          motifLabel = fr.dossier.casParticulierMotifs[cand.dossier.motif];
         }
       }
 
-      candidat.candidatures.forEach((id) => {
-        if (teacherSubjectIds.includes(id)) {
-          const s = sujets.find((x) => x.id === id);
-          if (s) {
-            const st = candidat.candidaturesStatuts?.[id] || 'deposee';
-            if (st === 'brouillon') {
-              return;
-            }
-            list.push({
-              key: `${candidat.id}-${id}`,
-              candidatId: candidat.id,
-              sujetId: s.id,
-              candidatNom: candidat.nom || 'Candidat USMBA',
-              cne: candidat.cne || 'CNE',
-              sujetTitre: s.titre,
-              date: '28/10/2026',
-              statut: st,
-              piecesDeclarees: activePiecesDeclarees,
-              piecesProuvees: activePiecesProuvees,
-              motifCasParticulier: motifLabel,
-              guichet: Boolean(candidat.dossier?.guichet),
-              isCurrentCandidat: true,
-            });
-          }
+      const seenSubjects = new Set<string>();
+      cand.candidatures.forEach((id) => {
+        if (seenSubjects.has(id) || !teacherSubjectIds.includes(id)) return;
+        seenSubjects.add(id);
+        const s = sujets.find((x) => x.id === id);
+        if (s) {
+          const st = cand.candidaturesStatuts?.[id] || 'brouillon';
+          list.push({
+            key: `${cand.id}-${id}`,
+            candidatId: cand.id,
+            sujetId: s.id,
+            candidatNom: cand.nom?.trim() || fr.dossierDirecteur.nonRenseigne,
+            cne: cand.cne?.trim() || fr.dossierDirecteur.nonRenseigne,
+            sujetTitre: s.titre,
+            date: cand.dossier?.dateEnvoi || cand.envoyeLe || '28/10/2026',
+            statut: st,
+            piecesDeclarees: activePiecesDeclarees,
+            piecesProuvees: activePiecesProuvees,
+            motifCasParticulier: motifLabel,
+            guichet: Boolean(cand.dossier?.guichet),
+            isCurrentCandidat: cand.id === candidat.id,
+          });
         }
       });
-    }
+    });
 
     // Candidatures d'autres étudiants simulés pour la démo
     if (activeEnseignant.id === 'ens-1') {
-      list.push(
-        {
+      if (!list.some((x) => x.candidatId === 'cand-salma')) {
+        list.push({
           key: 'salma-suj-07',
           candidatId: 'cand-salma',
           sujetId: 'suj-07',
@@ -708,8 +823,10 @@ export default function App() {
           piecesDeclarees: 4,
           piecesProuvees: 3,
           isCurrentCandidat: false,
-        },
-        {
+        });
+      }
+      if (!list.some((x) => x.candidatId === 'cand-khadija')) {
+        list.push({
           key: 'khadija-suj-01',
           candidatId: 'cand-khadija',
           sujetId: 'suj-01',
@@ -722,39 +839,29 @@ export default function App() {
           piecesProuvees: 4,
           motifCasParticulier: fr.dossier.casParticulierMotifs.DIPLOME_ETRANGER,
           isCurrentCandidat: false,
-        }
-      );
+        });
+      }
     }
 
     return list;
-  }, [candidat, teacherSubjectIds, sujets, activeEnseignant, simulatedStatuts]);
+  }, [candidat, teacherSubjectIds, sujets, activeEnseignant, simulatedStatuts, candidateSyncTick]);
 
-  const findCandidateApp = (id?: string): Candidat | null => {
-    if (!id) return null;
-    try {
-      const rawAll = localStorage.getItem('usmba_all_candidates');
-      if (rawAll) {
-        const parsed: Candidat[] = JSON.parse(rawAll);
-        const found = parsed.find((c) => c.id === id);
-        if (found) return found;
-      }
-      const rawCur = localStorage.getItem('usmba_doctorat_candidat');
-      if (rawCur) {
-        const parsedCur: Candidat = JSON.parse(rawCur);
-        if (parsedCur.id === id) return parsedCur;
-      }
-    } catch {}
-    return MOCK_CANDIDATS.find((c) => c.id === id) || null;
-  };
-
-  // Badge de Candidatures = nombre de dossiers complets non validés
+  // Badge de Candidatures = nombre de dossiers envoyés complets non validés
   const candidaturesCompletsNonValidesCount = useMemo(() => {
     return candidaturesEnseignant.filter((c) => {
       if (c.statut === 'retenue') return false;
       const candObj = c.isCurrentCandidat ? candidat : findCandidateApp(c.candidatId);
-      return candObj ? dossierComplet(candObj).complet : false;
+      if (!candObj) return false;
+      const hasACorr = Object.values(candObj.candidaturesStatuts || {}).some((s) => s === 'a_corriger');
+      const sent = Boolean(
+        candObj.dossier?.dateEnvoi ||
+        (!hasACorr &&
+          (candObj.envoyeLe ||
+            (candObj.candidaturesEnvoyeLe && Object.keys(candObj.candidaturesEnvoyeLe).length > 0)))
+      );
+      return sent && dossierComplet(candObj).complet;
     }).length;
-  }, [candidaturesEnseignant, candidat]);
+  }, [candidaturesEnseignant, candidat, candidateSyncTick]);
 
   const structureConnecteeNom = useMemo(() => {
     if (activeCompte) {
@@ -1281,7 +1388,7 @@ export default function App() {
                 {/* Se connecter ou Mon compte */}
                 {!isLoggedIn ? (
                   <button
-                    onClick={() => setIsLoginOpen(true)}
+                    onClick={openManualLogin}
                     className="px-3 py-1.5 rounded-lg text-xs font-semibold transition text-emerald-100 hover:text-white hover:bg-emerald-900/60 flex items-center gap-1.5 cursor-pointer"
                   >
                     <LogIn size={14} />
@@ -1552,9 +1659,13 @@ export default function App() {
               candidat={candidat}
               onUpdateCandidat={(updated) => {
                 setCandidat(updated);
-                if (updated.compteCree && !isLoggedIn) {
+                if (updated.compteCree && !isLoggedInRef.current) {
+                  isLoggedInRef.current = true;
+                  roleRef.current = 'candidat';
                   setIsLoggedIn(true);
                   setRole('candidat');
+                  setRestrictionMsg(undefined);
+                  setIsLoginOpen(false);
                 }
               }}
               onUpdateSujets={(newSujets) => {
@@ -1576,9 +1687,13 @@ export default function App() {
               candidat={candidat}
               onUpdateCandidat={(updated) => {
                 setCandidat(updated);
-                if (updated.compteCree && !isLoggedIn) {
+                if (updated.compteCree && !isLoggedInRef.current) {
+                  isLoggedInRef.current = true;
+                  roleRef.current = 'candidat';
                   setIsLoggedIn(true);
                   setRole('candidat');
+                  setRestrictionMsg(undefined);
+                  setIsLoginOpen(false);
                 }
               }}
               onUpdateSujets={(newSujets) => {
@@ -1597,90 +1712,169 @@ export default function App() {
                 candidatId={selectedCandidatForDossier.id}
                 onRetour={() => setSelectedCandidatForDossier(null)}
                 enseignantId={activeEnseignant.id}
+                onVoirConvocation={() => handleTabChange('entretiens')}
               />
-            ) : (
-            <div className="space-y-3">
-              <div className="bg-slate-900 text-white rounded-xl p-3 flex items-center justify-between">
-                <div>
-                  <h2 className="text-xs font-bold uppercase text-amber-300">
-                    {fr.sujetsModule.teacherCandidaturesTitle}
-                  </h2>
-                  <p className="text-[11px] text-slate-300">
-                    {activeEnseignant.nom} ({activeEnseignant.structure})
-                  </p>
-                </div>
-                <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-slate-800 text-emerald-400">
-                  {candidaturesEnseignant.length}
-                </span>
-              </div>
+            ) : (() => {
+              const enrichedItems = candidaturesEnseignant.map((item) => {
+                const resolved = findCandidateApp(item.candidatId);
+                const itemCandidate = resolved || (item.isCurrentCandidat
+                  ? candidat
+                  : {
+                      id: item.candidatId,
+                      nom: item.candidatNom,
+                      cne: item.cne,
+                      pieces: [
+                        { type: 'CIN', statut: item.piecesProuvees >= 1 ? 'prouvee' : 'absente' },
+                        { type: 'RELEVES', statut: item.piecesProuvees >= 2 ? 'prouvee' : 'absente' },
+                        { type: 'DIPLOME', statut: item.piecesProuvees >= 3 ? 'prouvee' : 'absente', source: 'apogee' },
+                      ],
+                    });
+                const check = dossierComplet(itemCandidate as any);
+                const candObj = itemCandidate as Candidat;
+                const hasACorr = Object.values(candObj?.candidaturesStatuts || {}).some((s) => s === 'a_corriger');
+                const hasLegacySent = Boolean(
+                  !hasACorr &&
+                  (candObj?.envoyeLe ||
+                    (candObj?.candidaturesEnvoyeLe && Object.keys(candObj.candidaturesEnvoyeLe).length > 0) ||
+                    Object.values(candObj?.candidaturesStatuts || {}).some((s) => s === 'retenue'))
+                );
+                const isSent = Boolean(candObj?.dossier?.dateEnvoi || hasLegacySent);
+                return { item, itemCandidate, check, isSent };
+              });
 
-              {candidaturesEnseignant.length === 0 ? (
-                <div className="bg-white border border-slate-200 rounded-xl p-8 text-center space-y-2">
-                  <p className="text-xs text-slate-500">{fr.sujetsModule.teacherCandidaturesEmpty}</p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {candidaturesEnseignant.map((item) => {
-                    const itemCandidate = item.isCurrentCandidat
-                      ? candidat
-                      : (MOCK_CANDIDATS.find((c) => c.id === item.candidatId) || {
-                          id: item.candidatId,
-                          nom: item.candidatNom,
-                          cne: item.cne,
-                          pieces: [
-                            { type: 'CIN', statut: item.piecesProuvees >= 1 ? 'prouvee' : 'absente' },
-                            { type: 'RELEVES', statut: item.piecesProuvees >= 2 ? 'prouvee' : 'absente' },
-                            { type: 'DIPLOME', statut: item.piecesProuvees >= 3 ? 'prouvee' : 'absente', source: 'apogee' },
-                          ],
-                        });
-                    const check = dossierComplet(itemCandidate as any);
+              const aTraiterList = enrichedItems.filter((x) => x.isSent);
+              const enAttenteList = enrichedItems.filter((x) => !x.isSent);
 
-                    return (
-                      <div
-                        key={item.key}
-                        className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-xs space-y-3 hover:border-slate-300 transition-colors"
-                      >
-                        {/* 4. Carte candidat (onglet Candidatures) : retire le titre du sujet. Nom, date JJ/MM, une pastille d'état, "Ouvrir le dossier". */}
-                        <div className="flex items-center justify-between gap-2">
-                          <h3 className="text-sm font-bold text-slate-900 truncate">{item.candidatNom}</h3>
-                          <span className="text-xs font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md shrink-0">
-                            {formatDateJJMM(item.date)}
+              const renderCandidatureCard = ({
+                item,
+                check,
+                isSent,
+              }: {
+                item: (typeof candidaturesEnseignant)[number];
+                check: ReturnType<typeof dossierComplet>;
+                isSent: boolean;
+              }) => (
+                <div
+                  key={item.key}
+                  className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-xs space-y-3 hover:border-slate-300 transition-colors"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-sm font-bold text-slate-900 truncate">
+                      {item.candidatNom || fr.dossierDirecteur.nonRenseigne}
+                    </h3>
+                    <span className="text-xs font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md shrink-0">
+                      {formatDateJJMM(item.date)}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {isSent ? (
+                      check.complet ? (
+                        <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
+                          <CheckCircle2 size={13} className="text-emerald-700 shrink-0" />
+                          <span>{fr.dossierDirecteur.verdictComplet}</span>
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
+                          <AlertCircle size={13} className="text-amber-700 shrink-0" />
+                          <span>
+                            {fr.dossierDirecteur.verdictIncomplet.replace('{manques}', check.manques.join(', '))}
+                          </span>
+                        </span>
+                      )
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-300">
+                        <AlertCircle size={13} className="text-slate-500 shrink-0" />
+                        <span>
+                          {check.complet
+                            ? `${fr.dossierDirecteur.badgeEnAttenteCandidat} · ${fr.dossierDirecteur.verdictComplet}`
+                            : fr.dossierDirecteur.verdictIncomplet.replace('{manques}', check.manques.join(', '))}
+                        </span>
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-100 flex items-center justify-end">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedCandidatForDossier({ id: item.candidatId, nom: item.candidatNom })}
+                      className="px-3.5 py-2 rounded-xl text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 transition cursor-pointer flex items-center gap-1.5 active:scale-98 shadow-xs"
+                    >
+                      <Eye size={14} />
+                      <span>{fr.dossierDirecteur.btnOuvrirDossier}</span>
+                    </button>
+                  </div>
+                </div>
+              );
+
+              return (
+                <div className="space-y-4">
+                  <div className="bg-slate-900 text-white rounded-xl p-3 flex items-center justify-between">
+                    <div>
+                      <h2 className="text-xs font-bold uppercase text-amber-300">
+                        {fr.sujetsModule.teacherCandidaturesTitle}
+                      </h2>
+                      <p className="text-[11px] text-slate-300">
+                        {activeEnseignant.nom} ({activeEnseignant.structure})
+                      </p>
+                    </div>
+                    <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-slate-800 text-emerald-400">
+                      {candidaturesEnseignant.length}
+                    </span>
+                  </div>
+
+                  {candidaturesEnseignant.length === 0 ? (
+                    <div className="bg-white border border-slate-200 rounded-xl p-8 text-center space-y-2">
+                      <p className="text-xs text-slate-500">{fr.sujetsModule.teacherCandidaturesEmpty}</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-5">
+                      {/* Section : À traiter (dossiers envoyés) */}
+                      <section className="space-y-2.5">
+                        <div className="flex items-center justify-between px-1">
+                          <h3 className="text-xs font-bold uppercase tracking-wider text-emerald-800">
+                            {fr.dossierDirecteur.sectionATraiter}
+                          </h3>
+                          <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                            {aTraiterList.length}
                           </span>
                         </div>
+                        {aTraiterList.length === 0 ? (
+                          <div className="bg-white border border-slate-200 rounded-xl p-4 text-center text-xs text-slate-500">
+                            {fr.dossierDirecteur.aucunDossierATraiter}
+                          </div>
+                        ) : (
+                          <div className="space-y-3">
+                            {aTraiterList.map(renderCandidatureCard)}
+                          </div>
+                        )}
+                      </section>
 
-                        <div className="flex items-center gap-2 flex-wrap">
-                          {check.complet ? (
-                            <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
-                              <CheckCircle2 size={13} className="text-emerald-700 shrink-0" />
-                              <span>{fr.dossierDirecteur.verdictComplet}</span>
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
-                              <AlertCircle size={13} className="text-amber-700 shrink-0" />
-                              <span>
-                                {fr.dossierDirecteur.verdictIncomplet.replace('{manques}', check.manques.join(', '))}
-                              </span>
-                            </span>
-                          )}
+                      {/* Section : En attente du candidat (non envoyés, même si complets) */}
+                      <section className="space-y-2.5">
+                        <div className="flex items-center justify-between px-1">
+                          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-600">
+                            {fr.dossierDirecteur.sectionEnAttenteCandidat}
+                          </h3>
+                          <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
+                            {enAttenteList.length}
+                          </span>
                         </div>
-
-                        <div className="pt-2 border-t border-slate-100 flex items-center justify-end">
-                          <button
-                            type="button"
-                            onClick={() => setSelectedCandidatForDossier({ id: item.candidatId, nom: item.candidatNom })}
-                            className="px-3.5 py-2 rounded-xl text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 transition cursor-pointer flex items-center gap-1.5 active:scale-98 shadow-xs"
-                          >
-                            <Eye size={14} />
-                            <span>{fr.dossierDirecteur.btnOuvrirDossier}</span>
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
+                        {enAttenteList.length === 0 ? (
+                          <div className="bg-white border border-slate-200 rounded-xl p-4 text-center text-xs text-slate-500">
+                            {fr.dossierDirecteur.aucunDossierEnAttente}
+                          </div>
+                        ) : (
+                          <div className="space-y-3">
+                            {enAttenteList.map(renderCandidatureCard)}
+                          </div>
+                        )}
+                      </section>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-            )
+              );
+            })()
           )}
 
           {/* Onglet « Mon dossier » (candidat) */}
@@ -1902,7 +2096,7 @@ export default function App() {
           roles={userRoles}
           userName={currentUserName}
           userEmail={currentUserEmail}
-          onOpenLogin={() => setIsLoginOpen(true)}
+          onOpenLogin={openManualLogin}
           onLogout={handleLogout}
           demoDateInput={demoDateInput}
           todayDate={aujourdhui()}
@@ -1994,7 +2188,7 @@ export default function App() {
                   type="button"
                   onClick={() => {
                     setMobileMenuOpen(false);
-                    setIsLoginOpen(true);
+                    openManualLogin();
                   }}
                   className="w-full text-left py-2.5 px-3 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 flex items-center gap-2.5 text-xs font-semibold cursor-pointer"
                 >
@@ -2057,15 +2251,23 @@ export default function App() {
 
         {/* Modale de connexion / identification du rôle */}
         <LoginModal
-          isOpen={isLoginOpen}
-          onClose={() => setIsLoginOpen(false)}
+          isOpen={isLoginOpen && !isLoggedIn}
+          onClose={() => {
+            pendingTabRef.current = null;
+            setRestrictionMsg(undefined);
+            setIsLoginOpen(false);
+          }}
           onLoginSuccess={handleLoginSuccess}
           restrictionMessage={restrictionMsg}
           onRequestCreateAccount={() => {
+            pendingTabRef.current = null;
+            setRestrictionMsg(undefined);
             setIsLoginOpen(false);
             setTab('panier');
           }}
           onOpenVoteComite={() => {
+            pendingTabRef.current = null;
+            setRestrictionMsg(undefined);
             setIsLoginOpen(false);
             setTab('vote_comite');
           }}

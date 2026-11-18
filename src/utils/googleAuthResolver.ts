@@ -5,7 +5,7 @@ import {
   getCompteRoles,
   normaliserRole,
 } from '../types';
-import { FirebaseUserProfile } from '../firebase';
+import { FirebaseUserProfile, isUsmbaEmail } from '../firebase';
 import {
   INITIAL_ENSEIGNANTS,
   MOCK_CANDIDATS,
@@ -90,10 +90,25 @@ export function resolveGoogleSession(
         error: fr.auth.accountDeactivated,
       };
     }
+    let visitorPanier: string[] = [];
+    try {
+      const cur = storageService.getCandidat();
+      if (cur && Array.isArray(cur.panier)) {
+        visitorPanier = cur.panier;
+      }
+    } catch {}
+    const mergedPanier = Array.from(
+      new Set([...(candMatch.panier || []), ...visitorPanier])
+    ).filter((id) => !(candMatch.candidatures || []).includes(id));
+    const mergedCandMatch: Candidat = {
+      ...candMatch,
+      panier: mergedPanier,
+      panierInteret: mergedPanier,
+    };
     return {
       role: 'candidat',
       email: cleanEmail,
-      candidateData: candMatch,
+      candidateData: mergedCandMatch,
       compte: {
         id: profile.uid,
         nom: candMatch.nom || profile.displayName,
@@ -159,6 +174,12 @@ export function resolveGoogleSession(
     };
   }
 
+  const mergedExistingPanier = existingCandidate
+    ? Array.from(
+        new Set([...(existingCandidate.panier || []), ...existingPanier])
+      ).filter((id) => !(existingCandidate!.candidatures || []).includes(id))
+    : existingPanier;
+
   const candidateData: Candidat = existingCandidate
     ? {
         ...existingCandidate,
@@ -166,10 +187,8 @@ export function resolveGoogleSession(
         email: cleanEmail,
         compteCree: true,
         verificationStatut: 'verifie',
-        panier:
-          existingCandidate.panier && existingCandidate.panier.length > 0
-            ? existingCandidate.panier
-            : existingPanier,
+        panier: mergedExistingPanier,
+        panierInteret: mergedExistingPanier,
       }
     : {
         id: profile.uid,
@@ -200,6 +219,8 @@ export function resolveGoogleSession(
 
   storageService.setCandidat(candidateData);
 
+  const isInstitutionalUsmba = isUsmbaEmail(cleanEmail);
+
   return {
     role: 'candidat',
     email: cleanEmail,
@@ -210,7 +231,7 @@ export function resolveGoogleSession(
       email: cleanEmail,
       role: 'candidat',
       roles: ['candidat'],
-      structure: fr.auth.googleAccountBadge,
+      structure: isInstitutionalUsmba ? fr.auth.usmbaStructure : fr.auth.googleAccountBadge,
       statut: 'actif',
     },
   };

@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import Chart from 'chart.js/auto';
-import { Check, Clock, Lock, ArrowRight, Info, X, ExternalLink, Sparkles, AlertTriangle } from 'lucide-react';
+import { Check, Clock, Lock, ArrowRight, X, ExternalLink, Sparkles, AlertTriangle } from 'lucide-react';
 import { fr } from '../i18n/fr';
-import { Candidat, Creneau, PV, Piece, ProgressionEtapeInfo, dossierComplet } from '../types';
+import { Candidat, Creneau, PV, ProgressionEtapeInfo, dossierComplet } from '../types';
 import { storageService } from '../services/storage';
 import { ECHEANCES, aujourdhui } from '../data/mockData';
 
@@ -13,6 +12,43 @@ function formatJJMM(dateStr?: string): string {
     return `${parts[2]}/${parts[1]}`;
   }
   return dateStr;
+}
+
+function formatJJMMAAAA(dateStr?: string): string {
+  if (!dateStr) return '';
+  const clean = dateStr.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) {
+    const [yyyy, mm, dd] = clean.split('-');
+    return `${dd}/${mm}/${yyyy}`;
+  }
+  const parsed = new Date(clean);
+  if (!isNaN(parsed.getTime())) {
+    const dd = String(parsed.getDate()).padStart(2, '0');
+    const mm = String(parsed.getMonth() + 1).padStart(2, '0');
+    const yyyy = parsed.getFullYear();
+    return `${dd}/${mm}/${yyyy}`;
+  }
+  return clean;
+}
+
+function polarToCartesian(cx: number, cy: number, r: number, angleInDegrees: number) {
+  const rad = (angleInDegrees * Math.PI) / 180;
+  return {
+    x: cx + r * Math.cos(rad),
+    y: cy + r * Math.sin(rad),
+  };
+}
+
+function describeArcSegment(
+  cx: number,
+  cy: number,
+  r: number,
+  startAngle: number,
+  endAngle: number
+): string {
+  const start = polarToCartesian(cx, cy, r, startAngle);
+  const end = polarToCartesian(cx, cy, r, endAngle);
+  return `M ${start.x.toFixed(3)} ${start.y.toFixed(3)} A ${r} ${r} 0 0 1 ${end.x.toFixed(3)} ${end.y.toFixed(3)}`;
 }
 
 function getRetardInfo(echeanceStr?: string, dateRef?: string): { enRetard: boolean; jours: number } {
@@ -55,9 +91,7 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
   const [hoveredStep, setHoveredStep] = useState<number | null>(null);
   const [dateActuelle, setDateActuelle] = useState<string>(() => aujourdhui());
   const containerRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const chartInstanceRef = useRef<Chart | null>(null);
-  const [chartError, setChartError] = useState(false);
+  const pointerDownRef = useRef<boolean>(false);
 
   // Synchronisation des données locales
   const loadData = () => {
@@ -112,24 +146,39 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
     window.addEventListener('usmba_pvs_updated', handleSync);
     window.addEventListener('usmba_creneaux_updated', handleSync);
     window.addEventListener('usmba_dossier_updated', handleSync);
+    window.addEventListener('usmba_pieces_updated', handleSync);
+    window.addEventListener('usmba_candidat_updated', handleSync);
     return () => {
       window.removeEventListener('storage', handleSync);
       window.removeEventListener('usmba_demo_date_updated', handleSync);
       window.removeEventListener('usmba_pvs_updated', handleSync);
       window.removeEventListener('usmba_creneaux_updated', handleSync);
       window.removeEventListener('usmba_dossier_updated', handleSync);
+      window.removeEventListener('usmba_pieces_updated', handleSync);
+      window.removeEventListener('usmba_candidat_updated', handleSync);
     };
   }, [candidatId]);
 
-  // Fermer l'infobulle au clic extérieur
+  // Fermer l'infobulle au clic extérieur ou avec la touche Échap
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
         setActiveTooltip(null);
+        setHoveredStep(null);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setActiveTooltip(null);
+        setHoveredStep(null);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
   }, []);
 
   // Candidatures du candidat connecté (sécurisé avec tableau vide par défaut sans planter)
@@ -137,29 +186,35 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
   const hasCandidatures = candidatures.length > 0;
   const currentCandidatId = candidat?.id || candidatId || '';
 
-  // --- CALCUL DYNAMIQUE DES 6 ÉTAPES (aucun nouveau stockage) ---
+  // --- CALCUL DYNAMIQUE DES 5 ÉTAPES (aucun nouveau stockage) ---
   const candidaturesStatuts = candidat?.candidaturesStatuts || {};
+  const hasACorriger = candidatures.some((id) => candidaturesStatuts[id] === 'a_corriger');
 
-  // Étape 1 : Candidature (fait si candidat a déposé au moins une candidature ≠ 'brouillon')
-  const step1Done =
-    candidatures.length > 0 &&
-    candidatures.some((id) => {
-      const st = candidaturesStatuts[id];
-      return Boolean(st && st !== 'brouillon');
-    });
+  const dateEnvoi =
+    candidat?.dossier?.dateEnvoi ||
+    (!hasACorriger
+      ? candidat?.envoyeLe || Object.values(candidat?.candidaturesEnvoyeLe || {})[0]
+      : undefined);
 
-  // Étape 2 : Dossier complet (fait si dossierComplet(candidat).complet)
-  const step2Done = dossierComplet(candidat).complet;
-
-  // Étape 3 : Validée (≥1 candidature retenue)
-  const step3Done = Object.values(candidaturesStatuts).some((st) => st === 'retenue');
-
-  // Étape 4 : Entretien (créneau au statut 'confirme')
-  const step4Done = Boolean(currentCandidatId) && creneaux.some(
-    (c) => c.candidatId === currentCandidatId && c.statut === 'confirme'
+  const hasThreeSubjects = candidatures.length >= 3;
+  const hasCompleteDossier = dossierComplet(candidat).complet;
+  const hasSavedCinInfos = Boolean(
+    candidat?.nomFamille?.trim() &&
+    candidat?.prenom?.trim() &&
+    candidat?.cin?.trim() &&
+    /^[A-Za-z]{1,2}[0-9]{5,6}$/.test(candidat.cin.trim()) &&
+    candidat?.dateNaissance?.trim()
   );
 
-  // Étape 5 : Résultat (un PV publié contenant son résultat)
+  // Étape 2 : Validée (≥1 candidature retenue)
+  const step2Done = Object.values(candidaturesStatuts).some((st) => st === 'retenue');
+
+  // Étape 3 : Entretien (terminée uniquement quand le directeur a marqué le candidat Présent)
+  const step3Done = Boolean(currentCandidatId) && creneaux.some(
+    (c) => c.candidatId === currentCandidatId && c.presence === 'present'
+  );
+
+  // Étape 4 : Résultat (un PV publié contenant son résultat)
   const publishedPv = pvs.find(
     (pv) =>
       Boolean(pv.publieLe) &&
@@ -169,34 +224,41 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
   const monResultat = publishedPv?.resultats?.find(
     (r) => Boolean(currentCandidatId) && r.candidatId === currentCandidatId
   );
-  const step5Done = Boolean(monResultat);
+  const step4Done = Boolean(monResultat);
   const isRefuse = monResultat?.resultat === 'REFUSE';
 
-  // Étape 6 : Inscription (toujours grisée, 'future')
-  const step6Done = false;
+  const isLegacySubmitted = Boolean(
+    !hasACorriger &&
+    (candidat?.envoyeLe ||
+      (candidat?.candidaturesEnvoyeLe && Object.keys(candidat.candidaturesEnvoyeLe).length > 0) ||
+      step2Done ||
+      step3Done ||
+      step4Done)
+  );
+  const isCandidatureEnvoyee = Boolean(dateEnvoi || isLegacySubmitted);
 
-  const rawDones = [step1Done, step2Done, step3Done, step4Done, step5Done, step6Done];
+  // Étape 1 : Candidature (3 sujets validés + pièces fournies + CIN enregistrée + envoyée, ou déjà déposée)
+  const step1Done =
+    (hasThreeSubjects && hasCompleteDossier && hasSavedCinInfos && isCandidatureEnvoyee) ||
+    isLegacySubmitted;
 
-  // Construction des 6 étapes avec statut, infobulle et action
+  // Étape 5 : Inscription (toujours grisée, 'future')
+  const step5Done = false;
+
+  const rawDones = [step1Done, step2Done, step3Done, step4Done, step5Done];
+
+  // Construction des 5 étapes avec statut, infobulle et action
   const etapes: ProgressionEtapeInfo[] = [
     {
       numero: 1,
       cle: 'candidature',
       nom: fr.progression.steps.candidature.nom,
       statut: 'future',
-      infobulle: fr.progression.steps.candidature.future,
+      infobulle: fr.progression.stepCandidatureUnifiedFuture,
       actionTexte: fr.progression.steps.candidature.action,
     },
     {
       numero: 2,
-      cle: 'dossier',
-      nom: fr.progression.steps.dossier.nom,
-      statut: 'future',
-      infobulle: fr.progression.steps.dossier.future,
-      actionTexte: fr.progression.steps.dossier.action,
-    },
-    {
-      numero: 3,
       cle: 'validee',
       nom: fr.progression.steps.validee.nom,
       statut: 'future',
@@ -204,7 +266,7 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
       actionTexte: fr.progression.steps.validee.action,
     },
     {
-      numero: 4,
+      numero: 3,
       cle: 'entretien',
       nom: fr.progression.steps.entretien.nom,
       statut: 'future',
@@ -212,7 +274,7 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
       actionTexte: fr.progression.steps.entretien.action,
     },
     {
-      numero: 5,
+      numero: 4,
       cle: 'resultat',
       nom: fr.progression.steps.resultat.nom,
       statut: 'future',
@@ -220,7 +282,7 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
       actionTexte: fr.progression.steps.resultat.action,
     },
     {
-      numero: 6,
+      numero: 5,
       cle: 'inscription',
       nom: fr.progression.steps.inscription.nom,
       statut: 'future',
@@ -230,19 +292,19 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
   ];
 
   if (isRefuse) {
-    // Si Résultat est « Refusé » : les étapes 1 à 5 sont faites, l'étape 6 est grisée « Non applicable »
-    for (let i = 0; i < 5; i++) {
+    // Si Résultat est « Refusé » : les étapes 1 à 4 sont faites, l'étape 5 est grisée « Non applicable »
+    for (let i = 0; i < 4; i++) {
       etapes[i].statut = 'faite';
       etapes[i].infobulle = fr.progression.steps[etapes[i].cle].terminee;
     }
-    etapes[5].statut = 'future';
-    etapes[5].estNonApplicable = true;
-    etapes[5].infobulle = fr.progression.nonApplicable;
+    etapes[4].statut = 'future';
+    etapes[4].estNonApplicable = true;
+    etapes[4].infobulle = fr.progression.nonApplicable;
   } else {
     // Cas normal : la première non faite est 'en_cours', les précédentes 'faite', les suivantes 'future'
     const firstNonDoneIndex = rawDones.findIndex((done) => !done);
 
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 5; i++) {
       const echeance = ECHEANCES[etapes[i].cle];
       etapes[i].echeance = echeance;
 
@@ -253,7 +315,10 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
         etapes[i].joursRetard = 0;
       } else if (i === firstNonDoneIndex) {
         etapes[i].statut = 'en_cours';
-        etapes[i].infobulle = fr.progression.steps[etapes[i].cle].enCours;
+        etapes[i].infobulle =
+          etapes[i].cle === 'candidature'
+            ? fr.progression.stepCandidatureUnifiedEnCours
+            : fr.progression.steps[etapes[i].cle].enCours;
         if (echeance) {
           const { enRetard, jours } = getRetardInfo(echeance, dateActuelle);
           etapes[i].enRetard = enRetard;
@@ -264,7 +329,10 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
         }
       } else {
         etapes[i].statut = 'future';
-        etapes[i].infobulle = fr.progression.steps[etapes[i].cle].future;
+        etapes[i].infobulle =
+          etapes[i].cle === 'candidature'
+            ? fr.progression.stepCandidatureUnifiedFuture
+            : fr.progression.steps[etapes[i].cle].future;
         etapes[i].enRetard = false;
         etapes[i].joursRetard = 0;
       }
@@ -277,30 +345,15 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
   // Gestion des actions associées
   const handleAction = (stepIndex: number) => {
     switch (stepIndex) {
-      case 0: // Étape 1 : Candidature (cle: 'candidature')
+      case 0: // Étape 1 : Candidature
         {
+          if (!hasThreeSubjects) {
+            onNavigate?.('panier');
+            return;
+          }
           const el =
-            document.getElementById('action-envoyer-candidature') ||
-            document.getElementById('bandeau-elements-fournis');
-          if (el) {
-            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          } else {
-            onNavigate?.('sujets');
-          }
-        }
-        break;
-      case 1: // Étape 2 : Dossier complet (cle: 'dossier')
-        {
-          const check = dossierComplet(candidat);
-          let targetId = '';
-          if (check.manques.includes('CIN')) {
-            targetId = 'carte-piece-cin';
-          } else if (check.manques.includes('Diplôme')) {
-            targetId = 'carte-piece-diplome';
-          } else if (check.manques.includes('Relevés')) {
-            targetId = 'carte-piece-releves';
-          }
-          const el = targetId ? document.getElementById(targetId) : null;
+            document.getElementById('bloc-envoi-dossier') ||
+            document.getElementById('compteur-pieces-fournies');
           if (el) {
             el.scrollIntoView({ behavior: 'smooth', block: 'center' });
           } else {
@@ -308,10 +361,10 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
           }
         }
         break;
-      case 2: // Validée
+      case 1: // Étape 2 : Validée
         onNavigate?.('sujets');
         break;
-      case 3: // Entretien
+      case 2: // Étape 3 : Entretien
         {
           const el = document.getElementById('creneaux-section');
           if (el) {
@@ -321,7 +374,7 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
           }
         }
         break;
-      case 4: // Résultat
+      case 3: // Étape 4 : Résultat
         {
           const el = document.getElementById('mon-resultat');
           if (el) {
@@ -331,7 +384,7 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
           }
         }
         break;
-      case 5: // Inscription
+      case 4: // Étape 5 : Inscription
         break;
     }
   };
@@ -340,134 +393,83 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
     setActiveTooltip((prev) => (prev === index ? null : index));
   };
 
-  // Initialisation et cycle de vie du Chart.js Doughnut (useRef + useEffect)
-  useEffect(() => {
-    if (!hasCandidatures || !canvasRef.current) return;
+  const isValidationPending = isCandidatureEnvoyee && !step2Done && !isRefuse;
+  const presentCreneau = currentCandidatId
+    ? creneaux.find((c) => c.candidatId === currentCandidatId && c.presence === 'present')
+    : undefined;
 
-    // Destruction avant chaque mise à jour
-    if (chartInstanceRef.current) {
-      chartInstanceRef.current.destroy();
-      chartInstanceRef.current = null;
-    }
+  const getSegmentMeta = (etape: ProgressionEtapeInfo) => {
+    const isStepValidationPending =
+      etape.cle === 'validee' && isCandidatureEnvoyee && !step2Done && !isRefuse;
 
-    try {
-      const ctx = canvasRef.current.getContext('2d');
-      if (!ctx) return;
-
-      // Couleurs par état : fait = vert, en cours = ambre, futur = gris
-      const backgroundColors = etapes.map((e) => {
-        if (e.statut === 'faite') return '#059669'; // vert
-        if (e.statut === 'en_cours') return e.enRetard ? '#dc2626' : '#d97706'; // ambre
-        return '#cbd5e1'; // gris (futur / non applicable)
-      });
-
-      // Plugin local (aucun plugin externe) dessinant "N/6" et "ÉTAPES" au centre
-      const centerTextPlugin = {
-        id: 'centerTextPlugin',
-        beforeDraw(chart: Chart) {
-          const { ctx, chartArea } = chart;
-          if (!chartArea) return;
-          const { left, top, width, height } = chartArea;
-          const centerX = left + width / 2;
-          const centerY = top + height / 2;
-
-          ctx.save();
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-
-          // "N/6"
-          ctx.font = 'bold 24px system-ui, -apple-system, sans-serif';
-          ctx.fillStyle = '#0f172a';
-          ctx.fillText(`${doneCount}/6`, centerX, centerY - 6);
-
-          // "ÉTAPES"
-          ctx.font = 'bold 10px system-ui, -apple-system, sans-serif';
-          ctx.fillStyle = '#64748b';
-          ctx.fillText((fr.progression.stepCount || 'étapes').toUpperCase(), centerX, centerY + 14);
-
-          ctx.restore();
-        },
-      };
-
-      const newChart = new Chart<'doughnut'>(ctx, {
-        type: 'doughnut',
-        data: {
-          labels: etapes.map((e) => e.nom),
-          datasets: [
-            {
-              data: [1, 1, 1, 1, 1, 1], // 6 segments égaux
-              backgroundColor: backgroundColors,
-              borderColor: '#ffffff',
-              borderWidth: 3,
-              hoverOffset: 4,
-            },
-          ],
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          cutout: '70%', // cutout 70%
-          animation: {
-            duration: 350, // animation courte
-          },
-          events: ['mousemove', 'mouseout', 'click', 'touchstart', 'touchmove'],
-          interaction: {
-            mode: 'nearest',
-            intersect: true,
-          },
-          plugins: {
-            legend: {
-              display: false, // légende désactivée
-            },
-            tooltip: {
-              enabled: true,
-              displayColors: false,
-              callbacks: {
-                title: () => '',
-                label(tooltipItem) {
-                  const idx = tooltipItem.dataIndex;
-                  const etape = etapes[idx];
-                  if (!etape) return '';
-                  const etat = etape.estNonApplicable
-                    ? fr.progression.statuts.nonApplicable
-                    : etape.statut === 'faite'
-                    ? fr.progression.statuts.faite
-                    : etape.statut === 'en_cours'
-                    ? (etape.enRetard
-                        ? fr.progression.enRetardDepuis.replace('{jours}', String(etape.joursRetard || 1))
-                        : fr.progression.statuts.enCours)
-                    : fr.progression.statuts.future;
-                  const echeance = etape.echeance ? ` (${formatJJMM(etape.echeance)})` : '';
-                  // Format exact demandé : "Étape : état (échéance)"
-                  return `${etape.nom} : ${etat}${echeance}`;
-                },
-              },
-            },
-          },
-        },
-        plugins: [centerTextPlugin],
-      });
-
-      chartInstanceRef.current = newChart;
-      setChartError(false);
-    } catch (err) {
-      console.error('Erreur initialisation Chart.js:', err);
-      setChartError(true);
-    }
-
-    // Destruction au démontage
-    return () => {
-      if (chartInstanceRef.current) {
-        chartInstanceRef.current.destroy();
-        chartInstanceRef.current = null;
+    if (etape.statut === 'faite') {
+      let doneDate: string | undefined;
+      if (etape.cle === 'candidature') {
+        doneDate = dateEnvoi || candidat?.attesteLe;
+      } else if (etape.cle === 'entretien') {
+        doneDate = presentCreneau?.presenceConstateeLe || presentCreneau?.date;
+      } else if (etape.cle === 'resultat') {
+        doneDate = publishedPv?.publieLe;
       }
+      return {
+        kind: 'faite' as const,
+        stroke: '#059669',
+        badgeClass: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+        etatLabel: fr.progression.statuts.faite,
+        dateLabel: doneDate
+          ? fr.progression.infobulleTermineLe.replace('{date}', formatJJMMAAAA(doneDate))
+          : fr.progression.nonRenseigne,
+      };
+    }
+
+    if (isStepValidationPending) {
+      return {
+        kind: 'validation' as const,
+        stroke: '#f97316',
+        badgeClass: 'bg-orange-100 text-orange-900 border-orange-300',
+        etatLabel: fr.progression.enCoursValidation,
+        dateLabel: dateEnvoi
+          ? fr.progression.infobulleEnvoyeLe.replace('{date}', formatJJMMAAAA(dateEnvoi))
+          : fr.progression.nonRenseigne,
+      };
+    }
+
+    if (etape.enRetard) {
+      return {
+        kind: 'retard' as const,
+        stroke: '#dc2626',
+        badgeClass: 'bg-rose-100 text-rose-800 border-rose-200',
+        etatLabel: fr.progression.enRetardDepuis.replace('{jours}', String(etape.joursRetard || 1)),
+        dateLabel: etape.echeance
+          ? fr.progression.infobulleEcheance.replace('{date}', formatJJMMAAAA(etape.echeance))
+          : fr.progression.nonRenseigne,
+      };
+    }
+
+    const etatLabel = etape.estNonApplicable
+      ? fr.progression.statuts.nonApplicable
+      : etape.statut === 'en_cours'
+      ? fr.progression.statuts.enCours
+      : fr.progression.statuts.future;
+
+    return {
+      kind: 'future' as const,
+      stroke: '#cbd5e1',
+      badgeClass: 'bg-slate-100 text-slate-700 border-slate-200',
+      etatLabel,
+      dateLabel: etape.echeance
+        ? fr.progression.infobulleEcheance.replace('{date}', formatJJMMAAAA(etape.echeance))
+        : fr.progression.nonRenseigne,
     };
-  }, [
-    hasCandidatures,
-    doneCount,
-    dateActuelle,
-    JSON.stringify(etapes.map((e) => ({ s: e.statut, r: e.enRetard, j: e.joursRetard }))),
-  ]);
+  };
+
+  const hasRetard = etapes.some((e) => e.enRetard && !(e.cle === 'validee' && isValidationPending));
+  const displayedTooltipIndex = activeTooltip !== null ? activeTooltip : hoveredStep;
+  const displayedTooltipEtape =
+    displayedTooltipIndex !== null ? etapes[displayedTooltipIndex] : undefined;
+  const displayedTooltipMeta = displayedTooltipEtape
+    ? getSegmentMeta(displayedTooltipEtape)
+    : undefined;
 
   return (
     <div
@@ -488,24 +490,164 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
         <div className="text-right">
           <span className="text-lg font-black text-slate-900">
             {doneCount}
-            <span className="text-xs text-slate-400 font-normal ml-0.5">/6</span>
+            <span className="text-xs text-slate-400 font-normal ml-0.5">/5</span>
           </span>
         </div>
       </div>
 
-      {/* Cercle de progression Chart.js Doughnut (cutout 70%) OU carte initiale si aucune candidature */}
-      {hasCandidatures && !chartError ? (
-        <div className="flex flex-col items-center justify-center py-2 relative">
-          <div className="relative w-[160px] h-[160px] min-w-[160px] min-h-[160px] flex items-center justify-center shrink-0 mx-auto">
-            <canvas
-              ref={canvasRef}
-              role="img"
-              aria-label={`Progression : ${doneCount} étapes sur 6`}
-              width={160}
-              height={160}
-              className="w-[160px] h-[160px] block cursor-pointer"
-            />
+      {/* Anneau SVG en 5 segments égaux OU carte initiale si aucune candidature */}
+      {hasCandidatures ? (
+        <div className="flex flex-col items-center justify-center py-2 relative space-y-3">
+          <div className="relative w-[196px] h-[196px] flex items-center justify-center shrink-0 mx-auto">
+            <svg
+              viewBox="0 0 200 200"
+              className="w-full h-full overflow-visible"
+              role="group"
+              aria-label={fr.progression.canvasAriaCinq.replace('{count}', String(doneCount))}
+            >
+              {etapes.map((etape, index) => {
+                const startAngle = -90 + index * 72 + 2.5;
+                const endAngle = -90 + (index + 1) * 72 - 2.5;
+                const pathD = describeArcSegment(100, 100, 76, startAngle, endAngle);
+                const meta = getSegmentMeta(etape);
+                const isSelected = displayedTooltipIndex === index;
+
+                return (
+                  <path
+                    key={etape.cle}
+                    d={pathD}
+                    fill="none"
+                    stroke={meta.stroke}
+                    strokeWidth={isSelected ? 26 : 22}
+                    strokeLinecap="butt"
+                    tabIndex={0}
+                    role="button"
+                    aria-expanded={activeTooltip === index}
+                    aria-label={fr.progression.segmentAria
+                      .replace('{numero}', String(etape.numero))
+                      .replace('{nom}', etape.nom)
+                      .replace('{etat}', meta.etatLabel)}
+                    className="cursor-pointer transition-all duration-150 focus:outline-none focus-visible:opacity-85"
+                    onPointerDown={() => {
+                      pointerDownRef.current = true;
+                      setTimeout(() => {
+                        pointerDownRef.current = false;
+                      }, 0);
+                    }}
+                    onPointerEnter={(e) => {
+                      if (e.pointerType !== 'touch') {
+                        setHoveredStep(index);
+                      }
+                    }}
+                    onPointerLeave={(e) => {
+                      if (e.pointerType !== 'touch') {
+                        setHoveredStep((prev) => (prev === index ? null : prev));
+                      }
+                    }}
+                    onFocus={() => {
+                      if (!pointerDownRef.current) {
+                        setActiveTooltip(index);
+                      }
+                    }}
+                    onBlur={() => {
+                      setActiveTooltip((prev) => (prev === index ? null : prev));
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      pointerDownRef.current = false;
+                      setHoveredStep(null);
+                      setActiveTooltip((prev) => (prev === index ? null : index));
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        setActiveTooltip((prev) => (prev === index ? null : index));
+                      } else if (e.key === 'Escape') {
+                        e.preventDefault();
+                        setActiveTooltip(null);
+                        setHoveredStep(null);
+                      }
+                    }}
+                  />
+                );
+              })}
+            </svg>
+
+            {/* Centre du cercle : N/5 + icône + libellé de l'état */}
+            <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center text-center px-6">
+              <span className="text-2xl font-black text-slate-900 leading-none">
+                {doneCount}/5
+              </span>
+              {isValidationPending ? (
+                <span className="mt-1.5 inline-flex items-center justify-center gap-1 text-[10px] font-bold text-orange-700 leading-tight max-w-[108px]">
+                  <Clock size={12} className="text-orange-600 shrink-0" />
+                  <span>{fr.progression.enCoursValidation}</span>
+                </span>
+              ) : hasRetard ? (
+                <span className="mt-1.5 inline-flex items-center justify-center gap-1 text-[10px] font-bold text-rose-700 leading-tight max-w-[108px]">
+                  <AlertTriangle size={12} className="text-rose-600 shrink-0" />
+                  <span>{fr.progression.enRetardLabel}</span>
+                </span>
+              ) : doneCount === 5 || isRefuse ? (
+                <span className="mt-1.5 inline-flex items-center justify-center gap-1 text-[10px] font-bold text-emerald-700 leading-tight max-w-[108px]">
+                  <Check size={12} className="text-emerald-600 shrink-0" />
+                  <span>{fr.progression.statuts.faite}</span>
+                </span>
+              ) : (
+                <span className="mt-1.5 inline-flex items-center justify-center gap-1 text-[10px] font-bold text-slate-600 leading-tight max-w-[108px]">
+                  <Clock size={12} className="text-slate-500 shrink-0" />
+                  <span>{fr.progression.statuts.enCours}</span>
+                </span>
+              )}
+            </div>
           </div>
+
+          {/* Infobulle au survol (bureau), appui (mobile) ou clavier */}
+          {displayedTooltipEtape && displayedTooltipMeta && (
+            <div
+              role="tooltip"
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-xs bg-slate-900 text-white rounded-xl p-3 shadow-lg border border-slate-700 text-xs space-y-1.5"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <p className="font-bold text-white leading-snug">
+                  {displayedTooltipEtape.numero}. {displayedTooltipEtape.nom}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTooltip(null);
+                    setHoveredStep(null);
+                  }}
+                  aria-label={fr.progression.tooltipClose}
+                  className="p-0.5 rounded text-slate-400 hover:text-white cursor-pointer shrink-0"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span
+                  className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border ${displayedTooltipMeta.badgeClass}`}
+                >
+                  {displayedTooltipMeta.kind === 'faite' ? (
+                    <Check size={10} strokeWidth={2.5} />
+                  ) : displayedTooltipMeta.kind === 'validation' ? (
+                    <Clock size={10} strokeWidth={2.5} />
+                  ) : displayedTooltipMeta.kind === 'retard' ? (
+                    <AlertTriangle size={10} strokeWidth={2.5} />
+                  ) : (
+                    <Lock size={10} strokeWidth={2.5} />
+                  )}
+                  <span>{displayedTooltipMeta.etatLabel}</span>
+                </span>
+              </div>
+
+              <p className="text-[11px] text-slate-300 font-medium">
+                {displayedTooltipMeta.dateLabel}
+              </p>
+            </div>
+          )}
         </div>
       ) : !hasCandidatures ? (
         /* Petite carte si aucune candidature déposée */

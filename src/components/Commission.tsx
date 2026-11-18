@@ -30,11 +30,12 @@ import {
   calculerStatutSeance,
   getSeancesStatutsMap,
   saveSeanceStatut,
+  aujourdhui,
 } from '../data/mockData';
 import { PVDocument } from './PVDocument';
 import { fr } from '../i18n/fr';
-import { logEvent } from '../utils/journal';
-import { ajouterNotification } from '../utils/messages';
+import { logEvent, logPresenceConstatee, logAbsenceConstatee } from '../utils/journal';
+import { ajouterNotification, messageAbsenceConstatee, trouverCandidat } from '../utils/messages';
 
 interface CommissionProps {
   enseignantId: string;
@@ -52,6 +53,30 @@ function formatJJMM(dateStr?: string): string {
     return `${parts[2]}/${parts[1]}`;
   }
   return dateStr;
+}
+
+function formatJJMMAAAA(dateStr?: string): string {
+  if (!dateStr) return '';
+  const clean = dateStr.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) {
+    const [yyyy, mm, dd] = clean.split('-');
+    return `${dd}/${mm}/${yyyy}`;
+  }
+  const d = new Date(clean);
+  if (Number.isNaN(d.getTime())) return clean;
+  return d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+}
+
+function isInterviewReached(dateStr?: string, heureStr?: string, demoDateOverride?: string): boolean {
+  const targetDate = (dateStr || '').trim();
+  if (!targetDate) return false;
+  const refDate = (demoDateOverride || aujourdhui()).trim();
+  if (refDate > targetDate) return true;
+  if (refDate < targetDate) return false;
+  const now = new Date();
+  const nowHHMM = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  const targetHeure = (heureStr || '00:00').trim();
+  return nowHHMM >= targetHeure;
 }
 
 function generatePVCode(): string {
@@ -130,21 +155,36 @@ export const Commission: React.FC<CommissionProps> = ({
   const [empechementMotif, setEmpechementMotif] = useState('');
   const [empechementError, setEmpechementError] = useState<string | null>(null);
 
+  // Constatation de présence / absence par candidat
+  const [demoDateStr, setDemoDateStr] = useState<string>(() => aujourdhui());
+  const [absentTargetCreneauId, setAbsentTargetCreneauId] = useState<string | null>(null);
+  const [absentMotif, setAbsentMotif] = useState('');
+  const [absentError, setAbsentError] = useState<string | null>(null);
+
   // Chargement des données avec persistance localStorage et try/catch
   useEffect(() => {
     loadData();
     const handleSync = () => loadData();
     window.addEventListener('usmba_pvs_updated', handleSync);
     window.addEventListener('usmba_seances_updated', handleSync);
+    window.addEventListener('usmba_creneaux_updated', handleSync);
+    window.addEventListener('usmba_demo_date_updated', handleSync);
     window.addEventListener('storage', handleSync);
+    const timer = window.setInterval(() => {
+      setDemoDateStr(aujourdhui());
+    }, 30000);
     return () => {
       window.removeEventListener('usmba_pvs_updated', handleSync);
       window.removeEventListener('usmba_seances_updated', handleSync);
+      window.removeEventListener('usmba_creneaux_updated', handleSync);
+      window.removeEventListener('usmba_demo_date_updated', handleSync);
       window.removeEventListener('storage', handleSync);
+      window.clearInterval(timer);
     };
   }, [enseignantId]);
 
   const loadData = () => {
+    setDemoDateStr(aujourdhui());
     setSeancesStatuts(getSeancesStatutsMap());
     // 1. Créneaux
     let allCreneaux: Creneau[] = [];
@@ -218,12 +258,18 @@ export const Commission: React.FC<CommissionProps> = ({
 
   const getCandidatNom = (candidatId?: string): string => {
     if (!candidatId) return 'Candidat inconnu';
+    const found = trouverCandidat(candidatId);
+    if (found.nom) return found.nom;
     const c = getCandidat(candidatId);
     return c?.nom || candidatId;
   };
 
-  // Filtrer les créneaux confirmés de cet enseignant
-  const creneauxConfirmes = creneaux.filter((c) => c.statut === 'confirme');
+  // Filtrer les créneaux convoqués (y compris convocation reçue / présent / absent) de cet enseignant
+  const creneauxConvoques = creneaux.filter(
+    (c) =>
+      Boolean(c.candidatId) &&
+      (c.statut === 'reserve' || c.statut === 'confirme' || c.statut === 'absent')
+  );
 
   // Vérifier et obtenir la dernière version de PV pour une date donnée
   const getLatestPVForDate = (date: string): PV | undefined => {
@@ -394,9 +440,118 @@ export const Commission: React.FC<CommissionProps> = ({
     }
   };
 
+  const handleMarquerPresent = (c: Creneau) => {
+    if (!isInterviewReached(c.date, c.heure, demoDateStr)) return;
+    const nowIso = new Date().toISOString();
+    try {
+      const raw = localStorage.getItem('usmba_doctorat_creneaux');
+      const allC: Creneau[] = raw ? JSON.parse(raw) : creneaux;
+      const updated = allC.map((item) =>
+        item.id === c.id
+          ? {
+              ...item,
+              presence: 'present' as const,
+              absenceMotif: undefined,
+              presenceConstateeLe: nowIso,
+            }
+          : item
+      );
+      localStorage.setItem('usmba_doctorat_creneaux', JSON.stringify(updated));
+      setCreneaux(updated.filter((item) => item.enseignantId === enseignantId));
+      window.dispatchEvent(new CustomEvent('usmba_creneaux_updated'));
+      window.dispatchEvent(new CustomEvent('storage'));
+
+      const candNom = getCandidatNom(c.candidatId);
+      logPresenceConstatee(
+        { id: enseignantId, nom: enseignantNom, role: 'enseignant' },
+        candNom,
+        `${formatJJMMAAAA(c.date)} à ${c.heure}`
+      );
+      setAbsentTargetCreneauId(null);
+      setAbsentMotif('');
+      setAbsentError(null);
+      setFeedback({ id: `pres-${c.id}`, text: fr.commission.toastPresenceConstatee });
+      setTimeout(() => setFeedback(null), 3500);
+    } catch {}
+  };
+
+  const handleOpenAbsent = (c: Creneau) => {
+    if (!isInterviewReached(c.date, c.heure, demoDateStr)) return;
+    setAbsentTargetCreneauId(c.id);
+    setAbsentMotif('');
+    setAbsentError(null);
+  };
+
+  const handleConfirmAbsent = (c: Creneau) => {
+    if (!isInterviewReached(c.date, c.heure, demoDateStr)) return;
+    const cleanMotif = absentMotif.trim();
+    if (cleanMotif.length < 5) {
+      setAbsentError(fr.commission.absenceMotifError);
+      return;
+    }
+
+    const nowIso = new Date().toISOString();
+    try {
+      const raw = localStorage.getItem('usmba_doctorat_creneaux');
+      const allC: Creneau[] = raw ? JSON.parse(raw) : creneaux;
+      const updated = allC.map((item) =>
+        item.id === c.id
+          ? {
+              ...item,
+              statut: 'absent' as const,
+              presence: 'absent' as const,
+              absenceMotif: cleanMotif,
+              presenceConstateeLe: nowIso,
+            }
+          : item
+      );
+      localStorage.setItem('usmba_doctorat_creneaux', JSON.stringify(updated));
+      setCreneaux(updated.filter((item) => item.enseignantId === enseignantId));
+      window.dispatchEvent(new CustomEvent('usmba_creneaux_updated'));
+      window.dispatchEvent(new CustomEvent('storage'));
+
+      // S'assurer qu'aucun résultat n'est conservé pour un candidat absent
+      try {
+        const rawRes = localStorage.getItem('usmba_doctorat_resultats');
+        if (rawRes) {
+          const curRes: Resultat[] = JSON.parse(rawRes);
+          const nextRes = curRes.filter((r) => r.creneauId !== c.id);
+          if (nextRes.length !== curRes.length) {
+            localStorage.setItem('usmba_doctorat_resultats', JSON.stringify(nextRes));
+            setResultats(nextRes);
+          }
+        }
+      } catch {}
+
+      if (c.candidatId) {
+        ajouterNotification({
+          destinataireId: c.candidatId,
+          texte: messageAbsenceConstatee(c.date, c.heure, cleanMotif),
+          type: 'action',
+          actionLabel: fr.notifications.btnAllerEntretiens,
+          actionTab: 'entretiens',
+        });
+      }
+
+      const candNom = getCandidatNom(c.candidatId);
+      logAbsenceConstatee(
+        { id: enseignantId, nom: enseignantNom, role: 'enseignant' },
+        candNom,
+        `${formatJJMMAAAA(c.date)} à ${c.heure}`,
+        cleanMotif
+      );
+
+      setAbsentTargetCreneauId(null);
+      setAbsentMotif('');
+      setAbsentError(null);
+      setFeedback({ id: `abs-${c.id}`, text: fr.commission.toastAbsenceConstatee });
+      setTimeout(() => setFeedback(null), 3500);
+    } catch {}
+  };
+
   // Regroupement par date pour la section Séances
   const allTeacherDates = new Set<string>();
-  creneauxConfirmes.forEach((c) => {
+  creneauxConvoques.forEach((c) => {
     allTeacherDates.add(c.date);
   });
   pvs.forEach((p) => {
@@ -412,13 +567,13 @@ export const Commission: React.FC<CommissionProps> = ({
   });
 
   const seancesParDate = Array.from(allTeacherDates).reduce((acc, d) => {
-    acc[d] = creneaux.filter((c) => c.date === d);
+    acc[d] = creneauxConvoques.filter((c) => c.date === d);
     return acc;
   }, {} as Record<string, Creneau[]>);
 
   const datesSeances = Array.from(allTeacherDates).sort();
 
-  // Génération ou régénération d'une nouvelle version de PV
+  // Génération ou régénération d'une nouvelle version de PV (uniquement les candidats constatés présents)
   const handleGeneratePV = (date: string, creneauxDate: Creneau[]) => {
     const existing = getLatestPVForDate(date);
     if (existing && !existing.rouvertLe) {
@@ -426,8 +581,11 @@ export const Commission: React.FC<CommissionProps> = ({
       return;
     }
 
-    // Vérifier que tous les créneaux ont un résultat
-    const resultatsDate = creneauxDate.map((c) => getResultatForCreneau(c.id));
+    const presentCreneauxDate = creneauxDate.filter((c) => c.presence === 'present');
+    if (presentCreneauxDate.length === 0) return;
+
+    // Vérifier que tous les candidats présents ont un résultat
+    const resultatsDate = presentCreneauxDate.map((c) => getResultatForCreneau(c.id));
     const allHaveResult = resultatsDate.every((r) => r !== undefined);
     if (!allHaveResult) return;
 
@@ -784,14 +942,15 @@ export const Commission: React.FC<CommissionProps> = ({
             <Calendar size={24} />
           </div>
           <div className="space-y-1">
-            <h3 className="text-sm font-bold text-slate-800">Aucun entretien confirmé</h3>
-            <p className="text-xs text-slate-500">Les séances apparaîtront ici dès que des créneaux d'entretien seront confirmés.</p>
+            <h3 className="text-sm font-bold text-slate-800">{fr.commission.aucunEntretienConvoque}</h3>
+            <p className="text-xs text-slate-500">{fr.commission.aucunEntretienConvoqueDesc}</p>
           </div>
         </div>
       ) : (
         <div className="space-y-5">
           {datesSeances.map((date) => {
             const creneauxDate = seancesParDate[date] || [];
+            const presentCreneauxDate = creneauxDate.filter((c) => c.presence === 'present');
             const existingPV = getLatestPVForDate(date);
             const seanceKey = `${enseignantId}_${date}`;
             const sessionPvs = pvs.filter((p) => p.date === date && p.directeurId === enseignantId);
@@ -801,8 +960,9 @@ export const Commission: React.FC<CommissionProps> = ({
             const isNonTenue = statutInfo.statut === 'non_tenue';
 
             const totalCount = creneauxDate.length;
-            const evaluatedCount = creneauxDate.filter((c) => Boolean(getResultatForCreneau(c.id))).length;
-            const allEvaluated = totalCount > 0 && evaluatedCount === totalCount;
+            const presentCount = presentCreneauxDate.length;
+            const evaluatedCount = presentCreneauxDate.filter((c) => Boolean(getResultatForCreneau(c.id))).length;
+            const allEvaluated = presentCount > 0 && evaluatedCount === presentCount;
             const isDownloaded = Boolean(existingPV && (pvDownloaded[existingPV.id] || pvDownloaded[date] || existingPV.scanDeposeLe));
             const isScanDepose = Boolean(
               existingPV &&
@@ -836,7 +996,7 @@ export const Commission: React.FC<CommissionProps> = ({
             const steps = [
               {
                 id: 1,
-                label: `Notes (${evaluatedCount}/${totalCount})`,
+                label: `Notes (${evaluatedCount}/${presentCount})`,
                 done: step1Done,
                 current: step1Current,
                 upcoming: false,
@@ -1056,6 +1216,15 @@ export const Commission: React.FC<CommissionProps> = ({
                     {creneauxDate.map((c) => {
                       const res = getResultatForCreneau(c.id);
                       const candidatNom = getCandidatNom(c.candidatId);
+                      const isPresent = c.presence === 'present';
+                      const isAbsent = c.statut === 'absent' || c.presence === 'absent';
+                      const isConvocationRecue = c.statut === 'confirme';
+                      const reached = isInterviewReached(c.date, c.heure, demoDateStr);
+                      const disabledReason = !reached
+                        ? fr.commission.presenceDisabledReason
+                            .replace('{date}', formatJJMMAAAA(c.date))
+                            .replace('{heure}', c.heure)
+                        : null;
                       const isFormOpen = openForms[c.id] || !res;
                       const isLocked = Boolean(existingPV && !existingPV.rouvertLe);
 
@@ -1071,13 +1240,151 @@ export const Commission: React.FC<CommissionProps> = ({
                       const validation = getFormValidation(form);
 
                       return (
-                        <div key={c.id} className="p-3">
-                          {res && !isFormOpen ? (
-                            /* UNE ligne par candidat : nom, note /20, décision (icône + texte), bouton Voir */
+                        <div key={c.id} className="p-3 space-y-3">
+                          {/* En-tête du candidat + pastille + boutons Marquer présent / Marquer absent */}
+                          {(!isPresent || (isPresent && res && !isFormOpen)) && (
                             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-2 flex-wrap">
                                 <span className="font-bold text-xs text-slate-900">{candidatNom}</span>
                                 <span className="text-[11px] text-slate-400 font-mono">({c.heure})</span>
+                                {isPresent ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                    <CheckCircle2 size={12} className="text-emerald-600 shrink-0" />
+                                    <span>{fr.commission.badgePresent}</span>
+                                  </span>
+                                ) : isAbsent ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-100 text-rose-800 border border-rose-200">
+                                    <XCircle size={12} className="text-rose-600 shrink-0" />
+                                    <span>{fr.commission.badgeAbsent}</span>
+                                  </span>
+                                ) : isConvocationRecue ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                    <CheckCircle2 size={12} className="text-emerald-600 shrink-0" />
+                                    <span>{fr.commission.badgeConvocationRecue}</span>
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-800 border border-amber-200">
+                                    <Clock size={12} className="text-amber-600 shrink-0" />
+                                    <span>{fr.commission.badgeConvoque}</span>
+                                  </span>
+                                )}
+                              </div>
+
+                              {!isPresent && !isAbsent && (
+                                <div className="flex flex-col items-start sm:items-end gap-1">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <button
+                                      type="button"
+                                      disabled={!reached}
+                                      onClick={() => handleMarquerPresent(c)}
+                                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                                        reached
+                                          ? 'bg-emerald-700 hover:bg-emerald-800 text-white shadow-xs cursor-pointer'
+                                          : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
+                                      }`}
+                                    >
+                                      <CheckCircle2 size={13} />
+                                      <span>{fr.commission.btnMarquerPresent}</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={!reached}
+                                      onClick={() => handleOpenAbsent(c)}
+                                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                                        reached
+                                          ? 'bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 cursor-pointer'
+                                          : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
+                                      }`}
+                                    >
+                                      <XCircle size={13} />
+                                      <span>{fr.commission.btnMarquerAbsent}</span>
+                                    </button>
+                                  </div>
+                                  {disabledReason && (
+                                    <p className="text-[11px] text-amber-800 font-medium flex items-center gap-1">
+                                      <Clock size={11} className="shrink-0 text-amber-600" />
+                                      <span>{disabledReason}</span>
+                                    </p>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Formulaire inline de motif d'absence (5 car. min., erreur écrite sous le champ) */}
+                          {!isPresent && !isAbsent && absentTargetCreneauId === c.id && (
+                            <div className="p-3 bg-rose-50/60 border border-rose-200 rounded-xl space-y-2.5">
+                              <div>
+                                <label className="block text-[11px] font-bold text-slate-800 mb-1">
+                                  {fr.commission.absenceMotifLabel}
+                                </label>
+                                <input
+                                  type="text"
+                                  value={absentMotif}
+                                  onChange={(e) => {
+                                    setAbsentMotif(e.target.value);
+                                    setAbsentError(null);
+                                  }}
+                                  placeholder={fr.commission.absenceMotifPlaceholder}
+                                  className="w-full text-xs p-2 rounded-lg border border-rose-300 bg-white focus:outline-none focus:ring-2 focus:ring-rose-500"
+                                />
+                                {absentError && (
+                                  <p className="mt-1 text-[11px] font-semibold text-rose-700 flex items-center gap-1">
+                                    <AlertCircle size={12} className="shrink-0" />
+                                    <span>{absentError}</span>
+                                  </p>
+                                )}
+                              </div>
+                              <div className="flex items-center justify-end gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setAbsentTargetCreneauId(null);
+                                    setAbsentMotif('');
+                                    setAbsentError(null);
+                                  }}
+                                  className="px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-200 rounded-lg transition cursor-pointer"
+                                >
+                                  {fr.common.cancel}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleConfirmAbsent(c)}
+                                  className="px-3.5 py-1.5 text-xs font-semibold text-white bg-rose-700 hover:bg-rose-800 rounded-lg shadow-xs transition cursor-pointer inline-flex items-center gap-1.5"
+                                >
+                                  <XCircle size={13} />
+                                  <span>{fr.commission.btnConfirmerAbsence}</span>
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          {!isPresent && !isAbsent && absentTargetCreneauId !== c.id && (
+                            <p className="text-[11px] text-slate-500 flex items-center gap-1.5">
+                              <Lock size={12} className="text-slate-400 shrink-0" />
+                              <span>{fr.commission.presenceEnAttenteHint}</span>
+                            </p>
+                          )}
+
+                          {isAbsent && (
+                            <div className="bg-rose-50/70 border border-rose-200 rounded-xl p-2.5 text-xs text-rose-900 space-y-1">
+                              {c.absenceMotif && (
+                                <p className="text-[11px] italic">
+                                  Motif : « {c.absenceMotif} »
+                                </p>
+                              )}
+                              <p className="text-[11px] text-rose-800 font-medium flex items-center gap-1.5">
+                                <AlertCircle size={12} className="shrink-0 text-rose-600" />
+                                <span>{fr.commission.absentNoEvalHint}</span>
+                              </p>
+                            </div>
+                          )}
+
+                          {isPresent && res && !isFormOpen ? (
+                            /* UNE ligne par candidat : note /20, décision (icône + texte), bouton Voir */
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pt-1 border-t border-slate-100">
+                              <div className="text-[11px] text-slate-500 font-medium">
+                                Évaluation enregistrée
                               </div>
 
                               <div className="flex items-center gap-2.5 flex-wrap">
@@ -1099,7 +1406,7 @@ export const Commission: React.FC<CommissionProps> = ({
                                       directeurId: enseignantId,
                                       structure: getDirectorStructure(enseignantId),
                                       date,
-                                      resultats: creneauxDate.map((cr) => getResultatForCreneau(cr.id)).filter(Boolean) as Resultat[],
+                                      resultats: presentCreneauxDate.map((cr) => getResultatForCreneau(cr.id)).filter(Boolean) as Resultat[],
                                       statut: 'a_signer' as const,
                                       code: generatePVCode(),
                                       genereLe: new Date().toISOString(),
@@ -1126,13 +1433,17 @@ export const Commission: React.FC<CommissionProps> = ({
                                 )}
                               </div>
                             </div>
-                          ) : (
-                            /* Formulaire d'évaluation par candidat : 4 notes /5, total /20 calculé, décision, avis motivé */
+                          ) : isPresent ? (
+                            /* Formulaire d'évaluation par candidat présent : 4 notes /5, total /20 calculé, décision, avis motivé */
                             <div className="pt-1 space-y-3 bg-slate-50/70 p-3 rounded-xl border border-slate-200">
                               <div className="flex items-center justify-between border-b border-slate-200 pb-2">
-                                <div>
+                                <div className="flex items-center gap-2 flex-wrap">
                                   <span className="font-bold text-xs text-slate-900">{candidatNom}</span>
-                                  <span className="text-[11px] text-slate-400 ml-2 font-mono">({c.heure})</span>
+                                  <span className="text-[11px] text-slate-400 font-mono">({c.heure})</span>
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                    <CheckCircle2 size={12} className="text-emerald-600 shrink-0" />
+                                    <span>{fr.commission.badgePresent}</span>
+                                  </span>
                                 </div>
                                 {res && !isLocked && (
                                   <button
@@ -1304,7 +1615,7 @@ export const Commission: React.FC<CommissionProps> = ({
                                 </button>
                               </div>
                             </div>
-                          )}
+                          ) : null}
                         </div>
                       );
                     })}
@@ -1381,7 +1692,11 @@ export const Commission: React.FC<CommissionProps> = ({
                       <>
                         <div className="text-xs text-amber-800 font-medium flex items-center gap-1.5">
                           <AlertCircle size={14} className="text-amber-600 shrink-0" />
-                          <span>Notes incomplètes : évaluez les {totalCount - evaluatedCount} candidat(s) restant(s)</span>
+                          <span>
+                            {presentCount === 0
+                              ? fr.commission.noPresentForPvHint
+                              : `Notes incomplètes : évaluez les ${presentCount - evaluatedCount} candidat(s) présent(s) restant(s)`}
+                          </span>
                         </div>
                         <div className="flex items-center gap-2 flex-wrap">
                           <button

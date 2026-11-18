@@ -12,7 +12,7 @@
 - Structure : id technique 'ced', libellé "Structure". Représente le seul niveau de validation de la démo (⚠ le guide en compte trois : Structure, CED, Pôle).
 - Scolarité : administrateur système (profil système, pas métier). Valide les comptes directeur et Structure (refus avec motif de 5 caractères minimum), consulte le journal.
 - Le rôle est déduit du compte, jamais affiché. Toute création de compte = Candidat. Cumul de rôles non géré. Agent guichet : RETIRÉ DÉFINITIVEMENT.
-- Comptes de démo (mot de passe demo1234) : yassine@demo.ma, prof@demo.ma, ced@demo.ma, admin@demo.ma.
+- Comptes de test : etudiant@gmail.com, directeurthese@gmail.com, directeurstructure@gmail.com, admin@gmail.com.
 
 ## DONNÉES
 - Sujet : titre, domaine, directeur, structure, établissement, description, statutValidation (en_validation | publie | refuse), motifRefus, dateValidation, archivé.
@@ -23,7 +23,7 @@
 - Sujets : un sujet proposé par un directeur est validé par la Structure avant publication. Seuls les sujets publiés sont visibles. Quota de 5 sujets par directeur (⚠ démo). Supprimer si aucune candidature ni vœu, Retirer si des vœux, Archiver si des candidatures.
 - Candidature : 3 sujets validés (⚠ démo).
 - Dossier : 4 pièces à téléverser (image ou PDF, 1,5 Mo max, caméra ou fichier). Dossier incomplet = délai, jamais rejet. Le directeur ne valide qu'un dossier complet. "Demander de compléter" envoie une notification 'action'.
-- Parcours du candidat en 6 étapes : Candidature, Dossier complet, Validée, Entretien (créneau confirmé), Résultat (PV publié), Inscription (toujours grisée). Retard affiché en rouge, jamais bloquant. Date du jour modifiable par la Scolarité (menu Compte).
+- Parcours du candidat en 5 étapes : Candidature, Validée, Entretien (créneau confirmé), Résultat (PV publié), Inscription (toujours grisée). Retard affiché en rouge, jamais bloquant. Date du jour modifiable par la Scolarité (menu Compte).
 - Entretiens : le directeur publie des créneaux ; le candidat validé réserve (un seul actif) puis confirme. Non confirmé depuis plus de 48 h = exception pour la Structure (⚠ seuil).
 - Commission : une carte par séance. Notes sur 4 critères /5, total /20 calculé, décision Favorable | Liste d'attente | Défavorable (avis motivé obligatoire si défavorable).
 - PV : généré par candidat, imprimé et signé sur papier, scan déposé par le directeur, "Envoyer à la Structure" obligatoire (statut 'envoye'). La Structure (filtrée par SA structure) vérifie la conformité puis "Publier" (irréversible) ou "Refuser le scan" (motif obligatoire).

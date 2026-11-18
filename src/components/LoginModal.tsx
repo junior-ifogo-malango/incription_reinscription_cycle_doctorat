@@ -2,10 +2,10 @@ import React, { useState, useEffect, useRef } from 'react';
 import { X, LogIn, AlertCircle, Eye, EyeOff, Loader2 } from 'lucide-react';
 import { UserRole, Candidat, Compte, normaliserRole, getCompteRoles } from '../types';
 import { fr } from '../i18n/fr';
-import { DEMO_CANDIDAT_YASSINE, INITIAL_ENSEIGNANTS, MOCK_CANDIDATS, getComptes } from '../data/mockData';
+import { INITIAL_ENSEIGNANTS, MOCK_CANDIDATS, getComptes } from '../data/mockData';
 import { storageService } from '../services/storage';
 import { logEvent, logCompteCree } from '../utils/journal';
-import { signInWithGoogle, signOutFirebase } from '../firebase';
+import { signInWithGoogle, signOutFirebase, isUsmbaEmail } from '../firebase';
 import { resolveGoogleSession } from '../utils/googleAuthResolver';
 
 interface LoginModalProps {
@@ -15,22 +15,20 @@ interface LoginModalProps {
   onRequestCreateAccount?: () => void;
   onOpenVoteComite?: () => void;
   restrictionMessage?: string;
+  initialMode?: 'login' | 'register';
 }
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
 const DEMO_KNOWN_EMAILS = new Set([
-  'yassine@demo.ma',
-  'yassine.elfassi@demo.ma',
-  'yassine.elfassi@etu.usmba.ac.ma',
-  'prof@demo.ma',
-  'k.elamrani@usmba.ac.ma',
-  'ced@demo.ma',
-  'ced@usmba.ac.ma',
+  'etudiant@gmail.com',
+  'directeurthese@gmail.com',
+  'directeurstructure@gmail.com',
+  'admin@gmail.com',
 ]);
 
 function checkIsKnownEmail(cleanEmail: string): boolean {
-  if (!cleanEmail) return false;
+  if (!cleanEmail || cleanEmail.endsWith('@demo.ma')) return false;
   if (DEMO_KNOWN_EMAILS.has(cleanEmail)) return true;
 
   const comptes = getComptes();
@@ -62,8 +60,9 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   onClose,
   onLoginSuccess,
   restrictionMessage,
+  initialMode = 'login',
 }) => {
-  const [mode, setMode] = useState<'login' | 'register'>('login');
+  const [mode, setMode] = useState<'login' | 'register'>(initialMode);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -72,7 +71,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [googleLoading, setGoogleLoading] = useState(false);
   const [googleError, setGoogleError] = useState<string | null>(null);
-  const [googleErrorCode, setGoogleErrorCode] = useState<string | null>(null);
 
   const emailInputRef = useRef<HTMLInputElement | null>(null);
   const passwordInputRef = useRef<HTMLInputElement | null>(null);
@@ -80,14 +78,18 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
   const cleanEmail = email.trim().toLowerCase();
   const isEmailValid = EMAIL_REGEX.test(cleanEmail);
+  const isLegacyDemoEmail = cleanEmail.endsWith('@demo.ma');
   const isKnown = isEmailValid && checkIsKnownEmail(cleanEmail);
+  const isTestAccount = DEMO_KNOWN_EMAILS.has(cleanEmail);
   const cleanPassword = password.trim();
-  const isPasswordLongEnough = cleanPassword.length >= 8;
+  const isPasswordLongEnough = isTestAccount
+    ? cleanPassword.length > 0
+    : cleanPassword.length >= 8;
   const isFormValid = isEmailValid && isPasswordLongEnough;
 
   useEffect(() => {
     if (isOpen) {
-      setMode('login');
+      setMode(initialMode);
       setEmail('');
       setPassword('');
       setShowPassword(false);
@@ -95,18 +97,16 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       setPasswordTouched(false);
       setError(null);
       setGoogleError(null);
-      setGoogleErrorCode(null);
       setGoogleLoading(false);
       hasAutoFocusedPasswordRef.current = false;
       requestAnimationFrame(() => emailInputRef.current?.focus());
     }
-  }, [isOpen]);
+  }, [isOpen, initialMode]);
 
   const switchMode = (nextMode: 'login' | 'register') => {
     setMode(nextMode);
     setError(null);
     setGoogleError(null);
-    setGoogleErrorCode(null);
     setEmailTouched(false);
     setPasswordTouched(false);
     hasAutoFocusedPasswordRef.current = false;
@@ -147,7 +147,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   const handleGoogleSignIn = async () => {
     if (googleLoading) return;
     setGoogleError(null);
-    setGoogleErrorCode(null);
     setError(null);
     setGoogleLoading(true);
     try {
@@ -165,7 +164,9 @@ export const LoginModal: React.FC<LoginModalProps> = ({
           role: resolved.role,
         },
         fr.journalActions.connexion,
-        `${resolved.email} (${fr.auth.googleAccountBadge})`
+        `${resolved.email} (${
+          isUsmbaEmail(resolved.email) ? fr.auth.usmbaGoogleBadge : fr.auth.googleAccountBadge
+        })`
       );
       onLoginSuccess(resolved.role, resolved.email, resolved.candidateData, resolved.compte);
       onClose();
@@ -174,13 +175,18 @@ export const LoginModal: React.FC<LoginModalProps> = ({
         typeof err === 'object' && err !== null && 'code' in err
           ? String((err as { code?: unknown }).code)
           : '';
-      setGoogleErrorCode(code || null);
       if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
         setGoogleError(fr.auth.googlePopupClosed);
       } else if (code === 'auth/popup-blocked') {
         setGoogleError(fr.auth.googlePopupBlocked);
       } else if (code === 'auth/unauthorized-domain') {
         setGoogleError(fr.auth.googleUnauthorizedDomain);
+      } else if (code === 'auth/operation-not-allowed') {
+        setGoogleError(fr.auth.googleOperationNotAllowed);
+      } else if (code === 'auth/account-exists-with-different-credential') {
+        setGoogleError(fr.auth.googleAccountExistsDifferentCred);
+      } else if (code === 'auth/user-disabled') {
+        setGoogleError(fr.auth.accountDeactivated);
       } else {
         setGoogleError(fr.auth.googleSignInError);
       }
@@ -196,6 +202,10 @@ export const LoginModal: React.FC<LoginModalProps> = ({
     setError(null);
 
     if (!isEmailValid || !isPasswordLongEnough) return;
+    if (isLegacyDemoEmail) {
+      setError(fr.auth.invalidCredentials);
+      return;
+    }
     if (mode === 'register' && isKnown) return;
 
     // Cas création de nouveau compte (e-mail inconnu -> toujours Candidat)
@@ -244,14 +254,11 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       return;
     }
 
-    // Détection du compte et lecture dynamique de son rôle (compte.role)
-    const isDemoPassword = cleanPassword === 'demo1234';
-
-    // 0. Vérification des comptes gérés (admin, comptes en attente ou validés)
+    // 0. Vérification des comptes gérés (Scolarité, Directeur de thèse, Structure)
     const comptes = getComptes();
     const compteTrouve = comptes.find((c) => c.email && c.email.toLowerCase().trim() === cleanEmail);
     if (compteTrouve) {
-      const matchPass = compteTrouve.motDePasse ? compteTrouve.motDePasse === cleanPassword : isDemoPassword;
+      const matchPass = Boolean(compteTrouve.motDePasse && compteTrouve.motDePasse === cleanPassword);
       if (!matchPass) {
         setError(fr.auth.invalidCredentials);
         return;
@@ -272,88 +279,11 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       return;
     }
 
-    // 1. Compte Yassine (Candidat)
-    if (
-      (cleanEmail === 'yassine@demo.ma' ||
-        cleanEmail === 'yassine.elfassi@demo.ma' ||
-        cleanEmail === 'yassine.elfassi@etu.usmba.ac.ma') &&
-      isDemoPassword
-    ) {
-      if (DEMO_CANDIDAT_YASSINE.desactive) {
-        setError(fr.auth.accountDeactivated);
-        return;
-      }
-      logEvent(
-        { id: DEMO_CANDIDAT_YASSINE.id, nom: DEMO_CANDIDAT_YASSINE.nom, role: 'candidat' },
-        fr.journalActions.connexion,
-        cleanEmail
-      );
-      onLoginSuccess('candidat', cleanEmail, DEMO_CANDIDAT_YASSINE);
-      onClose();
-      return;
-    }
-
-    // 2. Compte Directeur de thèse (Enseignant)
-    if (
-      (cleanEmail === 'prof@demo.ma' ||
-        cleanEmail === 'k.elamrani@usmba.ac.ma') &&
-      isDemoPassword
-    ) {
-      logEvent(
-        { id: 'ens-1', nom: 'Pr. Karim El Amrani', role: 'enseignant' },
-        fr.journalActions.connexion,
-        cleanEmail
-      );
-      onLoginSuccess('enseignant', cleanEmail);
-      onClose();
-      return;
-    }
-
-    // 3. Compte Structure (CED)
-    if (
-      (cleanEmail === 'ced@demo.ma' ||
-        cleanEmail === 'ced@usmba.ac.ma') &&
-      isDemoPassword
-    ) {
-      logEvent(
-        { id: 'dir-ced', nom: 'Directeur de structure', role: 'directeur_ced' },
-        fr.journalActions.connexion,
-        cleanEmail
-      );
-      onLoginSuccess('directeur_ced', cleanEmail);
-      onClose();
-      return;
-    }
-
-    // Autres enseignants
-    const teacherMatch = INITIAL_ENSEIGNANTS.find(
-      (t) => t.email && t.email.toLowerCase().trim() === cleanEmail
-    );
-    if (teacherMatch && isDemoPassword) {
-      if (teacherMatch.desactive) {
-        setError(fr.auth.accountDeactivated);
-        return;
-      }
-      onLoginSuccess('enseignant', cleanEmail);
-      onClose();
-      return;
-    }
-
-    // Autres candidats de démonstration
+    // Comptes enregistrés dans localStorage (toujours rôle candidat, en priorité pour préserver les saisies)
     const candMatch = MOCK_CANDIDATS.find(
       (c) => c.email && c.email.toLowerCase().trim() === cleanEmail
     );
-    if (candMatch && isDemoPassword) {
-      if (candMatch.desactive) {
-        setError(fr.auth.accountDeactivated);
-        return;
-      }
-      onLoginSuccess('candidat', cleanEmail, candMatch);
-      onClose();
-      return;
-    }
 
-    // Comptes enregistrés dans localStorage (toujours rôle candidat)
     try {
       const rawAccounts = localStorage.getItem('usmba_registered_accounts');
       const accounts: Candidat[] = rawAccounts ? JSON.parse(rawAccounts) : [];
@@ -366,7 +296,8 @@ export const LoginModal: React.FC<LoginModalProps> = ({
           setError(fr.auth.accountDeactivated);
           return;
         }
-        if (foundInAccounts.motDePasse && foundInAccounts.motDePasse === cleanPassword) {
+        const expectedPass = foundInAccounts.motDePasse || candMatch?.motDePasse;
+        if (expectedPass && expectedPass === cleanPassword) {
           logEvent(
             {
               id: foundInAccounts.id,
@@ -393,7 +324,8 @@ export const LoginModal: React.FC<LoginModalProps> = ({
             setError(fr.auth.accountDeactivated);
             return;
           }
-          if (cur.motDePasse && cur.motDePasse === cleanPassword) {
+          const expectedPass = cur.motDePasse || candMatch?.motDePasse;
+          if (expectedPass && expectedPass === cleanPassword) {
             logEvent(
               {
                 id: cur.id,
@@ -411,6 +343,28 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       }
     } catch {
       // safe fallback
+    }
+
+    // Compte candidat de test local (etudiant@gmail.com)
+    if (candMatch) {
+      if (candMatch.desactive) {
+        setError(fr.auth.accountDeactivated);
+        return;
+      }
+      if (candMatch.motDePasse && candMatch.motDePasse === cleanPassword) {
+        logEvent(
+          {
+            id: candMatch.id,
+            nom: candMatch.nom?.trim() || cleanEmail,
+            role: 'candidat',
+          },
+          fr.journalActions.connexion,
+          cleanEmail
+        );
+        onLoginSuccess('candidat', cleanEmail, candMatch);
+        onClose();
+        return;
+      }
     }
 
     // Échec de vérification : erreur sous le champ mot de passe
@@ -456,10 +410,10 @@ export const LoginModal: React.FC<LoginModalProps> = ({
         </div>
 
         {/* Message de restriction si redirection */}
-        {restrictionMessage && (
+        {(restrictionMessage || (initialMode === 'register' && fr.auth.loginToContinue)) && (
           <div className="mx-4 mt-3 p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-center gap-2">
             <AlertCircle size={15} className="text-amber-700 shrink-0" />
-            <span>{restrictionMessage}</span>
+            <span>{restrictionMessage || fr.auth.loginToContinue}</span>
           </div>
         )}
 
@@ -542,7 +496,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                 {passwordFieldError}
               </p>
             )}
-            {(mode === 'register' || (isEmailValid && !isKnown)) && (
+            {(mode === 'register' || (isEmailValid && !isKnown && !isLegacyDemoEmail)) && (
               <p className="text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1.5 font-medium mt-1.5">
                 {fr.auth.newAccountHint}
               </p>
@@ -559,7 +513,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                   : 'bg-emerald-700 hover:bg-emerald-800 text-white active:scale-95 cursor-pointer'
               }`}
             >
-              {mode === 'register' || (isEmailValid && !isKnown)
+              {mode === 'register' || (isEmailValid && !isKnown && !isLegacyDemoEmail)
                 ? fr.auth.btnCreateAccount
                 : fr.auth.btnSubmitLogin}
             </button>
@@ -633,11 +587,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                 <p className="text-[11px] text-rose-600 font-medium">
                   {googleError}
                 </p>
-                {googleErrorCode && (
-                  <p className="text-[10px] text-slate-400 font-mono">
-                    {fr.auth.googleErrorCodePrefix} : {googleErrorCode}
-                  </p>
-                )}
               </div>
             )}
           </div>

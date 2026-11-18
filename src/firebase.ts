@@ -24,9 +24,17 @@ export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 
 export const googleProvider = new GoogleAuthProvider();
+googleProvider.addScope('email');
+googleProvider.addScope('profile');
 googleProvider.setCustomParameters({
   prompt: 'select_account',
 });
+
+const USMBA_EMAIL_REGEX = /^[^\s@]+@([a-z0-9-]+\.)*usmba\.ac\.ma$/i;
+
+export function isUsmbaEmail(email: string): boolean {
+  return USMBA_EMAIL_REGEX.test(email.trim());
+}
 
 export enum OperationType {
   CREATE = 'create',
@@ -111,13 +119,15 @@ const VALID_ROLES: UserRole[] = [
 ];
 
 function sanitizeUserFields(user: User) {
-  const cleanEmail = (user.email || '').trim().toLowerCase().slice(0, 254);
+  const rawEmail = (user.email || user.providerData?.[0]?.email || '').trim().slice(0, 254);
+  const cleanEmail = rawEmail.toLowerCase();
   const fallbackName = cleanEmail ? cleanEmail.split('@')[0] : 'Utilisateur Google';
   const cleanDisplayName = (user.displayName || fallbackName).trim().slice(0, 120);
   const cleanPhotoURL = (user.photoURL || '').trim().slice(0, 500);
 
   return {
     uid: user.uid,
+    rawEmail: rawEmail || cleanEmail,
     email: cleanEmail,
     displayName: cleanDisplayName,
     photoURL: cleanPhotoURL,
@@ -171,7 +181,7 @@ export async function syncGoogleUserProfile(user: User): Promise<FirebaseUserPro
 
   const createPayload: Record<string, unknown> = {
     uid: sanitized.uid,
-    email: sanitized.email,
+    email: sanitized.rawEmail,
     displayName: sanitized.displayName,
     role: 'candidat',
     authProvider: 'google',

@@ -74,7 +74,7 @@ export type PieceType = 'CIN' | 'DIPLOME' | 'RELEVES' | 'CV' | 'cin' | 'diplome'
 export type PieceStatut = 'declaree' | 'prouvee' | 'illisible' | 'absente';
 export type PieceSource = 'camera' | 'televersement' | 'apogee';
 
-export type CreneauStatut = 'libre' | 'reserve' | 'confirme';
+export type CreneauStatut = 'libre' | 'reserve' | 'confirme' | 'absent';
 
 export const QUOTA_SUJETS = 5;
 
@@ -179,6 +179,7 @@ export interface Candidat {
     saisiPar?: string;
     saisiLe?: string;
     consentementGuichet?: boolean;
+    dateEnvoi?: string;
   };
   // Aliases pour compatibilité
   panierInteret?: string[];
@@ -280,6 +281,7 @@ export interface Dossier {
   saisiPar?: string;
   saisiLe?: string;
   consentementGuichet?: boolean;
+  dateEnvoi?: string;
 }
 
 export interface Creneau {
@@ -293,6 +295,14 @@ export interface Creneau {
   dateReservation?: string; // ISO string
   dateConfirmation?: string; // ISO string
   relanceLe?: string; // ISO string
+  emailStatut?: 'envoye' | 'echec';
+  emailErreur?: string;
+  emailEnvoyeLe?: string; // ISO string
+  whatsappOuvertLe?: string; // ISO string
+  motifAnnulation?: string;
+  presence?: 'present' | 'absent';
+  absenceMotif?: string;
+  presenceConstateeLe?: string; // ISO string
 }
 
 export interface ApogeeFictifEntry {
@@ -323,6 +333,10 @@ export interface Resultat {
   saisiLe: string; /* ISO */
   criteres?: CriteresEvaluation;
   avis?: string;
+  emailStatut?: 'envoye' | 'echec';
+  emailErreur?: string;
+  emailEnvoyeLe?: string; /* ISO */
+  whatsappOuvertLe?: string; /* ISO */
 }
 
 export function calculerNoteResultat(res?: { note?: number; criteres?: CriteresEvaluation } | null): number {

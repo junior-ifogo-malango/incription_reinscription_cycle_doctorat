@@ -138,31 +138,66 @@ export function parseCinOcrText(rawText: string): CinOcrFields {
   return fields;
 }
 
+function isOcrImageSource(source?: string): source is string {
+  return Boolean(
+    source &&
+    typeof source === 'string' &&
+    (source.startsWith('data:image') || /\.(png|jpe?g|webp|bmp|gif)(\?|$)/i.test(source))
+  );
+}
+
 export async function lireCinLocalement(imageSource: string): Promise<CinOcrResult> {
-  if (!imageSource || typeof imageSource !== 'string') {
-    return { success: false, fields: {}, error: 'Source absente' };
-  }
+  return lireCinDeuxFaces(imageSource);
+}
 
-  const isImage =
-    imageSource.startsWith('data:image') ||
-    /\.(png|jpe?g|webp|bmp|gif)(\?|$)/i.test(imageSource);
+export async function lireCinDeuxFaces(
+  rectoSource?: string,
+  versoSource?: string
+): Promise<CinOcrResult> {
+  const sources = [rectoSource, versoSource].filter(isOcrImageSource);
 
-  if (!isImage) {
+  if (sources.length === 0) {
+    if (!rectoSource && !versoSource) {
+      return { success: false, fields: {}, error: 'Source absente' };
+    }
     return { success: false, fields: {}, error: 'Format non pris en charge par OCR' };
   }
 
   let worker: Awaited<ReturnType<typeof createWorker>> | null = null;
   try {
     worker = await createWorker('fra');
-    const result = await worker.recognize(imageSource);
-    const rawText = result?.data?.text || '';
-    const fields = parseCinOcrText(rawText);
+    const textes: string[] = [];
+    const merged: CinOcrFields = {};
+
+    for (const src of sources) {
+      const result = await worker.recognize(src);
+      const rawText = result?.data?.text || '';
+      if (rawText.trim()) {
+        textes.push(rawText);
+      }
+      const parsed = parseCinOcrText(rawText);
+      if (!merged.nom && parsed.nom) merged.nom = parsed.nom;
+      if (!merged.prenom && parsed.prenom) merged.prenom = parsed.prenom;
+      if (!merged.cin && parsed.cin) merged.cin = parsed.cin;
+      if (!merged.dateNaissance && parsed.dateNaissance) merged.dateNaissance = parsed.dateNaissance;
+    }
+
+    if (textes.length > 1) {
+      const combinedParsed = parseCinOcrText(textes.join('\n'));
+      if (!merged.nom && combinedParsed.nom) merged.nom = combinedParsed.nom;
+      if (!merged.prenom && combinedParsed.prenom) merged.prenom = combinedParsed.prenom;
+      if (!merged.cin && combinedParsed.cin) merged.cin = combinedParsed.cin;
+      if (!merged.dateNaissance && combinedParsed.dateNaissance) {
+        merged.dateNaissance = combinedParsed.dateNaissance;
+      }
+    }
+
     const hasAnyField = Boolean(
-      fields.nom || fields.prenom || fields.cin || fields.dateNaissance
+      merged.nom || merged.prenom || merged.cin || merged.dateNaissance
     );
     return {
       success: hasAnyField,
-      fields,
+      fields: merged,
     };
   } catch (err) {
     return {

@@ -212,6 +212,7 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
 
   // Connexion unifiée au clic sur Candidater & complétion du profil à la validation
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [authModalMode, setAuthModalMode] = useState<'login' | 'register'>('login');
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [profileNom, setProfileNom] = useState('');
   const [profileTel, setProfileTel] = useState('');
@@ -674,22 +675,75 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
     return () => clearInterval(interval);
   }, [candidat.verificationBloqueJusqua, candidat, onUpdateCandidat]);
 
-  // Clic sur "Candidater"
+  const saveSelectedSubjectsDraft = (targetCandidat: Candidat, selectedIds: string[]) => {
+    const remainingPanier = (targetCandidat.panier || []).filter((id) => !selectedIds.includes(id));
+    const statuts: Record<string, any> = {
+      ...(targetCandidat.candidaturesStatuts || {}),
+    };
+    selectedIds.forEach((id) => {
+      if (!statuts[id]) {
+        statuts[id] = 'brouillon';
+      }
+    });
+    const updated: Candidat = {
+      ...targetCandidat,
+      panier: remainingPanier,
+      panierInteret: remainingPanier,
+      candidatures: selectedIds,
+      interets: selectedIds,
+      candidaturesStatuts: statuts,
+      attesteLe: targetCandidat.attesteLe || new Date().toISOString(),
+    };
+    onUpdateCandidat(updated);
+    storageService.setCandidat(updated);
+    try {
+      const rawAccounts = localStorage.getItem('usmba_registered_accounts');
+      if (rawAccounts) {
+        const accounts: Candidat[] = JSON.parse(rawAccounts);
+        const idx = accounts.findIndex(
+          (a) =>
+            a.id === updated.id ||
+            (a.email && updated.email && a.email.toLowerCase().trim() === updated.email.toLowerCase().trim())
+        );
+        if (idx !== -1) {
+          accounts[idx] = { ...accounts[idx], ...updated };
+          localStorage.setItem('usmba_registered_accounts', JSON.stringify(accounts));
+        }
+      }
+      const rawOverrides = localStorage.getItem('usmba_candidats_overrides');
+      if (rawOverrides) {
+        const overrides: Record<string, Candidat> = JSON.parse(rawOverrides);
+        if (overrides[updated.id]) {
+          overrides[updated.id] = updated;
+          localStorage.setItem('usmba_candidats_overrides', JSON.stringify(overrides));
+        }
+      }
+    } catch {}
+    return updated;
+  };
+
+  // Clic sur "Compléter mon dossier" depuis Mes vœux
   const handleStartCandidater = () => {
     setErrorMsg(null);
+    const availableCartIds = cartItems.filter((s) => s.statut !== 'archive').map((s) => s.id);
+    const combinedIds = Array.from(new Set([...(candidat.candidatures || []), ...availableCartIds]));
+    if (combinedIds.length < 3) return;
+
     if (!candidat.compteCree) {
-      if (onRequestLogin) {
-        onRequestLogin();
-      } else {
-        setIsAuthModalOpen(true);
-      }
+      setAuthModalMode('register');
+      setIsAuthModalOpen(true);
     } else if (candidat.verificationStatut === 'non_verifie') {
       setView('verify_code');
+    } else if ((candidat.candidatures || []).length >= 3) {
+      onNavigateTab?.('dossier');
+    } else if (combinedIds.length === 3) {
+      saveSelectedSubjectsDraft(candidat, combinedIds);
+      onNavigateTab?.('dossier');
     } else {
       setTempSelection(
         candidat.candidatures.length > 0
           ? candidat.candidatures
-          : candidat.panier.slice(0, Math.min(3, candidat.panier.length))
+          : availableCartIds.slice(0, 3)
       );
       setView('select3');
     }
@@ -969,70 +1023,22 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
     }
   }, [candidat.candidatures, candidat.panier, onUpdateCandidat]);
 
-  // Finalisation des candidatures en brouillon
+  // Enregistrement des 3 sujets sans dépôt ni notification (envoi unique depuis Mon dossier)
   const finalizeValidateCandidatures = (targetCandidat: Candidat) => {
-    const remainingPanier = targetCandidat.panier.filter((id) => !tempSelection.includes(id));
-    const nowIso = new Date().toISOString();
-    const statuts: Record<string, any> = {
-      ...(targetCandidat.candidaturesStatuts || {}),
-    };
-    tempSelection.forEach((id) => {
-      statuts[id] = 'brouillon';
-    });
-    const updated: Candidat = {
-      ...targetCandidat,
-      panier: remainingPanier,
-      panierInteret: remainingPanier,
-      candidatures: tempSelection,
-      interets: tempSelection,
-      candidaturesStatuts: statuts,
-      attesteLe: nowIso,
-    };
-    onUpdateCandidat(updated);
-    storageService.setCandidat(updated);
-
-    try {
-      const rawAccounts = localStorage.getItem('usmba_registered_accounts');
-      if (rawAccounts) {
-        const accounts: Candidat[] = JSON.parse(rawAccounts);
-        const idx = accounts.findIndex(
-          (a) =>
-            a.id === updated.id ||
-            (a.email && updated.email && a.email.toLowerCase().trim() === updated.email.toLowerCase().trim())
-        );
-        if (idx !== -1) {
-          accounts[idx] = { ...accounts[idx], ...updated };
-          localStorage.setItem('usmba_registered_accounts', JSON.stringify(accounts));
-        }
-      }
-      const rawOverrides = localStorage.getItem('usmba_candidats_overrides');
-      if (rawOverrides) {
-        const overrides: Record<string, Candidat> = JSON.parse(rawOverrides);
-        if (overrides[updated.id]) {
-          overrides[updated.id] = updated;
-          localStorage.setItem('usmba_candidats_overrides', JSON.stringify(overrides));
-        }
-      }
-    } catch {}
-
-    logEvent(
-      {
-        id: updated.id,
-        nom: updated.nom?.trim() || updated.email || fr.sujetsModule.nonRenseigne,
-        role: 'candidat',
-      },
-      fr.journalActions.candidatureDeposee,
-      `${tempSelection.length} sujet(s)`
-    );
-
-    // Règle 4 : Supprime la notification automatique au dépôt
-    setView('confirmation');
+    saveSelectedSubjectsDraft(targetCandidat, tempSelection);
+    if (onNavigateTab) {
+      setView('catalog');
+      onNavigateTab('dossier');
+    } else {
+      setView('confirmation');
+    }
   };
 
-  // Validation finale des candidatures avec contrôle du profil (demandé une seule fois)
+  // Validation finale des sujets avec contrôle du profil (ne redemande ni nom ni prénom si remplis dans Dossier)
   const resolvedCandidateNom =
+    [candidat.prenom, candidat.nomFamille].filter((v) => v && v.trim()).join(' ').trim() ||
     candidat.nom?.trim() ||
-    [candidat.prenom, candidat.nomFamille].filter((v) => v && v.trim()).join(' ').trim();
+    '';
 
   const handleValidateCandidatures = () => {
     const isProfileIncomplete = !resolvedCandidateNom || !candidat.tel?.trim();
@@ -1049,7 +1055,7 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
   const handleProfileModalSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const errs: { nom?: string; tel?: string } = {};
-    const cleanNom = profileNom.trim();
+    const cleanNom = (resolvedCandidateNom || profileNom).trim();
     const cleanTelRaw = profileTel.trim();
     const cleanTel = cleanTelRaw.replace(/[\s.-]/g, '');
     const isZero10Digits = /^0[0-9]{9}$/.test(cleanTel);
@@ -1265,11 +1271,21 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
     return cartItems.filter((s) => s.statut !== 'archive');
   }, [cartItems]);
 
-  // Règle du bouton Valider : actif seulement à 3 exactement, ou moins si panier disponible < 3
+  const combinedAvailableIds = useMemo(() => {
+    return Array.from(new Set([...(candidat?.candidatures || []), ...cartAvailableItems.map((s) => s.id)]));
+  }, [candidat?.candidatures, cartAvailableItems]);
+
+  const select3DisplayItems = useMemo(() => {
+    const existingIds = new Set(cartItems.map((s) => s.id));
+    const extraCandidatures = candidateItems.filter((s) => !existingIds.has(s.id));
+    return [...extraCandidatures, ...cartItems];
+  }, [candidateItems, cartItems]);
+
+  // Règle du bouton Valider : actif seulement à 3 exactement
   const isValidateActive =
-    cartAvailableItems.length >= 3
+    combinedAvailableIds.length >= 3
       ? tempSelection.length === 3
-      : tempSelection.length === cartAvailableItems.length;
+      : tempSelection.length === combinedAvailableIds.length;
 
   /* ========================================================================= */
   /* VUE 4 : CONFIRMATION DES CANDIDATURES DÉPOSÉES EN BROUILLON               */
@@ -1358,7 +1374,7 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
         )}
 
         <div className="space-y-2">
-          {cartItems.map((sujet) => {
+          {select3DisplayItems.map((sujet) => {
             const isChecked = tempSelection.includes(sujet.id);
             const isArchived = sujet.statut === 'archive';
             const { Icon: DisciplineIcon, iconPill, badge: badgeColor } = getDisciplineConfig(sujet.discipline);
@@ -1785,13 +1801,21 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
   }
 
   /* ========================================================================= */
-  /* VUE PANIER (ILLIMITÉ)                                                     */
+  /* VUE PANIER / MES VŒUX                                                     */
   /* ========================================================================= */
   if (view === 'panier') {
     const isUnverified = Boolean(candidat.compteCree && candidat.verificationStatut === 'non_verifie');
+    const wishesCount = combinedAvailableIds.length;
+    const hasEnoughWishes = wishesCount >= 3;
+    const missingWishesCount = Math.max(0, 3 - wishesCount);
+    const completerDisabled = isUnverified || !hasEnoughWishes;
+    const wishesMissingReason = !hasEnoughWishes
+      ? fr.sujetsModule.voeuxIncompletsRaison.replace('{manques}', String(missingWishesCount))
+      : null;
+
     return (
       <div className="space-y-3.5">
-        <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+        <div className="flex items-center justify-between pb-2 border-b border-slate-200 gap-3 flex-wrap">
           <div>
             <h2 className="text-sm font-bold text-slate-900">{fr.sujetsModule.panierTitle}</h2>
             <span className="text-[11px] text-slate-500">
@@ -1803,15 +1827,15 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
             <div className="flex flex-col items-end gap-1">
               <button
                 type="button"
-                disabled={isUnverified}
+                disabled={completerDisabled}
                 onClick={handleStartCandidater}
                 className={`min-h-[42px] px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs ${
-                  isUnverified
+                  completerDisabled
                     ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
                     : 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer'
                 }`}
               >
-                <span>{fr.sujetsModule.btnCandidater}</span>
+                <span>{fr.sujetsModule.btnCompleterMonDossier}</span>
                 <ArrowRight size={14} />
               </button>
               {isUnverified && (
@@ -1825,6 +1849,11 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
                     {fr.sujetsModule.btnSaisirMonCode}
                   </button>
                 </div>
+              )}
+              {!isUnverified && wishesMissingReason && (
+                <p className="text-[11px] text-rose-700 font-medium text-right">
+                  {wishesMissingReason}
+                </p>
               )}
             </div>
           )}
@@ -1914,15 +1943,15 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
             <div className="pt-2 space-y-1.5">
               <button
                 type="button"
-                disabled={isUnverified}
+                disabled={completerDisabled}
                 onClick={handleStartCandidater}
                 className={`w-full min-h-[48px] py-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-2 shadow-xs ${
-                  isUnverified
+                  completerDisabled
                     ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
                     : 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer'
                 }`}
               >
-                <span>{fr.sujetsModule.btnCandidater}</span>
+                <span>{fr.sujetsModule.btnCompleterMonDossier}</span>
                 <ArrowRight size={16} />
               </button>
               {isUnverified && (
@@ -1937,50 +1966,72 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
                   </button>
                 </div>
               )}
+              {!isUnverified && wishesMissingReason && (
+                <p className="text-[11px] text-rose-700 font-medium text-center">
+                  {wishesMissingReason}
+                </p>
+              )}
             </div>
           </div>
         )}
 
-        <LoginModal
-          isOpen={isAuthModalOpen}
-          onClose={() => setIsAuthModalOpen(false)}
-          onLoginSuccess={(userRole, _email, candidateData, connectedCompte) => {
-            setIsAuthModalOpen(false);
-            if (userRole === 'candidat') {
-              const base = candidateData || storageService.loginAsDemo();
-              const mergedPanier = Array.from(
-                new Set([...(base.panier || []), ...(candidat.panier || [])])
-              ).filter((id) => !(base.candidatures || []).includes(id));
-              const updatedCand: Candidat = {
-                ...base,
-                panier: mergedPanier,
-                panierInteret: mergedPanier,
-              };
-              storageService.setCandidat(updatedCand);
-              onUpdateCandidat(updatedCand);
-              const availableIds = updatedCand.panier.filter((id) => {
-                const s = sujets.find((x) => x && x.id === id);
-                return s && s.statut !== 'archive' && (s.statutValidation || 'publie') === 'publie';
-              });
+        {renderAuthModal()}
+        {renderDetailModal()}
+      </div>
+    );
+  }
+
+  function renderAuthModal() {
+    return (
+      <LoginModal
+        isOpen={isAuthModalOpen}
+        initialMode={authModalMode}
+        onClose={() => setIsAuthModalOpen(false)}
+        onLoginSuccess={(userRole, _email, candidateData, connectedCompte) => {
+          setIsAuthModalOpen(false);
+          if (userRole === 'candidat') {
+            const base = candidateData || storageService.loginAsDemo();
+            const mergedPanier = Array.from(
+              new Set([...(base.panier || []), ...(candidat.panier || [])])
+            ).filter((id) => !(base.candidatures || []).includes(id));
+            const updatedCand: Candidat = {
+              ...base,
+              panier: mergedPanier,
+              panierInteret: mergedPanier,
+            };
+            storageService.setCandidat(updatedCand);
+            onUpdateCandidat(updatedCand);
+            const availableIds = updatedCand.panier.filter((id) => {
+              const s = sujets.find((x) => x && x.id === id);
+              return s && s.statut !== 'archive' && (s.statutValidation || 'publie') === 'publie';
+            });
+            const combinedAfterLogin = Array.from(
+              new Set([...(updatedCand.candidatures || []), ...availableIds])
+            );
+            if ((updatedCand.candidatures || []).length >= 3) {
+              onNavigateTab?.('dossier');
+            } else if (combinedAfterLogin.length === 3) {
+              saveSelectedSubjectsDraft(updatedCand, combinedAfterLogin);
+              onNavigateTab?.('dossier');
+            } else if (combinedAfterLogin.length > 3) {
               setTempSelection(
                 updatedCand.candidatures.length > 0
                   ? updatedCand.candidatures
                   : availableIds.slice(0, 3)
               );
               setView('select3');
-            } else {
-              try {
-                if (connectedCompte) {
-                  localStorage.setItem('usmba_active_account', JSON.stringify(connectedCompte));
-                }
-                localStorage.setItem('usmba_doctorat_role', userRole);
-                window.dispatchEvent(new CustomEvent('usmba_account_updated'));
-              } catch {}
             }
-          }}
-        />
-        {renderDetailModal()}
-      </div>
+          } else {
+            try {
+              if (connectedCompte) {
+                localStorage.setItem('usmba_active_account', JSON.stringify(connectedCompte));
+              }
+              localStorage.setItem('usmba_doctorat_role', userRole);
+              window.dispatchEvent(new CustomEvent('usmba_account_updated'));
+            } catch {}
+          }
+        }}
+      />
     );
   }
 
@@ -3067,6 +3118,22 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
         </div>
       </div>
 
+      {isCandidateOrVisitor && !candidat.compteCree && cartAvailableItems.length >= 3 && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2.5 flex items-center justify-between gap-3 flex-wrap shadow-xs">
+          <span className="text-xs font-semibold text-emerald-950">
+            {fr.sujetsModule.panierCount.replace('{count}', String(cartAvailableItems.length))}
+          </span>
+          <button
+            type="button"
+            onClick={handleStartCandidater}
+            className="min-h-[40px] px-4 py-2 rounded-xl text-xs font-bold bg-emerald-700 hover:bg-emerald-800 text-white transition flex items-center gap-1.5 shadow-xs cursor-pointer active:scale-98"
+          >
+            <span>{fr.sujetsModule.btnCandidater}</span>
+            <ArrowRight size={14} />
+          </button>
+        </div>
+      )}
+
       {/* Puces de critères actifs retirables (✕) sous la barre */}
       {activeCriteriaCount > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">
@@ -3313,6 +3380,7 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
         </div>
       )}
       </div>
+      {renderAuthModal()}
       {renderDetailModal()}
     </div>
   );

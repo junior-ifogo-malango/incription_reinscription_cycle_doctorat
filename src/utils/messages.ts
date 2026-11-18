@@ -68,11 +68,35 @@ export const ouvrirLien = (lien: string): void => {
   }
 };
 
+function formatDatePourMessage(dateStr: string): string {
+  if (!dateStr) return '';
+  const clean = dateStr.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) {
+    const [yyyy, mm, dd] = clean.split('-');
+    return `${dd}/${mm}/${yyyy}`;
+  }
+  return clean;
+}
+
 /**
- * Message de convocation sur 3 lignes strictes
+ * Message officiel de convocation à l'entretien
  */
 export const messageConvocation = (date: string, heure: string, lieu: string): string => {
-  return `Entretien le ${date} à ${heure}\nLieu : ${lieu}\nÀ faire : confirme ton créneau sur la plateforme`;
+  const dateFr = formatDatePourMessage(date);
+  return `Vous êtes convoqué(e) à l'entretien le ${dateFr} à ${heure}, lieu : ${lieu}. Confirmez votre présence sur la plateforme.`;
+};
+
+/**
+ * Message d'annulation de convocation à l'entretien
+ */
+export const messageConvocationAnnulee = (
+  date: string,
+  heure: string,
+  lieu: string,
+  motif: string
+): string => {
+  const dateFr = formatDatePourMessage(date);
+  return `Votre convocation à l'entretien du ${dateFr} à ${heure} (lieu : ${lieu}) a été annulée. Motif : ${motif}.`;
 };
 
 /**
@@ -83,6 +107,22 @@ export const messageResultat = (): string => {
   return "Ton résultat est publié. Consulte l'onglet Entretiens de la plateforme.";
 };
 
+export const messageAbsenceConstatee = (
+  date: string,
+  heure: string,
+  motif: string
+): string => {
+  const dateFr = formatDatePourMessage(date);
+  return `Votre absence à l'entretien du ${dateFr} à ${heure} a été constatée (motif : ${motif}). Aucune pénalité : vous pouvez être reconvoqué(e) par votre directeur.`;
+};
+
+function getNomCompletCandidat(c: Partial<Candidat>): string {
+  if (c.nomFamille?.trim() && c.prenom?.trim()) {
+    return `${c.prenom.trim()} ${c.nomFamille.trim()}`;
+  }
+  return c.nom?.trim() || '';
+}
+
 /**
  * Recherche les coordonnées complètes du candidat (depuis le stockage ou les données mock)
  */
@@ -91,32 +131,118 @@ export const trouverCandidat = (
 ): { nom: string; tel?: string; email?: string } => {
   if (!candidatId) return { nom: '' };
 
+  let nom = '';
+  let tel = '';
+  let email = '';
+  let matchedCne = '';
+  let matchedCin = '';
+
+  const absorbCandidate = (c: Partial<Candidat> | null | undefined, prioritizeEmail = false) => {
+    if (!c) return;
+    const candidateNom = getNomCompletCandidat(c);
+    if (!nom && candidateNom) nom = candidateNom;
+    if (!tel && c.tel && c.tel.trim()) tel = c.tel.trim();
+    if (!matchedCne && c.cne && c.cne.trim()) matchedCne = c.cne.trim().toUpperCase();
+    if (!matchedCin && c.cin && c.cin.trim()) matchedCin = c.cin.trim().toUpperCase();
+    if (c.email && c.email.trim()) {
+      if (prioritizeEmail || !email) {
+        email = c.email.trim();
+      }
+    }
+  };
+
+  let registeredAccounts: Candidat[] = [];
   try {
-    const raw = localStorage.getItem('usmba_doctorat_candidat');
-    if (raw) {
-      const c: Candidat = JSON.parse(raw);
-      if (c.id === candidatId || (candidatId === 'visiteur-001' && c.nom)) {
-        return { nom: c.nom || '', tel: c.tel, email: c.email };
+    const rawAccounts = localStorage.getItem('usmba_registered_accounts');
+    if (rawAccounts) {
+      const parsed = JSON.parse(rawAccounts);
+      if (Array.isArray(parsed)) registeredAccounts = parsed;
+    }
+  } catch {
+    // fallback
+  }
+
+  try {
+    const rawOverrides = localStorage.getItem('usmba_candidats_overrides');
+    if (rawOverrides) {
+      const overrides: Record<string, Candidat> = JSON.parse(rawOverrides);
+      if (overrides[candidatId]) {
+        absorbCandidate(overrides[candidatId]);
       }
     }
   } catch {
     // fallback
   }
 
-  const found = MOCK_CANDIDATS.find((c) => c.id === candidatId);
-  if (found) {
-    return { nom: found.nom, tel: found.tel, email: found.email };
+  try {
+    const raw = localStorage.getItem('usmba_doctorat_candidat');
+    if (raw) {
+      const c: Candidat = JSON.parse(raw);
+      if (c.id === candidatId || (candidatId === 'visiteur-001' && (c.nom || c.nomFamille))) {
+        absorbCandidate(c);
+      }
+    }
+  } catch {
+    // fallback
   }
 
-  const fallbackNoms: Record<string, string> = {
-    'cand-001': 'Yassine El Fassi',
-    'cand-sara': 'Sara Benjelloun',
-    'cand-omar': 'Omar Idrissi',
-    'cand-salma': 'Salma Alami',
-    'cand-khadija': 'Khadija Tazi',
-  };
+  const accById = registeredAccounts.find((a) => a && a.id === candidatId);
+  if (accById) {
+    absorbCandidate(accById, true);
+  }
 
-  return { nom: fallbackNoms[candidatId] || `Candidat (${candidatId})` };
+  try {
+    const rawAll = localStorage.getItem('usmba_all_candidates');
+    if (rawAll) {
+      const all: Candidat[] = JSON.parse(rawAll);
+      const foundAll = all.find((a) => a.id === candidatId);
+      if (foundAll) {
+        absorbCandidate(foundAll);
+      }
+    }
+  } catch {
+    // fallback
+  }
+
+  const foundMock = MOCK_CANDIDATS.find((c) => c.id === candidatId);
+  if (foundMock) {
+    absorbCandidate(foundMock, !email);
+  }
+
+  // Si l'e-mail manque encore sur l'ID exact, rechercher dans les comptes inscrits par CNE/CIN
+  if (!email && (matchedCne || matchedCin)) {
+    const accByIdentity = registeredAccounts.find(
+      (a) =>
+        a &&
+        a.email &&
+        a.email.trim() &&
+        ((matchedCne && a.cne && a.cne.trim().toUpperCase() === matchedCne) ||
+          (matchedCin && a.cin && a.cin.trim().toUpperCase() === matchedCin))
+    );
+    if (accByIdentity) {
+      absorbCandidate(accByIdentity, true);
+    }
+  }
+
+  try {
+    const rawActive = localStorage.getItem('usmba_active_account');
+    if (rawActive) {
+      const active = JSON.parse(rawActive);
+      if (active && active.id === candidatId) {
+        if (!nom && active.nom) nom = String(active.nom).trim();
+        if (!tel && active.tel) tel = String(active.tel).trim();
+        if (!email && active.email) email = String(active.email).trim();
+      }
+    }
+  } catch {
+    // fallback
+  }
+
+  return {
+    nom,
+    ...(tel ? { tel } : {}),
+    ...(email ? { email } : {}),
+  };
 };
 
 /**
@@ -151,4 +277,34 @@ export const ajouterNotification = (notif: {
     }
   } catch {}
 };
+
+/**
+ * Notifie le(s) directeur(s) de thèse lorsqu'un candidat envoie son dossier complet (type 'info')
+ */
+export const notifierDirecteurDossierEnvoye = (
+  directeurIds: string[],
+  texte: string
+): void => {
+  const uniqueIds = Array.from(new Set(directeurIds.filter(Boolean)));
+  const targets = uniqueIds.length > 0 ? uniqueIds : ['ens-1'];
+  targets.forEach((destinataireId) => {
+    ajouterNotification({
+      destinataireId,
+      texte,
+      type: 'info',
+    });
+  });
+};
+
+/**
+ * Notifie le(s) directeur(s) de thèse lorsqu'un candidat envoie sa candidature complète (type 'info')
+ */
+export const notifierDirecteurCandidatureEnvoyee = (
+  directeurIds: string[],
+  texte: string
+): void => {
+  notifierDirecteurDossierEnvoye(directeurIds, texte);
+};
+
+
 

@@ -87,7 +87,7 @@ service cloud.firestore {
           (
             isOwner(userId)
             && incoming().uid == request.auth.uid
-            && incoming().email == request.auth.token.email
+            && incoming().email.lower() == request.auth.token.email.lower()
             && incoming().role == 'candidat'
             && incoming().createdAt == request.time
             && incoming().updatedAt == request.time
@@ -103,7 +103,7 @@ service cloud.firestore {
         && isVerifiedEmail()
         && isValidUserProfile(incoming())
         && incoming().uid == existing().uid
-        && incoming().email == existing().email
+        && incoming().email.lower() == existing().email.lower()
         && incoming().authProvider == existing().authProvider
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time

@@ -1,25 +1,22 @@
 import React, { useState, useEffect } from 'react';
-import { Send, CheckCircle2, Clock, AlertCircle, FileText, Award, MessageCircle, Mail, Upload, FileCheck, XCircle, AlertTriangle, Eye, ChevronDown } from 'lucide-react';
+import { Send, CheckCircle2, Clock, AlertCircle, FileText, Award, MessageCircle, Mail, Upload, FileCheck, XCircle, AlertTriangle, Eye, ChevronDown, Loader2, RefreshCw } from 'lucide-react';
 import { PV, Notification, Resultat, Compte } from '../types';
 import { getConnectedDirecteurId, getDirectorStructure, enrichirPVLecture, getComptes, formatDateJJMM } from '../data/mockData';
 import { storageService } from '../services/storage';
 import { fr } from '../i18n/fr';
 import { logEvent } from '../utils/journal';
+import { sendAdmissionEmail } from '../emailConfig';
 import {
   normaliserTel,
   lienWhatsApp,
-  lienMail,
   ouvrirLien,
-  isEmailValide,
-  messageResultat,
   trouverCandidat,
-  ajouterNotification,
 } from '../utils/messages';
 
 
 /**
  * Action de publication des résultats d'un PV par le CED.
- * Crée une notification par candidat du PV : « Ton résultat est publié. À faire : consulte l'onglet Entretiens. » avec mention « E-mail simulé ».
+ * Pour chaque candidat "Favorable" (ADMIS) : crée une notification 'action'.
  * Règle stricte : Une seule publication par PV (si publieLe existe, ne rien recréer).
  */
 export const publierResultatsPV = (pvId: string): { success: boolean; message?: string } => {
@@ -44,20 +41,35 @@ export const publierResultatsPV = (pvId: string): { success: boolean; message?: 
     pvs[pvIndex] = targetPv;
     localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(pvs));
 
-    // Crée une Notification par candidat du PV
+    // Crée une Notification par candidat du PV ('action' avec message d'inscription uniquement pour Favorable/ADMIS)
     let currentNotifs: Notification[] = [];
     try {
       const rawNotifs = localStorage.getItem('usmba_notifications');
       if (rawNotifs) currentNotifs = JSON.parse(rawNotifs);
     } catch {}
 
-    const newNotifs: Notification[] = (targetPv.resultats || []).map((res, idx) => ({
-      id: `notif-pub-${targetPv.id}-${res.candidatId}-${Date.now()}-${idx}`,
-      destinataireId: res.candidatId,
-      texte: "Ton résultat est publié. À faire : consulte l'onglet Entretiens.",
-      date: nowIso,
-      lue: false,
-    }));
+    const newNotifs: Notification[] = (targetPv.resultats || []).map((res, idx) => {
+      if (res.resultat === 'ADMIS') {
+        return {
+          id: `notif-pub-${targetPv.id}-${res.candidatId}-${Date.now()}-${idx}`,
+          destinataireId: res.candidatId,
+          texte: fr.cedSeances.messageAdmission,
+          date: nowIso,
+          lue: false,
+          type: 'action',
+          actionLabel: fr.notifications.btnAllerEntretiens,
+          actionTab: 'entretiens',
+        };
+      }
+      return {
+        id: `notif-pub-${targetPv.id}-${res.candidatId}-${Date.now()}-${idx}`,
+        destinataireId: res.candidatId,
+        texte: fr.notifications.resultatPublie,
+        date: nowIso,
+        lue: false,
+        type: 'info',
+      };
+    });
 
     const updatedNotifs = [...newNotifs, ...currentNotifs];
     localStorage.setItem('usmba_notifications', JSON.stringify(updatedNotifs));
@@ -81,6 +93,7 @@ export const CedSeances: React.FC = () => {
   const [refusModalPvId, setRefusModalPvId] = useState<string | null>(null);
   const [refusMotif, setRefusMotif] = useState('');
   const [refusError, setRefusError] = useState<string | null>(null);
+  const [sendingEmailMap, setSendingEmailMap] = useState<Record<string, boolean>>({});
 
   const getConnectedStructureName = (): string => {
     try {
@@ -182,7 +195,97 @@ export const CedSeances: React.FC = () => {
 
   const connectedDirecteurId = getConnectedDirecteurId();
 
-  const handlePublier = (pvId: string) => {
+  const formatDateJJMMAAAA = (isoString?: string): string => {
+    if (!isoString) return '';
+    try {
+      return new Date(isoString).toLocaleDateString('fr-FR', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+      });
+    } catch {
+      return isoString;
+    }
+  };
+
+  const updatePvResultatTracking = (
+    pvId: string,
+    candidatId: string,
+    patch: Partial<Resultat>
+  ) => {
+    try {
+      const rawPvs = localStorage.getItem('usmba_doctorat_pvs');
+      const allPvs: PV[] = rawPvs ? JSON.parse(rawPvs) : [];
+      const pvIdx = allPvs.findIndex((p) => p.id === pvId);
+      if (pvIdx === -1) return;
+      allPvs[pvIdx] = {
+        ...allPvs[pvIdx],
+        resultats: (allPvs[pvIdx].resultats || []).map((r) =>
+          r.candidatId === candidatId ? { ...r, ...patch } : r
+        ),
+      };
+      localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(allPvs));
+      setPvs(allPvs.filter((p) => !p.remplaceePar).map(enrichirPVLecture));
+      window.dispatchEvent(new CustomEvent('usmba_pvs_updated'));
+    } catch {
+      // safe fallback
+    }
+  };
+
+  const sendRealEmailForCandidate = async (pvId: string, res: Resultat) => {
+    if (res.resultat !== 'ADMIS') return;
+    const key = `${pvId}:${res.candidatId}`;
+    setSendingEmailMap((prev) => ({ ...prev, [key]: true }));
+    try {
+      const candidatInfo = trouverCandidat(res.candidatId);
+      const candidatNom = getCandidatNomComplet(res.candidatId);
+      const result = await sendAdmissionEmail({
+        toEmail: candidatInfo.email || '',
+        toName: candidatNom,
+        message: fr.cedSeances.messageAdmission,
+      });
+
+      const nowIso = new Date().toISOString();
+      if (result.ok) {
+        updatePvResultatTracking(pvId, res.candidatId, {
+          emailStatut: 'envoye',
+          emailErreur: undefined,
+          emailEnvoyeLe: nowIso,
+        });
+        logEvent(
+          { id: 'dir-ced', nom: 'Directeur de structure', role: 'directeur_ced' },
+          fr.journalActions.admissionNotifiee,
+          candidatNom,
+          `E-mail • ${formatDateJJMMAAAA(nowIso)} • ${fr.cedSeances.decisionAdmis}`
+        );
+      } else {
+        updatePvResultatTracking(pvId, res.candidatId, {
+          emailStatut: 'echec',
+          emailErreur: result.error || fr.cedSeances.emailNetworkError,
+        });
+      }
+    } finally {
+      setSendingEmailMap((prev) => ({ ...prev, [key]: false }));
+    }
+  };
+
+  const handleOpenWhatsAppAdmission = (pvId: string, res: Resultat, waUrl: string) => {
+    if (res.resultat !== 'ADMIS') return;
+    ouvrirLien(waUrl);
+    const nowIso = new Date().toISOString();
+    const candidatNom = getCandidatNomComplet(res.candidatId);
+    updatePvResultatTracking(pvId, res.candidatId, {
+      whatsappOuvertLe: nowIso,
+    });
+    logEvent(
+      { id: 'dir-ced', nom: 'Directeur de structure', role: 'directeur_ced' },
+      fr.journalActions.admissionNotifiee,
+      candidatNom,
+      `WhatsApp • ${formatDateJJMMAAAA(nowIso)} • ${fr.cedSeances.decisionAdmis}`
+    );
+  };
+
+  const handlePublier = async (pvId: string) => {
     const curPv = pvs.find((p) => p.id === pvId);
     if (connectedDirecteurId && curPv?.directeurId === connectedDirecteurId) {
       setMessage({ type: 'error', text: fr.cedSeances.conflitDirecteur });
@@ -192,6 +295,8 @@ export const CedSeances: React.FC = () => {
     if (res.success) {
       setMessage({ type: 'success', text: fr.cedSeances.notifSuccess });
       loadData();
+      const admisList = (curPv?.resultats || []).filter((r) => r.resultat === 'ADMIS');
+      await Promise.all(admisList.map((r) => sendRealEmailForCandidate(pvId, r)));
     } else {
       setMessage({ type: 'error', text: res.message || 'Échec de la publication' });
     }
@@ -521,66 +626,104 @@ export const CedSeances: React.FC = () => {
                       {pv.resultats.map((res, i) => {
                         const candidatNom = getCandidatNomComplet(res.candidatId);
                         const dec = formatDecision(res.resultat);
+                        const isAdmis = res.resultat === 'ADMIS';
                         const candidatInfo = trouverCandidat(res.candidatId);
-                        const resultatText = messageResultat();
                         const hasValidTel = Boolean(candidatInfo.tel && normaliserTel(candidatInfo.tel));
-                        const telError = !candidatInfo.tel ? fr.messages.missingPhone : !normaliserTel(candidatInfo.tel) ? fr.messages.invalidPhone : null;
-                        const hasValidEmail = Boolean(candidatInfo.email && isEmailValide(candidatInfo.email));
-                        const emailError = !candidatInfo.email ? fr.messages.missingEmail : !isEmailValide(candidatInfo.email) ? fr.messages.invalidEmail : null;
-                        const waUrl = lienWhatsApp(candidatInfo.tel, resultatText);
-                        const mailUrl = lienMail(candidatInfo.email, fr.messages.resultatSubject, resultatText);
+                        const waUrl = isAdmis
+                          ? lienWhatsApp(candidatInfo.tel, fr.cedSeances.messageAdmission)
+                          : null;
+                        const isSendingEmail = Boolean(sendingEmailMap[`${pv.id}:${res.candidatId}`]);
 
                         return (
                           <div
                             key={i}
-                            className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-50 transition-colors"
+                            className="p-3.5 flex flex-col gap-2.5 hover:bg-slate-50 transition-colors"
                           >
-                            <div className="space-y-0.5">
-                              <p className="text-xs font-bold text-slate-900">{candidatNom}</p>
-                              {isPublished && (
-                                <p className="text-[11px] text-slate-500 font-mono">
-                                  {candidatInfo.tel || fr.messages.missingPhone} • {candidatInfo.email || fr.messages.missingEmail}
-                                </p>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold border ${dec.className}`}>
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                              <div className="space-y-0.5">
+                                <p className="text-xs font-bold text-slate-900">{candidatNom}</p>
+                                {isPublished && (
+                                  <p className="text-[11px] text-slate-500 font-mono">
+                                    {candidatInfo.tel || fr.messages.missingPhone} • {candidatInfo.email || fr.messages.missingEmail}
+                                  </p>
+                                )}
+                              </div>
+
+                              <span className={`inline-flex items-center self-start sm:self-auto px-2.5 py-1 rounded-full text-xs font-bold border ${dec.className}`}>
                                 {dec.label}
                               </span>
+                            </div>
 
-                              {isPublished && (
-                                <div className="flex items-center gap-1.5 ml-1">
+                            {/* Actions réelles d'admission réservées uniquement aux candidats « Favorable » (ADMIS) */}
+                            {isPublished && isAdmis && (
+                              <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 pt-2 border-t border-slate-100">
+                                {/* Statut d'envoi e-mail réel + bouton Renvoyer si échec */}
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  {isSendingEmail ? (
+                                    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-sky-700">
+                                      <Loader2 size={14} className="animate-spin shrink-0" />
+                                      <span>{fr.cedSeances.emailSendingLabel}</span>
+                                    </span>
+                                  ) : res.emailStatut === 'envoye' ? (
+                                    <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700">
+                                      <CheckCircle2 size={14} className="shrink-0" />
+                                      <span>{fr.cedSeances.emailSentLabel}</span>
+                                    </span>
+                                  ) : (
+                                    <>
+                                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-rose-700">
+                                        <AlertCircle size={14} className="shrink-0" />
+                                        <span>
+                                          {fr.cedSeances.emailFailedPrefix}{' '}
+                                          {res.emailErreur || fr.cedSeances.emailNetworkError}
+                                        </span>
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => sendRealEmailForCandidate(pv.id, res)}
+                                        className="min-h-[34px] px-2.5 py-1 rounded-lg text-xs font-semibold inline-flex items-center gap-1 bg-sky-600 hover:bg-sky-700 text-white shadow-xs cursor-pointer active:scale-98 transition-colors"
+                                      >
+                                        <RefreshCw size={12} />
+                                        <span>{fr.cedSeances.btnRenvoyerEmail}</span>
+                                      </button>
+                                    </>
+                                  )}
+                                </div>
+
+                                {/* Bouton WhatsApp réel (ou grisé avec raison écrite) + horodatage d'ouverture */}
+                                <div className="flex flex-col items-start sm:items-end gap-1">
                                   <button
                                     type="button"
-                                    disabled={!hasValidTel}
-                                    onClick={() => waUrl && ouvrirLien(waUrl)}
-                                    title={telError || ''}
-                                    className={`min-h-[36px] px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors ${
-                                      hasValidTel
+                                    disabled={!hasValidTel || !waUrl}
+                                    onClick={() =>
+                                      hasValidTel && waUrl && handleOpenWhatsAppAdmission(pv.id, res, waUrl)
+                                    }
+                                    className={`min-h-[36px] px-3 py-1.5 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition-colors ${
+                                      hasValidTel && waUrl
                                         ? 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer shadow-xs active:scale-98'
-                                        : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
+                                        : 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
                                     }`}
                                   >
                                     <MessageCircle size={13} />
-                                    <span>WhatsApp</span>
+                                    <span>{fr.cedSeances.btnEnvoyerWhatsapp}</span>
                                   </button>
-                                  <button
-                                    type="button"
-                                    disabled={!hasValidEmail}
-                                    onClick={() => mailUrl && ouvrirLien(mailUrl)}
-                                    title={emailError || ''}
-                                    className={`min-h-[36px] px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors ${
-                                      hasValidEmail
-                                        ? 'bg-sky-600 hover:bg-sky-700 text-white cursor-pointer shadow-xs active:scale-98'
-                                        : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
-                                    }`}
-                                  >
-                                    <Mail size={13} />
-                                    <span>E-mail</span>
-                                  </button>
+                                  {!hasValidTel && (
+                                    <p className="text-[11px] font-medium text-amber-800">
+                                      {fr.cedSeances.whatsappMissingReason}
+                                    </p>
+                                  )}
+                                  {hasValidTel && res.whatsappOuvertLe && (
+                                    <p className="text-[11px] font-medium text-emerald-700 inline-flex items-center gap-1">
+                                      <MessageCircle size={11} className="shrink-0" />
+                                      <span>
+                                        {fr.cedSeances.whatsappOpenedOn}{' '}
+                                        {formatDateJJMMAAAA(res.whatsappOuvertLe)}
+                                      </span>
+                                    </p>
+                                  )}
                                 </div>
-                              )}
-                            </div>
+                              </div>
+                            )}
                           </div>
                         );
                       })}

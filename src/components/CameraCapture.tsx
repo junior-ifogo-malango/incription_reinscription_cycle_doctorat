@@ -193,6 +193,17 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
     onClose();
   };
 
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        stopStream();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+
   const stepLabel = isDualMode
     ? dualStepLabels
       ? dualStepLabels[dualStep]

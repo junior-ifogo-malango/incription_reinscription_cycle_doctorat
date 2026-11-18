@@ -20,7 +20,7 @@ export const INITIAL_ENSEIGNANTS: Enseignant[] = [
   {
     id: 'ens-1',
     nom: 'Pr. Karim El Amrani',
-    email: 'prof@demo.ma',
+    email: 'directeurthese@gmail.com',
     etablissement: 'Faculté des Sciences Dhar El Mehraz (FSDM)',
     structure: 'LISAC - FSDM Fès',
     role: 'enseignant',
@@ -28,35 +28,35 @@ export const INITIAL_ENSEIGNANTS: Enseignant[] = [
   {
     id: 'ens-2',
     nom: 'Pr. Amina Bennani',
-    email: 'a.bennani@usmba.ac.ma',
+    email: '',
     etablissement: 'Faculté des Sciences et Techniques (FST Fès)',
     structure: 'Laboratoire Génie Industriel & IA Appliquée',
   },
   {
     id: 'ens-3',
     nom: 'Pr. Mehdi Berrada',
-    email: 'm.berrada@usmba.ac.ma',
+    email: '',
     etablissement: 'Faculté des Sciences Juridiques, Économiques et Sociales (FSJES)',
     structure: 'Laboratoire de Recherche en Économie et Management Durable',
   },
   {
     id: 'ens-4',
     nom: 'Pr. Fatima Chraibi',
-    email: 'f.chraibi@usmba.ac.ma',
+    email: '',
     etablissement: 'Faculté de Médecine, de Pharmacie et de Médecine Dentaire',
     structure: 'Laboratoire de Biotechnologie et Pharmacologie Médicale',
   },
   {
     id: 'ens-5',
     nom: 'Pr. Hassan Tahiri',
-    email: 'h.tahiri@usmba.ac.ma',
+    email: '',
     etablissement: 'Faculté des Lettres et des Sciences Humaines Saïs',
     structure: 'Laboratoire Patrimoine Fassi et Humanités Numériques',
   },
   {
     id: 'ens-6',
     nom: 'Pr. Zineb Idrissi',
-    email: 'z.idrissi@usmba.ac.ma',
+    email: '',
     etablissement: 'École Nationale des Sciences Appliquées (ENSA Fès)',
     structure: 'Laboratoire Énergies Renouvelables et Matériaux Avancés',
   },
@@ -233,19 +233,19 @@ export const INITIAL_SUJETS: Sujet[] = [
 export const INITIAL_PIECES_YASSINE: Piece[] = [
   {
     type: 'CIN',
-    statut: 'declaree',
+    statut: 'absente',
   },
   {
     type: 'DIPLOME',
-    statut: 'declaree',
+    statut: 'absente',
   },
   {
     type: 'RELEVES',
-    statut: 'declaree',
+    statut: 'absente',
   },
   {
     type: 'CV',
-    statut: 'declaree',
+    statut: 'absente',
   },
 ];
 
@@ -273,245 +273,48 @@ export const INITIAL_CANDIDAT: Candidat = {
 };
 
 export const DEMO_CANDIDAT_YASSINE: Candidat = {
-  id: 'cand-001',
-  nom: 'Yassine El Fassi',
-  cne: 'N138249871',
-  cin: 'CD789123',
-  email: 'yassine@demo.ma',
-  motDePasse: 'demo1234',
+  id: 'cand-etudiant',
+  nom: '',
+  cne: '',
+  cin: '',
+  email: 'etudiant@gmail.com',
+  motDePasse: '1234',
   role: 'candidat',
-  tel: '0661234567',
-  panier: ['suj-07', 'suj-13'],
-  candidatures: ['suj-01', 'suj-04'],
-  candidaturesStatuts: {
-    'suj-01': 'deposee',
-    'suj-04': 'deposee',
-  },
+  tel: '',
+  panier: [],
+  panierInteret: [],
+  candidatures: [],
+  interets: [],
+  candidaturesStatuts: {},
   compteCree: true,
+  verificationStatut: 'verifie',
   dossier: {
     casParticulier: false,
     guichet: false,
   },
-  cursus: {
-    diplome: 'Master Sciences et Techniques',
-    etablissement: 'Faculté des Sciences et Techniques (FST Fès)',
-    anneeObtention: 2026,
-    mention: 'Bien',
-  },
   pieces: INITIAL_PIECES_YASSINE,
 };
 
-export const INITIAL_PIECES: Piece[] = [
-  {
-    id: 'piece-1',
-    candidatId: 'cand-001',
-    type: 'cin',
-    statut: 'declaree',
-    dateMaj: '2026-10-20',
-  },
-  {
-    id: 'piece-2',
-    candidatId: 'cand-001',
-    type: 'diplome',
-    statut: 'prouvee',
-    fichier: 'master_sciences_techniques_usmba.pdf',
-    source: 'apogee',
-    dateMaj: '2026-10-21',
-  },
-  {
-    id: 'piece-3',
-    candidatId: 'cand-001',
-    type: 'releves',
-    statut: 'declaree',
-    fichier: 'releves_notes_m1_m2_signes.pdf',
-    source: 'televersement',
-    dateMaj: '2026-10-22',
-  },
-  {
-    id: 'piece-4',
-    candidatId: 'cand-001',
-    type: 'cv',
-    statut: 'declaree',
-    fichier: 'cv_academique_yassine_elfassi.pdf',
-    source: 'televersement',
-    dateMaj: '2026-10-22',
-  },
-];
+export const INITIAL_PIECES: Piece[] = [];
 
 export const INITIAL_DOSSIER: Dossier = {
-  candidatId: 'cand-001',
+  candidatId: 'cand-etudiant',
   casParticulier: false,
   motif: '',
-  consentementApogee: true,
+  consentementApogee: false,
   statutGlobal: 'en_cours',
-};
-
-export const CANDIDAT_SARA: Candidat = {
-  id: 'cand-sara',
-  nom: 'Sara Benjelloun',
-  cne: 'F134567891',
-  cin: 'CD812345',
-  email: 'sara.benjelloun@demo.ma',
-  tel: '0612345678',
-  panier: ['suj-01'],
-  candidatures: ['suj-01'],
-  candidaturesStatuts: { 'suj-01': 'retenue' },
-  compteCree: true,
-};
-
-export const CANDIDAT_OMAR: Candidat = {
-  id: 'cand-omar',
-  nom: 'Omar Idrissi',
-  cne: 'N142987654',
-  cin: 'CD954321',
-  email: 'omar.idrissi@demo.ma',
-  tel: '0698765432',
-  panier: ['suj-01'],
-  candidatures: ['suj-01'],
-  candidaturesStatuts: { 'suj-01': 'retenue' },
-  compteCree: true,
 };
 
 export const DEMO_AGENT_KARIMA = {
   id: 'agent-001',
   nom: 'Karima Tazi',
-  email: 'karima.tazi@usmba.ac.ma',
+  email: '',
   role: 'agent' as const,
 };
 
-export const CANDIDAT_SALMA: Candidat = {
-  id: 'cand-salma',
-  nom: 'Salma Alami',
-  cne: 'N149021873',
-  cin: 'CD654321',
-  email: 'salma.alami@demo.ma',
-  tel: '0612',
-  panier: ['suj-04'],
-  candidatures: ['suj-04'],
-  candidaturesStatuts: { 'suj-04': 'retenue' },
-  compteCree: true,
-  dossier: {
-    casParticulier: false,
-    guichet: true,
-    guichetStatut: 'a_contacter',
-    journalGuichet: [
-      {
-        date: '2026-10-24T09:00:00Z',
-        agent: 'Candidat (Salma Alami)',
-        action: 'Demande du candidat',
-      },
-    ],
-  },
-  pieces: [
-    { type: 'CIN', statut: 'declaree' },
-    { type: 'DIPLOME', statut: 'absente' },
-    { type: 'RELEVES', statut: 'absente' },
-    { type: 'CV', statut: 'absente' },
-  ],
-};
+export const MOCK_CANDIDATS: Candidat[] = [DEMO_CANDIDAT_YASSINE];
 
-export const CANDIDAT_KHADIJA: Candidat = {
-  id: 'cand-khadija',
-  nom: 'Khadija Tazi',
-  cne: 'M142078911',
-  cin: 'CD321987',
-  email: 'khadija.tazi@demo.ma',
-  tel: '0665432198',
-  panier: ['suj-03'],
-  candidatures: ['suj-03'],
-  candidaturesStatuts: { 'suj-03': 'retenue' },
-  compteCree: true,
-};
-
-export const MOCK_CANDIDATS: Candidat[] = [
-  DEMO_CANDIDAT_YASSINE,
-  CANDIDAT_SARA,
-  CANDIDAT_OMAR,
-  CANDIDAT_SALMA,
-  CANDIDAT_KHADIJA,
-];
-
-// Créneaux d'entretien simulés (avec un créneau réservé > 48h pour tester l'alerte CED du module 5)
-export const INITIAL_CRENEAUX: Creneau[] = [
-  {
-    id: 'cr-201',
-    enseignantId: 'ens-1',
-    date: '2026-11-10',
-    heure: '10:00',
-    lieu: 'Salle des Thèses 1 - FSDM Fès',
-    candidatId: 'cand-sara',
-    statut: 'confirme',
-    dateReservation: '2026-10-25T09:00:00Z',
-    dateConfirmation: '2026-10-25T10:30:00Z',
-  },
-  {
-    id: 'cr-202',
-    enseignantId: 'ens-1',
-    date: '2026-11-10',
-    heure: '11:30',
-    lieu: 'Salle des Thèses 1 - FSDM Fès',
-    candidatId: 'cand-omar',
-    statut: 'confirme',
-    dateReservation: '2026-10-25T09:15:00Z',
-    dateConfirmation: '2026-10-25T11:00:00Z',
-  },
-  {
-    id: 'cr-101',
-    enseignantId: 'ens-1',
-    date: '2026-11-04',
-    heure: '09:30',
-    lieu: 'Salle des Thèses 1 - FSDM Fès',
-    candidatId: 'cand-salma',
-    statut: 'reserve',
-    dateReservation: '2026-10-22T08:00:00Z', // Plus de 48h en arrière : test d'alerte CED
-  },
-  {
-    id: 'cr-102',
-    enseignantId: 'ens-1',
-    date: '2026-11-04',
-    heure: '11:00',
-    lieu: 'Salle des Thèses 1 - FSDM Fès',
-    statut: 'libre',
-  },
-  {
-    id: 'cr-103',
-    enseignantId: 'ens-1',
-    date: '2026-11-05',
-    heure: '14:30',
-    lieu: 'Salle des Thèses 1 - FSDM Fès',
-    candidatId: 'cand-khadija',
-    statut: 'confirme',
-    dateReservation: '2026-10-24T10:00:00Z',
-    dateConfirmation: '2026-10-24T11:00:00Z',
-  },
-  {
-    id: 'cr-104',
-    enseignantId: 'ens-1',
-    date: '2026-11-05',
-    heure: '16:00',
-    lieu: 'Salle des Thèses 1 - FSDM Fès',
-    statut: 'libre',
-  },
-  {
-    id: 'cr-105',
-    enseignantId: 'ens-3',
-    date: '2026-11-06',
-    heure: '10:00',
-    lieu: 'Visioconférence Google Meet (Lien CED)',
-    candidatId: 'cand-khadija',
-    statut: 'confirme',
-    dateReservation: '2026-10-24T14:00:00Z',
-    dateConfirmation: '2026-10-24T16:00:00Z',
-  },
-  {
-    id: 'cr-106',
-    enseignantId: 'ens-4',
-    date: '2026-11-07',
-    heure: '09:00',
-    lieu: 'Département Biotechnologie - FMP Fès',
-    statut: 'libre',
-  },
-];
+export const INITIAL_CRENEAUX: Creneau[] = [];
 
 export const ApogeeFictif: Record<string, string> = {
   'N138249871': 'Master en Informatique, USMBA 2023',
@@ -564,117 +367,15 @@ export const APOGEE_FICTIF_DB: Record<string, ApogeeFictifEntry> = {
 export const DEMO_DOCTORANT_NADIA: Doctorant = {
   id: 'doc-nadia',
   nom: 'Nadia Alaoui',
-  email: 'nadia.alaoui@usmba.ac.ma',
-  tel: '0612345678',
+  email: '',
+  tel: '',
   annee: 2,
   encadrantId: 'ens-1',
   sujetTitre: 'Intelligence Artificielle Distribuée pour l’Optimisation Énergétique des Bâtiments Intelligents',
   structure: 'Laboratoire LISAC - Faculté des Sciences Dhar El Mehraz (FSDM)',
 };
 
-export const INITIAL_RAPPORTS: Rapport[] = [
-  // 1. Rapport de Nadia Alaoui (Doctorante 2e année) : statut 'soumis' (> 48h)
-  {
-    id: 'rap-nadia-2026',
-    doctorantId: 'doc-nadia',
-    encadrantId: 'ens-1',
-    annee: 2,
-    titre: 'Intelligence Artificielle Distribuée pour l’Optimisation Énergétique des Bâtiments Intelligents',
-    avancement: 'Finalisation de la revue de la littérature et validation expérimentale du modèle prédictif multi-agents sur banc d\'essai. Les premiers résultats indiquent une réduction de 18% de la consommation de pointe.',
-    publications: [
-      {
-        titre: 'Multi-Agent Deep Reinforcement Learning for Microgrid Management',
-        doi: '10.1109/TSE.2026.0142',
-      },
-    ],
-    communications: [
-      {
-        titre: 'Conférence Nationale sur les Réseaux Intelligents (FSDM Fès)',
-        lieu: 'Fès',
-      },
-    ],
-    formationsHeures: 35,
-    perspectives: 'Déploiement à grande échelle sur le campus universitaire et soumission d\'un article de revue internationale Q1.',
-    aucuneActivite: false,
-    statut: 'soumis',
-    soumisLe: '2026-10-25T08:30:00Z', // Plus de 48h
-    commentaires: [],
-    chronologie: [
-      {
-        date: '25/10/2026',
-        acteur: 'Doctorante (Nadia Alaoui)',
-        action: 'Dépôt et soumission du rapport d’activité annuel (2ᵉ année)',
-      },
-    ],
-  },
-  // 2. Rapport de Tariq Mansouri (Doctorant 3e année) : statut 'avis_comite' (> 48h) avec 1 favorable et 2 en attente
-  {
-    id: 'rap-tariq-2026',
-    doctorantId: 'doc-tariq',
-    encadrantId: 'ens-1',
-    annee: 3,
-    titre: 'Matériaux Nanostructurés pour la Captation et le Stockage du Carbone Industriel',
-    avancement: 'Synthèse des zéolithes mésoporeuses et tests d\'adsorption sous différentes conditions de pression et de température.',
-    publications: [
-      {
-        titre: 'Advanced Nanomaterials for CO2 Sequestration in Continental Environments',
-        doi: '10.1016/j.carbon.2025.109',
-      },
-    ],
-    communications: [
-      {
-        titre: 'Congrès International des Matériaux Avancés et Énergies Vertes',
-        lieu: 'Rabat',
-      },
-    ],
-    formationsHeures: 42,
-    perspectives: 'Rédaction du manuscrit de thèse et soutenance prévue au printemps 2027.',
-    aucuneActivite: false,
-    statut: 'avis_comite',
-    soumisLe: '2026-10-24T10:00:00Z', // Plus de 48h
-    comite: [
-      {
-        membre: 'Pr. Mustapha Bennani (Rapporteur 1)',
-        code: 'COMITE77K92M',
-        avis: 'FAVORABLE',
-        commentaire: 'Travail d\'excellente facture, objectifs scientifiques largement atteints.',
-        votéLe: '2026-10-26T14:00:00Z',
-      },
-      {
-        membre: 'Pr. Leila Chraibi (Expert 2)',
-        code: 'COMITE88P44X',
-      },
-      {
-        membre: 'Pr. Rachid Tahiri (Laboratoire 3)',
-        code: 'COMITE99W66Q',
-      },
-    ],
-    commentaires: [
-      {
-        auteur: 'Pr. Karim El Amrani',
-        date: '25/10/2026',
-        texte: 'Très bonne progression. Je valide le rapport pour avis du comité de thèse.',
-      },
-    ],
-    chronologie: [
-      {
-        date: '24/10/2026',
-        acteur: 'Doctorant (Tariq Mansouri)',
-        action: 'Dépôt et soumission du rapport d’activité annuel (3ᵉ année)',
-      },
-      {
-        date: '25/10/2026',
-        acteur: 'Pr. Karim El Amrani (Encadrant)',
-        action: 'Validation du rapport (vaut signature) et saisine du comité',
-      },
-      {
-        date: '26/10/2026',
-        acteur: 'Pr. Mustapha Bennani (Membre 1)',
-        action: 'Avis FAVORABLE émis avec mention',
-      },
-    ],
-  },
-];
+export const INITIAL_RAPPORTS: Rapport[] = [];
 
 /* ========================================================================= */
 /* ÉCHÉANCES ET DATE DE DÉMO (PARCOURS CANDIDAT)                             */
@@ -764,8 +465,8 @@ export const INITIAL_COMPTES: Compte[] = [
   {
     id: 'cpt-admin-1',
     nom: 'Service Scolarité',
-    email: 'admin@demo.ma',
-    motDePasse: 'demo1234',
+    email: 'admin@gmail.com',
+    motDePasse: '1234',
     role: 'admin',
     structure: 'Présidence USMBA - Pôle Scolarité & Doctorat',
     etablissement: 'Université Sidi Mohamed Ben Abdellah',
@@ -773,57 +474,433 @@ export const INITIAL_COMPTES: Compte[] = [
     dateCreation: '2026-10-01',
   },
   {
-    id: 'cpt-karim-structure',
+    id: 'ens-1',
     nom: 'Pr. Karim El Amrani',
-    email: 'karim.structure@demo.ma',
-    motDePasse: 'demo1234',
+    email: 'directeurthese@gmail.com',
+    motDePasse: '1234',
     role: 'enseignant',
-    roles: ['directeur', 'structure'],
-    structure: 'Laboratoire LISAC & Direction CED',
+    roles: ['directeur'],
+    structure: 'LISAC - FSDM Fès',
     etablissement: 'Faculté des Sciences Dhar El Mehraz (FSDM)',
     statut: 'actif',
-    dateCreation: '2026-11-07',
+    dateCreation: '2026-10-01',
     enseignantId: 'ens-1',
   },
   {
-    id: 'cpt-ced-demo',
-    nom: 'Direction CED (Structure)',
-    email: 'ced@demo.ma',
-    motDePasse: 'demo1234',
+    id: 'ced',
+    nom: 'Directeur de structure',
+    email: 'directeurstructure@gmail.com',
+    motDePasse: '1234',
     role: 'directeur_ced',
     roles: ['structure'],
     structure: 'LISAC - FSDM Fès',
     etablissement: 'Faculté des Sciences Dhar El Mehraz (FSDM)',
     statut: 'actif',
-    dateCreation: '2026-11-01',
-  },
-  {
-    id: 'cpt-att-1',
-    nom: 'Pr. Nadia Berrada',
-    email: 'n.berrada@demo.ma',
-    motDePasse: 'demo1234',
-    role: 'enseignant',
-    roles: ['directeur'],
-    structure: 'Laboratoire Génie Industriel & IA Appliquée',
-    etablissement: 'Faculté des Sciences et Techniques (FST Fès)',
-    statut: 'en_attente',
-    dateCreation: '2026-11-01',
-  },
-  {
-    id: 'cpt-att-2',
-    nom: 'M. Rachid Lahlou',
-    email: 'r.lahlou@demo.ma',
-    motDePasse: 'demo1234',
-    role: 'directeur_ced',
-    roles: ['structure'],
-    structure: 'Centre d’Études Doctorales USMBA',
-    etablissement: 'Présidence USMBA',
-    statut: 'en_attente',
-    dateCreation: '2026-11-02',
+    dateCreation: '2026-10-01',
   },
 ];
 
 export const STORAGE_KEY_COMPTES = 'gcd_comptes';
+const MIGRATION_4COMPTES_KEY = 'usmba_migration_4comptes_v1';
+const CLEANUP_ALAOUI_TARIQ_KEY = 'usmba_cleanup_alaoui_tariq_v1';
+
+export function migrateTestAccountsIfNeeded(): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    if (localStorage.getItem(MIGRATION_4COMPTES_KEY)) return;
+
+    localStorage.setItem(STORAGE_KEY_COMPTES, JSON.stringify(INITIAL_COMPTES));
+    localStorage.setItem('usmba_doctorat_enseignants', JSON.stringify(INITIAL_ENSEIGNANTS));
+    localStorage.setItem('usmba_registered_accounts', JSON.stringify([]));
+    localStorage.setItem('usmba_candidats_overrides', JSON.stringify({}));
+    localStorage.setItem('usmba_all_candidates', JSON.stringify([]));
+    localStorage.setItem('usmba_doctorat_candidat', JSON.stringify(INITIAL_CANDIDAT));
+    localStorage.setItem('usmba_doctorat_pieces', JSON.stringify(INITIAL_PIECES));
+    localStorage.setItem('usmba_doctorat_dossier', JSON.stringify(INITIAL_DOSSIER));
+    localStorage.setItem('usmba_doctorat_creneaux', JSON.stringify([]));
+    localStorage.setItem('usmba_doctorat_pvs', JSON.stringify([]));
+    localStorage.setItem('usmba_doctorat_resultats', JSON.stringify([]));
+    localStorage.setItem('usmba_seances_statuts', JSON.stringify({}));
+    localStorage.setItem('usmba_commission_pv_downloaded', JSON.stringify({}));
+    localStorage.setItem('usmba_commission_seance_membres', JSON.stringify({}));
+    localStorage.setItem('usmba_notifications', JSON.stringify([]));
+    localStorage.setItem('usmba_doctorat_rapports', JSON.stringify([]));
+    localStorage.setItem('usmba_rapports', JSON.stringify([]));
+    localStorage.setItem('usmba_doctorat_role', 'candidat');
+    localStorage.removeItem('usmba_active_account');
+    localStorage.setItem(MIGRATION_4COMPTES_KEY, 'true');
+  } catch {
+    // safe fallback
+  }
+}
+
+export function cleanupAlaouiTariqIfNeeded(): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    if (localStorage.getItem(CLEANUP_ALAOUI_TARIQ_KEY)) return;
+
+    const TARGET_EMAIL = 'alaouitariq@gmail.com';
+    const isTargetMatch = (c: Partial<Candidat> | null | undefined): boolean => {
+      if (!c) return false;
+      const email = (c.email || '').trim().toLowerCase();
+      if (email === TARGET_EMAIL) return true;
+      const fullNom = `${c.nom || ''} ${c.prenom || ''} ${c.nomFamille || ''}`.toLowerCase();
+      return fullNom.includes('alaoui') && fullNom.includes('tariq');
+    };
+
+    const buildEmptyAccount = (acc: Candidat): Candidat => ({
+      id: acc.id,
+      nom: '',
+      email: acc.email || TARGET_EMAIL,
+      tel: '',
+      ...(acc.motDePasse ? { motDePasse: acc.motDePasse } : {}),
+      role: 'candidat',
+      compteCree: true,
+      verificationStatut: acc.verificationStatut || 'verifie',
+      panier: [],
+      panierInteret: [],
+      candidatures: [],
+      interets: [],
+      candidaturesStatuts: {},
+      dossier: { casParticulier: false, guichet: false },
+      pieces: INITIAL_PIECES_YASSINE.map((p) => ({ type: p.type, statut: 'absente' as const })),
+    });
+
+    const targetIds = new Set<string>();
+
+    // 1. Registered accounts (keep account with empty profile)
+    try {
+      const rawAcc = localStorage.getItem('usmba_registered_accounts');
+      if (rawAcc) {
+        const accounts: Candidat[] = JSON.parse(rawAcc);
+        if (Array.isArray(accounts)) {
+          let changed = false;
+          const nextAcc = accounts.map((acc) => {
+            if (isTargetMatch(acc)) {
+              if (acc.id) targetIds.add(acc.id);
+              changed = true;
+              return buildEmptyAccount(acc);
+            }
+            return acc;
+          });
+          if (changed) {
+            localStorage.setItem('usmba_registered_accounts', JSON.stringify(nextAcc));
+          }
+        }
+      }
+    } catch {}
+
+    // 2. Collect any matching IDs from other candidate stores
+    try {
+      const rawCur = localStorage.getItem('usmba_doctorat_candidat');
+      if (rawCur) {
+        const cur: Candidat = JSON.parse(rawCur);
+        if (isTargetMatch(cur) && cur.id) targetIds.add(cur.id);
+      }
+    } catch {}
+
+    try {
+      const rawAct = localStorage.getItem('usmba_active_account');
+      if (rawAct) {
+        const act: Candidat = JSON.parse(rawAct);
+        if (isTargetMatch(act) && act.id) targetIds.add(act.id);
+      }
+    } catch {}
+
+    try {
+      const rawOv = localStorage.getItem('usmba_candidats_overrides');
+      if (rawOv) {
+        const overrides: Record<string, Candidat> = JSON.parse(rawOv);
+        Object.entries(overrides).forEach(([k, v]) => {
+          if (isTargetMatch(v)) targetIds.add(v.id || k);
+        });
+      }
+    } catch {}
+
+    try {
+      const rawAll = localStorage.getItem('usmba_all_candidates');
+      if (rawAll) {
+        const all: Candidat[] = JSON.parse(rawAll);
+        if (Array.isArray(all)) {
+          all.forEach((c) => {
+            if (isTargetMatch(c) && c.id) targetIds.add(c.id);
+          });
+        }
+      }
+    } catch {}
+
+    // 3. Reset current candidate / active account / dossier / pieces if matching
+    try {
+      const rawCur = localStorage.getItem('usmba_doctorat_candidat');
+      if (rawCur) {
+        const cur: Candidat = JSON.parse(rawCur);
+        if (isTargetMatch(cur) || (cur.id && targetIds.has(cur.id))) {
+          const emptyCur = buildEmptyAccount(cur);
+          localStorage.setItem('usmba_doctorat_candidat', JSON.stringify(emptyCur));
+          localStorage.setItem('usmba_doctorat_pieces', JSON.stringify([]));
+          localStorage.setItem(
+            'usmba_doctorat_dossier',
+            JSON.stringify({
+              candidatId: emptyCur.id,
+              casParticulier: false,
+              motif: '',
+              consentementApogee: false,
+              statutGlobal: 'en_cours',
+            })
+          );
+        }
+      }
+    } catch {}
+
+    try {
+      const rawAct = localStorage.getItem('usmba_active_account');
+      if (rawAct) {
+        const act: Candidat = JSON.parse(rawAct);
+        if (isTargetMatch(act) || (act.id && targetIds.has(act.id))) {
+          localStorage.setItem('usmba_active_account', JSON.stringify(buildEmptyAccount(act)));
+        }
+      }
+    } catch {}
+
+    try {
+      const rawDossier = localStorage.getItem('usmba_doctorat_dossier');
+      if (rawDossier) {
+        const dos: Dossier = JSON.parse(rawDossier);
+        if (dos.candidatId && targetIds.has(dos.candidatId)) {
+          localStorage.setItem(
+            'usmba_doctorat_dossier',
+            JSON.stringify({
+              candidatId: dos.candidatId,
+              casParticulier: false,
+              motif: '',
+              consentementApogee: false,
+              statutGlobal: 'en_cours',
+            })
+          );
+          localStorage.setItem('usmba_doctorat_pieces', JSON.stringify([]));
+        }
+      }
+    } catch {}
+
+    // 4. Remove overrides, all_candidates, simulated_statuts
+    try {
+      const rawOv = localStorage.getItem('usmba_candidats_overrides');
+      if (rawOv) {
+        const overrides: Record<string, Candidat> = JSON.parse(rawOv);
+        let changed = false;
+        Object.keys(overrides).forEach((k) => {
+          if (targetIds.has(k) || isTargetMatch(overrides[k])) {
+            delete overrides[k];
+            changed = true;
+          }
+        });
+        if (changed) localStorage.setItem('usmba_candidats_overrides', JSON.stringify(overrides));
+      }
+    } catch {}
+
+    try {
+      const rawAll = localStorage.getItem('usmba_all_candidates');
+      if (rawAll) {
+        const all: Candidat[] = JSON.parse(rawAll);
+        if (Array.isArray(all)) {
+          const nextAll = all.filter((c) => !(c.id && targetIds.has(c.id)) && !isTargetMatch(c));
+          if (nextAll.length !== all.length) {
+            localStorage.setItem('usmba_all_candidates', JSON.stringify(nextAll));
+          }
+        }
+      }
+    } catch {}
+
+    try {
+      const rawSim = localStorage.getItem('usmba_simulated_statuts');
+      if (rawSim) {
+        const sim: Record<string, string> = JSON.parse(rawSim);
+        let changed = false;
+        Object.keys(sim).forEach((k) => {
+          if (Array.from(targetIds).some((id) => k.startsWith(`${id}-`))) {
+            delete sim[k];
+            changed = true;
+          }
+        });
+        if (changed) localStorage.setItem('usmba_simulated_statuts', JSON.stringify(sim));
+      }
+    } catch {}
+
+    // 5. Remove convocations/creneaux, results, and empty sessions
+    const removedCreneauIds = new Set<string>();
+    const affectedSessions = new Set<string>();
+    const affectedDates = new Set<string>();
+    let remainingCreneaux: Creneau[] = [];
+
+    try {
+      const rawCr = localStorage.getItem('usmba_doctorat_creneaux');
+      if (rawCr) {
+        const crList: Creneau[] = JSON.parse(rawCr);
+        if (Array.isArray(crList)) {
+          remainingCreneaux = crList.filter((c) => {
+            if (c.candidatId && targetIds.has(c.candidatId)) {
+              if (c.id) removedCreneauIds.add(c.id);
+              if (c.enseignantId && c.date) affectedSessions.add(`${c.enseignantId}_${c.date}`);
+              if (c.date) affectedDates.add(c.date);
+              return false;
+            }
+            return true;
+          });
+          if (remainingCreneaux.length !== crList.length) {
+            localStorage.setItem('usmba_doctorat_creneaux', JSON.stringify(remainingCreneaux));
+          }
+        }
+      }
+    } catch {}
+
+    try {
+      const rawRes = localStorage.getItem('usmba_doctorat_resultats');
+      if (rawRes) {
+        const resList: import('../types').Resultat[] = JSON.parse(rawRes);
+        if (Array.isArray(resList)) {
+          const nextRes = resList.filter(
+            (r) => !(r.candidatId && targetIds.has(r.candidatId)) && !(r.creneauId && removedCreneauIds.has(r.creneauId))
+          );
+          if (nextRes.length !== resList.length) {
+            localStorage.setItem('usmba_doctorat_resultats', JSON.stringify(nextRes));
+          }
+        }
+      }
+    } catch {}
+
+    let remainingPvs: PV[] = [];
+    const removedPvIds = new Set<string>();
+    try {
+      const rawPvs = localStorage.getItem('usmba_doctorat_pvs');
+      if (rawPvs) {
+        const pvsList: PV[] = JSON.parse(rawPvs);
+        if (Array.isArray(pvsList)) {
+          let changed = false;
+          remainingPvs = pvsList
+            .map((pv) => {
+              const filteredRes = (pv.resultats || []).filter(
+                (r) => !(r.candidatId && targetIds.has(r.candidatId)) && !(r.creneauId && removedCreneauIds.has(r.creneauId))
+              );
+              if (filteredRes.length !== (pv.resultats || []).length) {
+                changed = true;
+                if (pv.directeurId && pv.date) affectedSessions.add(`${pv.directeurId}_${pv.date}`);
+                if (pv.date) affectedDates.add(pv.date);
+                return { ...pv, resultats: filteredRes };
+              }
+              return pv;
+            })
+            .filter((pv) => {
+              const hasSlotsForSession = remainingCreneaux.some(
+                (c) => c.enseignantId === pv.directeurId && c.date === pv.date && Boolean(c.candidatId)
+              );
+              if ((pv.resultats || []).length === 0 && !hasSlotsForSession) {
+                if (pv.id) removedPvIds.add(pv.id);
+                changed = true;
+                return false;
+              }
+              return true;
+            });
+          if (changed) {
+            localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(remainingPvs));
+          }
+        }
+      }
+    } catch {}
+
+    // Delete empty session metadata
+    if (affectedSessions.size > 0) {
+      try {
+        const rawStat = localStorage.getItem(SEANCES_STATUTS_STORAGE_KEY);
+        if (rawStat) {
+          const statMap: Record<string, SeanceStatutRecord> = JSON.parse(rawStat);
+          let changed = false;
+          affectedSessions.forEach((key) => {
+            const [ensId, ...dateParts] = key.split('_');
+            const dt = dateParts.join('_');
+            const hasSlots = remainingCreneaux.some(
+              (c) => c.enseignantId === ensId && c.date === dt && Boolean(c.candidatId)
+            );
+            const hasPvs = remainingPvs.some((p) => p.directeurId === ensId && p.date === dt);
+            if (!hasSlots && !hasPvs && statMap[key]) {
+              delete statMap[key];
+              changed = true;
+            }
+          });
+          if (changed) {
+            localStorage.setItem(SEANCES_STATUTS_STORAGE_KEY, JSON.stringify(statMap));
+          }
+        }
+      } catch {}
+    }
+
+    if (affectedDates.size > 0) {
+      try {
+        const rawMem = localStorage.getItem('usmba_commission_seance_membres');
+        if (rawMem) {
+          const memMap = JSON.parse(rawMem);
+          let changed = false;
+          affectedDates.forEach((dt) => {
+            const hasSlots = remainingCreneaux.some((c) => c.date === dt && Boolean(c.candidatId));
+            const hasPvs = remainingPvs.some((p) => p.date === dt);
+            if (!hasSlots && !hasPvs && memMap[dt]) {
+              delete memMap[dt];
+              changed = true;
+            }
+          });
+          if (changed) {
+            localStorage.setItem('usmba_commission_seance_membres', JSON.stringify(memMap));
+          }
+        }
+      } catch {}
+
+      try {
+        const rawDl = localStorage.getItem('usmba_commission_pv_downloaded');
+        if (rawDl) {
+          const dlMap = JSON.parse(rawDl);
+          let changed = false;
+          removedPvIds.forEach((pvId) => {
+            if (dlMap[pvId]) {
+              delete dlMap[pvId];
+              changed = true;
+            }
+          });
+          affectedDates.forEach((dt) => {
+            const hasSlots = remainingCreneaux.some((c) => c.date === dt && Boolean(c.candidatId));
+            const hasPvs = remainingPvs.some((p) => p.date === dt);
+            if (!hasSlots && !hasPvs && dlMap[dt]) {
+              delete dlMap[dt];
+              changed = true;
+            }
+          });
+          if (changed) {
+            localStorage.setItem('usmba_commission_pv_downloaded', JSON.stringify(dlMap));
+          }
+        }
+      } catch {}
+    }
+
+    // 6. Remove notifications for targetIds (do NOT touch gcd_journal)
+    try {
+      const rawNotifs = localStorage.getItem('usmba_notifications');
+      if (rawNotifs) {
+        const notifs = JSON.parse(rawNotifs);
+        if (Array.isArray(notifs)) {
+          const nextNotifs = notifs.filter((n: any) => !(n?.destinataireId && targetIds.has(n.destinataireId)));
+          if (nextNotifs.length !== notifs.length) {
+            localStorage.setItem('usmba_notifications', JSON.stringify(nextNotifs));
+          }
+        }
+      }
+    } catch {}
+
+    localStorage.setItem(CLEANUP_ALAOUI_TARIQ_KEY, 'true');
+  } catch {
+    // safe fallback
+  }
+}
+
+migrateTestAccountsIfNeeded();
+cleanupAlaouiTariqIfNeeded();
 
 export function getDirectorStructure(directeurId?: string): string {
   if (!directeurId) return '';
@@ -868,35 +945,12 @@ export function formatDateJJMM(d?: string): string {
 
 export function getComptes(): Compte[] {
   try {
+    migrateTestAccountsIfNeeded();
     if (typeof localStorage !== 'undefined') {
       const stored = localStorage.getItem(STORAGE_KEY_COMPTES);
       if (stored) {
         const parsed = JSON.parse(stored);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          let updated = false;
-          if (!parsed.some((c: any) => c.email === 'karim.structure@demo.ma')) {
-            const demoKarim = INITIAL_COMPTES.find((c) => c.email === 'karim.structure@demo.ma');
-            if (demoKarim) {
-              parsed.push(demoKarim);
-              updated = true;
-            }
-          }
-          const cedCompte = parsed.find((c: any) => c.email === 'ced@demo.ma');
-          if (cedCompte) {
-            if (cedCompte.structure !== 'LISAC - FSDM Fès') {
-              cedCompte.structure = 'LISAC - FSDM Fès';
-              updated = true;
-            }
-          } else {
-            const demoCed = INITIAL_COMPTES.find((c) => c.email === 'ced@demo.ma');
-            if (demoCed) {
-              parsed.push(demoCed);
-              updated = true;
-            }
-          }
-          if (updated) {
-            localStorage.setItem(STORAGE_KEY_COMPTES, JSON.stringify(parsed));
-          }
           return parsed;
         }
       }
@@ -915,11 +969,7 @@ export function getConnectedDirecteurId(): string | null {
         const acc = JSON.parse(raw);
         if (acc) {
           if (acc.enseignantId) return acc.enseignantId;
-          if (
-            acc.email === 'karim.structure@demo.ma' ||
-            acc.email === 'prof@demo.ma' ||
-            acc.email === 'k.elamrani@usmba.ac.ma'
-          ) {
+          if (acc.email === 'directeurthese@gmail.com') {
             return 'ens-1';
           }
           if (
