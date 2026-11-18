@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Camera, X, AlertCircle, CheckCircle2, Upload, ExternalLink } from 'lucide-react';
+import { Camera, X, AlertCircle, CheckCircle2, Upload, ExternalLink, Loader2 } from 'lucide-react';
 import { fr } from '../i18n/fr';
+import { CinOcrFields, lireCinDeuxFaces, prechargerOcrCin } from '../utils/ocrCin';
 
 type CameraErrorKind = 'permission_denied' | 'preview_blocked';
 
@@ -50,17 +51,27 @@ async function detectCameraErrorKind(err: unknown): Promise<CameraErrorKind> {
 
 interface CameraCaptureProps {
   onCapture: (dataUrl: string) => void;
-  onCaptureDual?: (rectoDataUrl: string, versoDataUrl: string) => void;
+  onCaptureDual?: (
+    rectoDataUrl: string,
+    versoDataUrl: string,
+    extractedFields?: CinOcrFields
+  ) => void;
   dualStepLabels?: [string, string];
+  autoOcrOnCapture?: boolean;
+  onCaptureAutoOcr?: (dataUrl: string, side?: 'recto' | 'verso') => void;
   onClose: () => void;
   onErrorFallback?: () => void;
   title?: string;
 }
 
+type DualScanPhase = 'scanning_recto' | 'recto_validated' | 'scanning_verso';
+
 export const CameraCapture: React.FC<CameraCaptureProps> = ({
   onCapture,
   onCaptureDual,
   dualStepLabels,
+  autoOcrOnCapture,
+  onCaptureAutoOcr,
   onClose,
   onErrorFallback,
   title,
@@ -72,7 +83,13 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
   const [isCadreValide, setIsCadreValide] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [dualStep, setDualStep] = useState<0 | 1>(0);
+  const [scanPhase, setScanPhase] = useState<DualScanPhase>('scanning_recto');
   const [rectoCapture, setRectoCapture] = useState<string | null>(null);
+  const dualStepRef = useRef<0 | 1>(0);
+  const rectoCaptureRef = useRef<string | null>(null);
+  const rectoFieldsRef = useRef<CinOcrFields>({});
+  const onCaptureDualRef = useRef(onCaptureDual);
+  onCaptureDualRef.current = onCaptureDual;
   const isDualMode = Boolean(onCaptureDual);
 
   useEffect(() => {
@@ -152,15 +169,15 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
     };
   }, []);
 
-  const handleCapture = () => {
+  const captureVideoFrame = (jpegQuality = 0.6): string | null => {
     const video = videoRef.current;
-    if (!video) return;
+    if (!video || video.readyState < 2) return null;
 
     const canvas = document.createElement('canvas');
     let width = video.videoWidth || 1280;
     let height = video.videoHeight || 720;
 
-    // Compression : largeur max 800 px, puis canvas.toDataURL('image/jpeg', 0.6)
+    // Compression : largeur max 800 px
     if (width > 800) {
       height = Math.round((height * 800) / width);
       width = 800;
@@ -169,19 +186,128 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
     canvas.width = width;
     canvas.height = height;
     const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    if (!ctx) return null;
 
     ctx.drawImage(video, 0, 0, width, height);
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+    return canvas.toDataURL('image/jpeg', jpegQuality);
+  };
+
+  // Boucle de scan OCR automatique sans bouton Capturer en mode CIN double-face
+  useEffect(() => {
+    if (!isDualMode || !isReady || errorKind) return;
+    let cancelled = false;
+
+    const sleep = (ms: number) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      });
+
+    async function scanLoop() {
+      await prechargerOcrCin();
+      // Laisse la mise au point initiale se stabiliser brièvement
+      await sleep(700);
+
+      while (!cancelled) {
+        const frameDataUrl = captureVideoFrame(0.75);
+        if (!frameDataUrl) {
+          await sleep(400);
+          continue;
+        }
+
+        if (dualStepRef.current === 0) {
+          const res = await lireCinDeuxFaces(frameDataUrl, undefined, {
+            autoOcrOnCameraCapture: true,
+            cameraSide: 'recto',
+          });
+          if (cancelled) return;
+
+          const recognizedCount = [
+            res.fields.nom,
+            res.fields.prenom,
+            res.fields.cin,
+            res.fields.dateNaissance,
+          ].filter(Boolean).length;
+
+          if (res.success && recognizedCount >= 2) {
+            rectoCaptureRef.current = frameDataUrl;
+            rectoFieldsRef.current = res.fields;
+            setRectoCapture(frameDataUrl);
+            setScanPhase('recto_validated');
+            // Laisse 1,4 s à l'étudiant pour lire la consigne et retourner la carte
+            await sleep(1400);
+            if (cancelled) return;
+            dualStepRef.current = 1;
+            setDualStep(1);
+            setScanPhase('scanning_verso');
+            await sleep(400);
+            continue;
+          }
+        } else {
+          const res = await lireCinDeuxFaces(undefined, frameDataUrl, {
+            autoOcrOnCameraCapture: true,
+            cameraSide: 'verso',
+          });
+          if (cancelled) return;
+
+          const versoCount = [
+            res.fields.nom,
+            res.fields.prenom,
+            res.fields.cin,
+            res.fields.dateNaissance,
+          ].filter(Boolean).length;
+
+          if (res.success && versoCount >= 2) {
+            const mergedFields: CinOcrFields = {
+              nom: res.fields.nom || rectoFieldsRef.current.nom,
+              prenom: res.fields.prenom || rectoFieldsRef.current.prenom,
+              cin: res.fields.cin || rectoFieldsRef.current.cin,
+              dateNaissance: res.fields.dateNaissance || rectoFieldsRef.current.dateNaissance,
+            };
+            stopStream();
+            onCaptureDualRef.current?.(
+              rectoCaptureRef.current || frameDataUrl,
+              frameDataUrl,
+              mergedFields
+            );
+            return;
+          }
+        }
+
+        await sleep(650);
+      }
+    }
+
+    void scanLoop();
+    return () => {
+      cancelled = true;
+    };
+  }, [isDualMode, isReady, errorKind]);
+
+  const handleCapture = () => {
+    const dataUrl = captureVideoFrame(0.6);
+    if (!dataUrl) return;
 
     if (isDualMode && onCaptureDual) {
       if (dualStep === 0) {
         setRectoCapture(dataUrl);
         setDualStep(1);
+        if (autoOcrOnCapture && onCaptureAutoOcr) {
+          onCaptureAutoOcr(dataUrl, 'recto');
+        }
       } else {
         stopStream();
+        if (autoOcrOnCapture && onCaptureAutoOcr) {
+          onCaptureAutoOcr(dataUrl, 'verso');
+        }
         onCaptureDual(rectoCapture || dataUrl, dataUrl);
       }
+      return;
+    }
+
+    if (autoOcrOnCapture) {
+      stopStream();
+      onCaptureAutoOcr?.(dataUrl);
+      onCapture(dataUrl);
       return;
     }
 
@@ -301,32 +427,84 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
             <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center p-6">
               <div
                 className={`w-full max-w-sm aspect-[4/3] border-2 border-dashed rounded-2xl shadow-[0_0_0_9999px_rgba(0,0,0,0.45)] relative transition-colors duration-300 ${
-                  isCadreValide ? 'border-emerald-400/90' : 'border-amber-400/80'
+                  isDualMode
+                    ? scanPhase === 'recto_validated'
+                      ? 'border-emerald-400'
+                      : 'border-amber-300/90'
+                    : isCadreValide
+                    ? 'border-emerald-400/90'
+                    : 'border-amber-400/80'
                 }`}
               >
                 <div
                   className={`absolute -top-1 -left-1 w-4 h-4 border-t-4 border-l-4 rounded-tl-lg transition-colors ${
-                    isCadreValide ? 'border-emerald-300' : 'border-amber-300'
+                    isDualMode
+                      ? scanPhase === 'recto_validated'
+                        ? 'border-emerald-300'
+                        : 'border-amber-300'
+                      : isCadreValide
+                      ? 'border-emerald-300'
+                      : 'border-amber-300'
                   }`}
                 />
                 <div
                   className={`absolute -top-1 -right-1 w-4 h-4 border-t-4 border-r-4 rounded-tr-lg transition-colors ${
-                    isCadreValide ? 'border-emerald-300' : 'border-amber-300'
+                    isDualMode
+                      ? scanPhase === 'recto_validated'
+                        ? 'border-emerald-300'
+                        : 'border-amber-300'
+                      : isCadreValide
+                      ? 'border-emerald-300'
+                      : 'border-amber-300'
                   }`}
                 />
                 <div
                   className={`absolute -bottom-1 -left-1 w-4 h-4 border-b-4 border-l-4 rounded-bl-lg transition-colors ${
-                    isCadreValide ? 'border-emerald-300' : 'border-amber-300'
+                    isDualMode
+                      ? scanPhase === 'recto_validated'
+                        ? 'border-emerald-300'
+                        : 'border-amber-300'
+                      : isCadreValide
+                      ? 'border-emerald-300'
+                      : 'border-amber-300'
                   }`}
                 />
                 <div
                   className={`absolute -bottom-1 -right-1 w-4 h-4 border-b-4 border-r-4 rounded-br-lg transition-colors ${
-                    isCadreValide ? 'border-emerald-300' : 'border-amber-300'
+                    isDualMode
+                      ? scanPhase === 'recto_validated'
+                        ? 'border-emerald-300'
+                        : 'border-amber-300'
+                      : isCadreValide
+                      ? 'border-emerald-300'
+                      : 'border-amber-300'
                   }`}
                 />
               </div>
-              <div className="mt-4 flex items-center gap-1.5 text-xs font-medium text-white/95 bg-black/70 px-3 py-1.5 rounded-full backdrop-blur-xs shadow-xs">
-                {isCadreValide ? (
+              <div
+                className={`mt-4 flex items-center gap-2 text-xs font-medium px-3.5 py-2 rounded-full backdrop-blur-xs shadow-sm text-center ${
+                  isDualMode && scanPhase === 'recto_validated'
+                    ? 'bg-emerald-600/95 text-white'
+                    : 'bg-black/75 text-white/95'
+                }`}
+              >
+                {isDualMode ? (
+                  scanPhase === 'recto_validated' ? (
+                    <>
+                      <CheckCircle2 size={15} className="text-white shrink-0" />
+                      <span>{fr.dossier.scanOcrRectoValideTournez}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Loader2 size={14} className="animate-spin text-emerald-400 shrink-0" />
+                      <span>
+                        {scanPhase === 'scanning_verso'
+                          ? fr.dossier.scanOcrRechercheVerso
+                          : fr.dossier.scanOcrRechercheRecto}
+                      </span>
+                    </>
+                  )
+                ) : isCadreValide ? (
                   <>
                     <CheckCircle2 size={13} className="text-emerald-400 shrink-0" />
                     <span>{fr.dossier.cadreValide}</span>
@@ -376,20 +554,22 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
                 {fr.dossier.cancel}
               </button>
 
-              <button
-                type="button"
-                onClick={handleCapture}
-                disabled={!isReady}
-                className={`flex-1 min-h-[44px] px-4 py-2 text-xs font-semibold rounded-xl flex items-center justify-center gap-2 transition-all ${
-                  isReady
-                    ? 'bg-emerald-600 hover:bg-emerald-500 text-white active:scale-95 cursor-pointer shadow-md'
-                    : 'bg-slate-700 text-slate-400 cursor-not-allowed'
-                }`}
-                aria-label={fr.dossier.btnCapturer}
-              >
-                <Camera size={16} />
-                <span>{fr.dossier.btnCapturer}</span>
-              </button>
+              {!isDualMode && (
+                <button
+                  type="button"
+                  onClick={handleCapture}
+                  disabled={!isReady}
+                  className={`flex-1 min-h-[44px] px-4 py-2 text-xs font-semibold rounded-xl flex items-center justify-center gap-2 transition-all ${
+                    isReady
+                      ? 'bg-emerald-600 hover:bg-emerald-500 text-white active:scale-95 cursor-pointer shadow-md'
+                      : 'bg-slate-700 text-slate-400 cursor-not-allowed'
+                  }`}
+                  aria-label={fr.dossier.btnCapturer}
+                >
+                  <Camera size={16} />
+                  <span>{fr.dossier.btnCapturer}</span>
+                </button>
+              )}
             </div>
           )}
         </div>
