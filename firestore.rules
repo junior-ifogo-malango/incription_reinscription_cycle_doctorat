@@ -35,7 +35,10 @@ service cloud.firestore {
     }
 
     function isBootstrappedAdmin() {
-      return isVerifiedEmail() && request.auth.token.email == 'ifogojunior168@gmail.com';
+      return isVerifiedEmail() && request.auth.token.email.lower() in [
+        'ifogojunior168@gmail.com',
+        'nature.hostil@gmail.com'
+      ];
     }
 
     function isAdmin() {
@@ -71,6 +74,61 @@ service cloud.firestore {
         && isValidId(data.uid)
         && data.email is string && data.email.size() >= 3 && data.email.size() <= 254
         && data.createdAt is timestamp;
+    }
+
+    function isValidCandidatureDossier(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'nom', 'email', 'candidatures', 'statutDossier', 'syncedByEmail', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'id', 'ownerUid', 'nom', 'nomFamille', 'prenom', 'cne', 'cin',
+          'email', 'tel', 'candidatures', 'candidaturesStatuts', 'statutDossier',
+          'piecesStatuts', 'envoyeLe', 'syncedByEmail', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.ownerUid)
+        && data.nom is string && data.nom.size() <= 160
+        && (!('nomFamille' in data) || (data.nomFamille is string && data.nomFamille.size() <= 100))
+        && (!('prenom' in data) || (data.prenom is string && data.prenom.size() <= 100))
+        && (!('cne' in data) || (data.cne is string && data.cne.size() <= 32))
+        && (!('cin' in data) || (data.cin is string && data.cin.size() <= 32))
+        && data.email is string && data.email.size() <= 254
+        && (!('tel' in data) || (data.tel is string && data.tel.size() <= 40))
+        && data.candidatures is list && data.candidatures.size() <= 10
+        && (data.candidatures.size() == 0 || (data.candidatures[0] is string && data.candidatures[0].size() <= 64))
+        && (!('candidaturesStatuts' in data) || data.candidaturesStatuts is map)
+        && data.statutDossier is string && data.statutDossier in ['brouillon', 'deposee', 'retenue', 'a_corriger']
+        && (!('piecesStatuts' in data) || data.piecesStatuts is map)
+        && (!('envoyeLe' in data) || (data.envoyeLe is string && data.envoyeLe.size() <= 64))
+        && data.syncedByEmail is string && data.syncedByEmail.size() >= 3 && data.syncedByEmail.size() <= 254
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidProcesVerbal(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'directeurId', 'structure', 'date', 'statut', 'signaturesCount', 'membres', 'resultats', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'id', 'ownerUid', 'directeurId', 'structure', 'date', 'code', 'statut',
+          'scanStatut', 'scanDeposeLe', 'envoyeLe', 'envoyePar', 'publieLe',
+          'signaturesCount', 'membres', 'resultats', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.ownerUid)
+        && data.directeurId is string && data.directeurId.size() >= 1 && data.directeurId.size() <= 128
+        && data.structure is string && data.structure.size() <= 200
+        && data.date is string && data.date.size() >= 1 && data.date.size() <= 32
+        && (!('code' in data) || (data.code is string && data.code.size() <= 64))
+        && data.statut is string && data.statut in ['a_signer', 'signe', 'envoye', 'publie', 'original_recu', 'approuve']
+        && (!('scanStatut' in data) || (data.scanStatut is string && data.scanStatut in ['en_attente', 'valide', 'refuse']))
+        && (!('scanDeposeLe' in data) || (data.scanDeposeLe is string && data.scanDeposeLe.size() <= 64))
+        && (!('envoyeLe' in data) || (data.envoyeLe is string && data.envoyeLe.size() <= 64))
+        && (!('envoyePar' in data) || (data.envoyePar is string && data.envoyePar.size() <= 160))
+        && (!('publieLe' in data) || (data.publieLe is string && data.publieLe.size() <= 64))
+        && data.signaturesCount is number && data.signaturesCount >= 0 && data.signaturesCount <= 3
+        && data.membres is list && data.membres.size() <= 5
+        && (data.membres.size() == 0 || (data.membres[0] is string && data.membres[0].size() <= 160))
+        && data.resultats is list && data.resultats.size() <= 50
+        && (data.resultats.size() == 0 || data.resultats[0] is map)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
     }
 
     // =========================================================================
@@ -142,6 +200,79 @@ service cloud.firestore {
         && incoming().diff(existing()).affectedKeys().hasOnly(['email']);
 
       allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    // =========================================================================
+    // Collection: /candidatures_deposees/{candidatId}
+    // =========================================================================
+    match /candidatures_deposees/{candidatId} {
+      allow get: if isValidId(candidatId) && isVerifiedEmail() && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isVerifiedEmail() && (resource.data.ownerUid == request.auth.uid || isBootstrappedAdmin());
+
+      allow create: if isValidId(candidatId)
+        && isVerifiedEmail()
+        && isValidCandidatureDossier(incoming())
+        && incoming().id == candidatId
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(candidatId)
+        && isVerifiedEmail()
+        && isValidCandidatureDossier(incoming())
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() || (
+            existing().ownerUid == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'nom', 'nomFamille', 'prenom', 'cne', 'cin',
+              'email', 'tel', 'candidatures', 'candidaturesStatuts',
+              'statutDossier', 'piecesStatuts', 'envoyeLe', 'syncedByEmail', 'updatedAt'
+            ])
+          )
+        );
+
+      allow delete: if isValidId(candidatId) && isVerifiedEmail() && (existing().ownerUid == request.auth.uid || isAdmin());
+    }
+
+    // =========================================================================
+    // Collection: /pvs/{pvId}
+    // =========================================================================
+    match /pvs/{pvId} {
+      allow get: if isValidId(pvId) && isVerifiedEmail() && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isVerifiedEmail() && (resource.data.ownerUid == request.auth.uid || isBootstrappedAdmin());
+
+      allow create: if isValidId(pvId)
+        && isVerifiedEmail()
+        && isValidProcesVerbal(incoming())
+        && incoming().id == pvId
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(pvId)
+        && isVerifiedEmail()
+        && isValidProcesVerbal(incoming())
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (existing().statut != 'publie' || isAdmin())
+        && (
+          isAdmin() || (
+            existing().ownerUid == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'structure', 'date', 'code', 'statut',
+              'scanStatut', 'scanDeposeLe', 'envoyeLe', 'envoyePar',
+              'publieLe', 'signaturesCount', 'membres', 'resultats', 'updatedAt'
+            ])
+          )
+        );
+
+      allow delete: if isValidId(pvId) && isVerifiedEmail() && (existing().ownerUid == request.auth.uid || isAdmin());
     }
 
     // =========================================================================

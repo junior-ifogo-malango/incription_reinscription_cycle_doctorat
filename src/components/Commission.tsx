@@ -19,6 +19,8 @@ import {
   Send,
   AlertTriangle,
   FileCheck,
+  CloudUpload,
+  Loader2,
 } from 'lucide-react';
 import { Creneau, Resultat, ResultatType, PV, Candidat, calculerNoteResultat, StatutSeance, SeanceStatutRecord } from '../types';
 import {
@@ -36,6 +38,7 @@ import { PVDocument } from './PVDocument';
 import { fr } from '../i18n/fr';
 import { logEvent, logPresenceConstatee, logAbsenceConstatee } from '../utils/journal';
 import { ajouterNotification, messageAbsenceConstatee, trouverCandidat } from '../utils/messages';
+import { syncDepositedToFirestore, syncPvBestEffort } from '../utils/firebaseSync';
 
 interface CommissionProps {
   enseignantId: string;
@@ -160,6 +163,11 @@ export const Commission: React.FC<CommissionProps> = ({
   const [absentTargetCreneauId, setAbsentTargetCreneauId] = useState<string | null>(null);
   const [absentMotif, setAbsentMotif] = useState('');
   const [absentError, setAbsentError] = useState<string | null>(null);
+
+  // Validation des 3 signatures papier par PV & synchronisation Firebase
+  const [signaturesChecks, setSignaturesChecks] = useState<Record<string, [boolean, boolean, boolean]>>({});
+  const [syncingFirebase, setSyncingFirebase] = useState(false);
+  const [syncFeedback, setSyncFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Chargement des données avec persistance localStorage et try/catch
   useEffect(() => {
@@ -704,6 +712,7 @@ export const Commission: React.FC<CommissionProps> = ({
         curPvs[idx].statut = 'signe';
         curPvs[idx].scanDeposeLe = nowIso;
         curPvs[idx].scanStatut = 'valide';
+        curPvs[idx].signaturesCount = 3;
         delete curPvs[idx].scanMotifRefus;
         localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(curPvs));
         setPvs(curPvs.map(enrichirPVLecture));
@@ -716,6 +725,7 @@ export const Commission: React.FC<CommissionProps> = ({
         );
         setFeedback({ id: pvId, text: fr.commission.scanDeposeToast });
         setTimeout(() => setFeedback(null), 3000);
+        void syncPvBestEffort();
       }
     } catch {}
   };
@@ -733,6 +743,7 @@ export const Commission: React.FC<CommissionProps> = ({
         curPvs[idx].statut = 'envoye';
         curPvs[idx].envoyeLe = nowIso;
         curPvs[idx].envoyePar = enseignantNom;
+        curPvs[idx].signaturesCount = 3;
         localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(curPvs));
         setPvs(curPvs.map(enrichirPVLecture));
         window.dispatchEvent(new CustomEvent('usmba_pvs_updated'));
@@ -744,8 +755,100 @@ export const Commission: React.FC<CommissionProps> = ({
         );
         setFeedback({ id: pvId, text: fr.commission.pvEnvoyeToast });
         setTimeout(() => setFeedback(null), 3000);
+        void syncPvBestEffort();
       }
     } catch {}
+  };
+
+  const getSignatureChecks = (pvId: string): [boolean, boolean, boolean] =>
+    signaturesChecks[pvId] || [true, true, true];
+
+  const handleToggleSignatureCheck = (pvId: string, index: 0 | 1 | 2) => {
+    setSignaturesChecks((prev) => {
+      const cur = prev[pvId] || [true, true, true];
+      const next: [boolean, boolean, boolean] = [
+        index === 0 ? !cur[0] : cur[0],
+        index === 1 ? !cur[1] : cur[1],
+        index === 2 ? !cur[2] : cur[2],
+      ];
+      return { ...prev, [pvId]: next };
+    });
+  };
+
+  const handleValider3SignaturesEtDeposer = (pvId: string) => {
+    const checks = getSignatureChecks(pvId);
+    if (!checks[0] || !checks[1] || !checks[2]) return;
+
+    try {
+      const raw = localStorage.getItem('usmba_doctorat_pvs');
+      const curPvs: PV[] = raw ? JSON.parse(raw) : [];
+      const idx = curPvs.findIndex((p) => p.id === pvId);
+      if (idx !== -1) {
+        const nowIso = new Date().toISOString();
+        const pv = curPvs[idx];
+        pv.statut = 'envoye';
+        pv.signaturesCount = 3;
+        pv.scanDeposeLe = pv.scanDeposeLe || nowIso;
+        pv.scanStatut = 'valide';
+        pv.envoyeLe = nowIso;
+        pv.envoyePar = enseignantNom;
+        delete pv.scanMotifRefus;
+        localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(curPvs));
+        setPvDownloaded((prev) => {
+          const next = { ...prev, [pv.date]: true, [pv.id]: true };
+          try {
+            localStorage.setItem('usmba_commission_pv_downloaded', JSON.stringify(next));
+          } catch {}
+          return next;
+        });
+        setPvs(curPvs.map(enrichirPVLecture));
+        window.dispatchEvent(new CustomEvent('usmba_pvs_updated'));
+        logEvent(
+          { id: enseignantId, nom: enseignantNom, role: 'enseignant' },
+          fr.journalActions.scanPvDepose,
+          `PV-${pv.date}-${(pv.code || '').slice(0, 4)}`,
+          '3 signatures validées et scan déposé'
+        );
+        logEvent(
+          { id: enseignantId, nom: enseignantNom, role: 'enseignant' },
+          fr.journalActions.pvEnvoye,
+          `PV-${pv.date}-${(pv.code || '').slice(0, 4)}`,
+          `Déposé chez le Directeur de structure (${pv.structure || ''})`
+        );
+        setFeedback({ id: pvId, text: fr.commission.signatures3DeposeToast });
+        setTimeout(() => setFeedback(null), 4000);
+        void syncPvBestEffort();
+      }
+    } catch {}
+  };
+
+  const handleSyncFirebaseClick = async () => {
+    setSyncingFirebase(true);
+    setSyncFeedback(null);
+    try {
+      const summary = await syncDepositedToFirestore({ promptGoogleLoginIfNeeded: true });
+      const msg = fr.commission.syncFirebaseSucces
+        .replace('{cands}', String(summary.candidaturesSynced))
+        .replace('{pvs}', String(summary.pvsSynced))
+        .replace('{suppr}', String(summary.removedSalmaAlami));
+      setSyncFeedback({ type: 'success', text: msg });
+    } catch (err) {
+      const rawMsg = err instanceof Error ? err.message : String(err || '');
+      const lower = rawMsg.toLowerCase();
+      if (
+        rawMsg.includes('AUTH_REQUIRED') ||
+        lower.includes('popup-closed-by-user') ||
+        lower.includes('cancelled-popup-request')
+      ) {
+        setSyncFeedback({ type: 'error', text: fr.commission.syncFirebaseAuthCancelled });
+      } else if (lower.includes('permission-denied') || lower.includes('insufficient permissions')) {
+        setSyncFeedback({ type: 'error', text: fr.commission.syncFirebaseRulesError });
+      } else {
+        setSyncFeedback({ type: 'error', text: rawMsg || fr.commission.syncFirebaseRulesError });
+      }
+    } finally {
+      setSyncingFirebase(false);
+    }
   };
 
   // Réouverture d'un PV avec motif obligatoire (5 caractères min.)
@@ -914,18 +1017,61 @@ export const Commission: React.FC<CommissionProps> = ({
     <div className="space-y-6">
       {/* En-tête */}
       <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center shrink-0">
-            <Award size={22} />
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center shrink-0">
+              <Award size={22} />
+            </div>
+            <div>
+              <h2 className="text-lg font-extrabold text-slate-900 leading-tight">
+                {fr.commission.title}
+              </h2>
+              <p className="text-xs text-slate-500">{fr.commission.subtitle}</p>
+            </div>
           </div>
-          <div>
-            <h2 className="text-lg font-extrabold text-slate-900 leading-tight">
-              {fr.commission.title}
-            </h2>
-            <p className="text-xs text-slate-500">{fr.commission.subtitle}</p>
-          </div>
+          <button
+            type="button"
+            onClick={handleSyncFirebaseClick}
+            disabled={syncingFirebase}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-indigo-700 hover:bg-indigo-800 disabled:opacity-60 rounded-xl shadow-xs transition cursor-pointer shrink-0"
+          >
+            {syncingFirebase ? (
+              <Loader2 size={14} className="animate-spin shrink-0" />
+            ) : (
+              <CloudUpload size={14} className="shrink-0" />
+            )}
+            <span>
+              {syncingFirebase ? fr.commission.syncFirebaseEnCours : fr.commission.btnSyncFirebase}
+            </span>
+          </button>
         </div>
       </div>
+
+      {syncFeedback && (
+        <div
+          className={`p-3 rounded-xl border text-xs font-semibold flex items-center justify-between gap-2 ${
+            syncFeedback.type === 'success'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              : 'bg-rose-50 border-rose-200 text-rose-800'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            {syncFeedback.type === 'success' ? (
+              <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+            ) : (
+              <AlertCircle size={16} className="text-rose-600 shrink-0" />
+            )}
+            <span>{syncFeedback.text}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSyncFeedback(null)}
+            className="text-[11px] underline opacity-80 hover:opacity-100 cursor-pointer shrink-0"
+          >
+            OK
+          </button>
+        </div>
+      )}
 
       {/* Toast de feedback */}
       {feedback && (
@@ -1841,6 +1987,71 @@ export const Commission: React.FC<CommissionProps> = ({
                     </>
                   )}
                 </div>
+
+                {/* Validation des 3 signatures papier et dépôt direct chez le Directeur de structure */}
+                {existingPV &&
+                  !existingPV.rouvertLe &&
+                  (existingPV.statut === 'a_signer' || existingPV.statut === 'signe') && (() => {
+                    const checks = getSignatureChecks(existingPV.id);
+                    const all3Checked = checks[0] && checks[1] && checks[2];
+                    return (
+                      <div className="p-3 bg-indigo-50/70 border border-indigo-200 rounded-xl space-y-2.5">
+                        <div className="flex items-center gap-2 text-xs font-bold text-indigo-950">
+                          <FileSignature size={14} className="text-indigo-700 shrink-0" />
+                          <span>{fr.commission.signatures3Title}</span>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          <label className="flex items-center gap-2 text-[11px] font-medium text-slate-800 bg-white border border-indigo-100 rounded-lg px-2.5 py-1.5 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={checks[0]}
+                              onChange={() => handleToggleSignatureCheck(existingPV.id, 0)}
+                              className="rounded border-slate-300 text-indigo-700 focus:ring-indigo-500"
+                            />
+                            <span>{fr.commission.signatures3Check1}</span>
+                          </label>
+                          <label className="flex items-center gap-2 text-[11px] font-medium text-slate-800 bg-white border border-indigo-100 rounded-lg px-2.5 py-1.5 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={checks[1]}
+                              onChange={() => handleToggleSignatureCheck(existingPV.id, 1)}
+                              className="rounded border-slate-300 text-indigo-700 focus:ring-indigo-500"
+                            />
+                            <span>{fr.commission.signatures3Check2}</span>
+                          </label>
+                          <label className="flex items-center gap-2 text-[11px] font-medium text-slate-800 bg-white border border-indigo-100 rounded-lg px-2.5 py-1.5 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={checks[2]}
+                              onChange={() => handleToggleSignatureCheck(existingPV.id, 2)}
+                              className="rounded border-slate-300 text-indigo-700 focus:ring-indigo-500"
+                            />
+                            <span>{fr.commission.signatures3Check3}</span>
+                          </label>
+                        </div>
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                          {!all3Checked ? (
+                            <span className="text-[11px] text-amber-800 font-medium">
+                              {fr.commission.signatures3RequiredHint}
+                            </span>
+                          ) : (
+                            <span className="text-[11px] text-indigo-800 font-medium">
+                              3/3 signatures attestées · Réf. {(existingPV.code || '').slice(0, 6)}
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            disabled={!all3Checked}
+                            onClick={() => handleValider3SignaturesEtDeposer(existingPV.id)}
+                            className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-indigo-700 hover:bg-indigo-800 disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed rounded-xl shadow-xs transition cursor-pointer"
+                          >
+                            <FileCheck2 size={14} />
+                            <span>{fr.commission.btnValider3SignaturesDeposer}</span>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                 {/* Option de réouverture si PV existant non publié */}
                 {existingPV && !existingPV.publieLe && !existingPV.rouvertLe && (

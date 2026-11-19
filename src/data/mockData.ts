@@ -556,6 +556,7 @@ export const STORAGE_KEY_COMPTES = 'gcd_comptes';
 const MIGRATION_4COMPTES_KEY = 'usmba_migration_4comptes_v1';
 const CLEANUP_ALAOUI_TARIQ_KEY = 'usmba_cleanup_alaoui_tariq_v1';
 const CLEANUP_SALMA_KHADIJA_KEY = 'usmba_cleanup_salma_khadija_v1';
+const CLEANUP_SALMA_ALAMI_KEY = 'usmba_cleanup_salma_alami_v1';
 const SYNC_DIRECTORS_ACCOUNTS_KEY = 'usmba_sync_directors_accounts_v1';
 
 export function migrateTestAccountsIfNeeded(): void {
@@ -1027,6 +1028,173 @@ export function cleanupSalmaKhadijaIfNeeded(): void {
   }
 }
 
+export function isSalmaOrAlamiRecord(rec: {
+  id?: string;
+  nom?: string;
+  displayName?: string;
+  prenom?: string;
+  nomFamille?: string;
+  email?: string;
+} | null | undefined): boolean {
+  if (!rec) return false;
+  const combined = `${rec.id || ''} ${rec.nom || ''} ${rec.displayName || ''} ${rec.prenom || ''} ${rec.nomFamille || ''} ${rec.email || ''}`
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+  return /\bsalma\b/.test(combined) || /\balami\b/.test(combined);
+}
+
+export function cleanupSalmaAlamiIfNeeded(force = false): number {
+  let removedCount = 0;
+  try {
+    if (typeof localStorage === 'undefined') return 0;
+    if (!force && localStorage.getItem(CLEANUP_SALMA_ALAMI_KEY)) return 0;
+
+    const targetIds = new Set<string>(['cand-salma', 'cand-alami']);
+
+    try {
+      const rawAcc = localStorage.getItem('usmba_registered_accounts');
+      if (rawAcc) {
+        const accounts: Candidat[] = JSON.parse(rawAcc);
+        if (Array.isArray(accounts)) {
+          const kept = accounts.filter((a) => {
+            if (isSalmaOrAlamiRecord(a)) {
+              if (a.id) targetIds.add(a.id);
+              removedCount += 1;
+              return false;
+            }
+            return true;
+          });
+          if (kept.length !== accounts.length) {
+            localStorage.setItem('usmba_registered_accounts', JSON.stringify(kept));
+          }
+        }
+      }
+    } catch {}
+
+    try {
+      const rawOv = localStorage.getItem('usmba_candidats_overrides');
+      if (rawOv) {
+        const overrides: Record<string, Candidat> = JSON.parse(rawOv);
+        let changed = false;
+        Object.keys(overrides).forEach((k) => {
+          if (targetIds.has(k) || isSalmaOrAlamiRecord(overrides[k])) {
+            targetIds.add(overrides[k]?.id || k);
+            delete overrides[k];
+            changed = true;
+            removedCount += 1;
+          }
+        });
+        if (changed) localStorage.setItem('usmba_candidats_overrides', JSON.stringify(overrides));
+      }
+    } catch {}
+
+    try {
+      const rawAll = localStorage.getItem('usmba_all_candidates');
+      if (rawAll) {
+        const all: Candidat[] = JSON.parse(rawAll);
+        if (Array.isArray(all)) {
+          const kept = all.filter((c) => {
+            if ((c.id && targetIds.has(c.id)) || isSalmaOrAlamiRecord(c)) {
+              if (c.id) targetIds.add(c.id);
+              removedCount += 1;
+              return false;
+            }
+            return true;
+          });
+          if (kept.length !== all.length) {
+            localStorage.setItem('usmba_all_candidates', JSON.stringify(kept));
+          }
+        }
+      }
+    } catch {}
+
+    try {
+      const rawSim = localStorage.getItem('usmba_simulated_statuts');
+      if (rawSim) {
+        const sim: Record<string, string> = JSON.parse(rawSim);
+        let changed = false;
+        Object.keys(sim).forEach((k) => {
+          if (
+            k.toLowerCase().includes('salma') ||
+            k.toLowerCase().includes('alami') ||
+            Array.from(targetIds).some((id) => k.startsWith(`${id}-`))
+          ) {
+            delete sim[k];
+            changed = true;
+          }
+        });
+        if (changed) localStorage.setItem('usmba_simulated_statuts', JSON.stringify(sim));
+      }
+    } catch {}
+
+    try {
+      const rawPvs = localStorage.getItem('usmba_doctorat_pvs');
+      if (rawPvs) {
+        const pvsList: PV[] = JSON.parse(rawPvs);
+        if (Array.isArray(pvsList)) {
+          let changed = false;
+          const nextPvs = pvsList.map((pv) => {
+            const filtered = (pv.resultats || []).filter((r) => !r.candidatId || !targetIds.has(r.candidatId));
+            if (filtered.length !== (pv.resultats || []).length) {
+              changed = true;
+              return { ...pv, resultats: filtered };
+            }
+            return pv;
+          });
+          if (changed) localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(nextPvs));
+        }
+      }
+    } catch {}
+
+    try {
+      const rawCr = localStorage.getItem('usmba_doctorat_creneaux');
+      if (rawCr) {
+        const crList: Creneau[] = JSON.parse(rawCr);
+        if (Array.isArray(crList)) {
+          const nextCr = crList.filter((c) => !c.candidatId || !targetIds.has(c.candidatId));
+          if (nextCr.length !== crList.length) {
+            localStorage.setItem('usmba_doctorat_creneaux', JSON.stringify(nextCr));
+          }
+        }
+      }
+    } catch {}
+
+    try {
+      const rawRes = localStorage.getItem('usmba_doctorat_resultats');
+      if (rawRes) {
+        const resList: import('../types').Resultat[] = JSON.parse(rawRes);
+        if (Array.isArray(resList)) {
+          const nextRes = resList.filter((r) => !r.candidatId || !targetIds.has(r.candidatId));
+          if (nextRes.length !== resList.length) {
+            localStorage.setItem('usmba_doctorat_resultats', JSON.stringify(nextRes));
+          }
+        }
+      }
+    } catch {}
+
+    try {
+      const rawNotifs = localStorage.getItem('usmba_notifications');
+      if (rawNotifs) {
+        const notifs = JSON.parse(rawNotifs);
+        if (Array.isArray(notifs)) {
+          const nextNotifs = notifs.filter(
+            (n: any) => !(n?.destinataireId && targetIds.has(n.destinataireId))
+          );
+          if (nextNotifs.length !== notifs.length) {
+            localStorage.setItem('usmba_notifications', JSON.stringify(nextNotifs));
+          }
+        }
+      }
+    } catch {}
+
+    localStorage.setItem(CLEANUP_SALMA_ALAMI_KEY, 'true');
+  } catch {
+    // safe fallback
+  }
+  return removedCount;
+}
+
 export function syncDirectorAccountsIfNeeded(): void {
   try {
     if (typeof localStorage === 'undefined') return;
@@ -1083,6 +1251,7 @@ export function syncDirectorAccountsIfNeeded(): void {
 migrateTestAccountsIfNeeded();
 cleanupAlaouiTariqIfNeeded();
 cleanupSalmaKhadijaIfNeeded();
+cleanupSalmaAlamiIfNeeded();
 syncDirectorAccountsIfNeeded();
 
 export function getDirectorStructure(directeurId?: string): string {

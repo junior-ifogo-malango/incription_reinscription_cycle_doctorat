@@ -401,6 +401,7 @@ export interface PV {
   scanMotifRefus?: string;
   membres?: [string, string]; /* noms des 2 membres, optionnels */
   coordonnateur?: string;
+  signaturesCount?: number;
 }
 
 /* Module R : Réinscription */
