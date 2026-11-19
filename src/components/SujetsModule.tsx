@@ -377,7 +377,6 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
     const updated = [created, ...sujets];
     onUpdateSujets?.(updated);
     storageService.setSujets(updated);
-    window.dispatchEvent(new CustomEvent('usmba_sujets_updated'));
 
     logEvent(
       { id: activeTeacher.id, nom: activeTeacher.nom, role: 'enseignant' },
@@ -431,7 +430,6 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
     const updated = sujets.map((s) => (s.id === editingSujet.id ? updatedSujet : s));
     onUpdateSujets?.(updated);
     storageService.setSujets(updated);
-    window.dispatchEvent(new CustomEvent('usmba_sujets_updated'));
 
     logEvent(
       { id: activeTeacher.id, nom: activeTeacher.nom, role: 'enseignant' },

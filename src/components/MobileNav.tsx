@@ -13,7 +13,6 @@ import {
   Calendar,
   Award,
   Users,
-  GraduationCap,
 } from 'lucide-react';
 import { UserRole, Role, normaliserRole } from '../types';
 import { fr } from '../i18n/fr';
@@ -157,7 +156,7 @@ export const MobileNav: React.FC<MobileNavProps> = ({
     admin_inscriptions: {
       id: 'admin_inscriptions',
       label: fr.nav.court.adminInscriptions,
-      icon: <GraduationCap size={18} />,
+      icon: <Award size={18} />,
     },
     admin_journal: {
       id: 'admin_journal',

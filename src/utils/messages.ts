@@ -388,6 +388,12 @@ export function mergeCandidateRecords(primary: Candidat, secondary: Partial<Cand
       : { candidaturesAnomalies: undefined }),
     envoyeLe: shouldKeepClearedEnvoi ? undefined : primary.envoyeLe || secondary.envoyeLe,
     attesteLe: primary.attesteLe || secondary.attesteLe,
+    inscriptionStatut:
+      primary.inscriptionStatut === 'validee' || secondary.inscriptionStatut === 'validee'
+        ? 'validee'
+        : primary.inscriptionStatut || secondary.inscriptionStatut,
+    inscriptionValideeLe: primary.inscriptionValideeLe || secondary.inscriptionValideeLe,
+    inscriptionValideePar: primary.inscriptionValideePar || secondary.inscriptionValideePar,
     anomalie: clearAnomalies ? undefined : primary.anomalie || secondary.anomalie,
     dossier: mergedDossier,
     pieces: mergePiecesList(primary.pieces, secondary.pieces),
@@ -860,29 +866,6 @@ export const notifierDirecteurCandidatureEnvoyee = (
   texte: string
 ): void => {
   notifierDirecteurDossierEnvoye(directeurIds, texte);
-};
-
-export const messageScanRefuse = (
-  refPv: string,
-  date: string,
-  motif: string
-): string => {
-  const dateFr = formatDatePourMessage(date);
-  return `Le scan du PV ${refPv} (séance du ${dateFr}) a été refusé par la Structure. Motif : ${motif}. Merci de déposer un nouveau scan conforme.`;
-};
-
-export const notifierDirecteurScanRefuse = (
-  directeurId: string,
-  refPv: string,
-  date: string,
-  motif: string
-): void => {
-  ajouterNotification({
-    destinataireId: directeurId || 'ens-1',
-    texte: messageScanRefuse(refPv, date, motif),
-    type: 'action',
-    actionTab: 'commission',
-  });
 };
 
 

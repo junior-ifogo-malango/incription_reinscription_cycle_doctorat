@@ -149,6 +149,7 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
     window.addEventListener('usmba_dossier_updated', handleSync);
     window.addEventListener('usmba_pieces_updated', handleSync);
     window.addEventListener('usmba_candidat_updated', handleSync);
+    window.addEventListener('usmba_inscriptions_updated', handleSync);
     return () => {
       window.removeEventListener('storage', handleSync);
       window.removeEventListener('usmba_demo_date_updated', handleSync);
@@ -157,6 +158,7 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
       window.removeEventListener('usmba_dossier_updated', handleSync);
       window.removeEventListener('usmba_pieces_updated', handleSync);
       window.removeEventListener('usmba_candidat_updated', handleSync);
+      window.removeEventListener('usmba_inscriptions_updated', handleSync);
     };
   }, [candidatId]);
 
@@ -258,10 +260,21 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
     (hasThreeSubjects && hasCompleteDossier && hasSavedCinInfos && isCandidatureEnvoyee) ||
     isLegacySubmitted;
 
-  // Étape 5 : Inscription (validée par la Scolarité)
-  const step5Done = Boolean(
-    candidat?.inscriptionValideeLe || candidat?.inscriptionStatut === 'validee'
-  );
+  // Étape 5 : Inscription (validée par l'Admin Scolarité)
+  let step5Done = candidat?.inscriptionStatut === 'validee';
+  if (!step5Done && currentCandidatId) {
+    try {
+      const rawInscr = localStorage.getItem('usmba_inscriptions_validees');
+      if (rawInscr) {
+        const inscrMap = JSON.parse(rawInscr);
+        if (inscrMap && inscrMap[currentCandidatId]?.statut === 'validee') {
+          step5Done = true;
+        }
+      }
+    } catch {
+      // fallback
+    }
+  }
 
   const rawDones = [step1Done, step2Done, step3Done, step4Done, step5Done];
 
@@ -430,8 +443,6 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
         doneDate = presentCreneau?.presenceConstateeLe || presentCreneau?.date;
       } else if (etape.cle === 'resultat') {
         doneDate = publishedPv?.publieLe;
-      } else if (etape.cle === 'inscription') {
-        doneDate = candidat?.inscriptionValideeLe;
       }
       return {
         kind: 'faite' as const,

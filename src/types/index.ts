@@ -191,6 +191,9 @@ export interface Candidat {
   verificationEssaisRestants?: number;
   verificationBloqueJusqua?: number; // timestamp en millisecondes
   attesteLe?: string;
+  inscriptionStatut?: 'en_attente' | 'validee';
+  inscriptionValideeLe?: string;
+  inscriptionValideePar?: string;
   cursus?: {
     diplome?: string;
     etablissement?: string;
@@ -198,9 +201,6 @@ export interface Candidat {
     mention?: string;
     [key: string]: any;
   };
-  inscriptionStatut?: 'en_attente' | 'validee' | 'refusee';
-  inscriptionValideeLe?: string;
-  inscriptionValideePar?: string;
 }
 
 export type NotificationType = 'info' | 'action';
@@ -402,15 +402,9 @@ export interface PV {
   scanDeposeLe?: string;
   scanStatut?: 'en_attente' | 'valide' | 'refuse';
   scanMotifRefus?: string;
-  scanDataUrl?: string;
-  scanNom?: string;
   membres?: [string, string]; /* noms des 2 membres, optionnels */
   coordonnateur?: string;
   signaturesCount?: number;
-  structureSignatureAttestee?: boolean;
-  structureScanDataUrl?: string;
-  structureScanNom?: string;
-  structureScanDeposeLe?: string;
 }
 
 /* Module R : Réinscription */

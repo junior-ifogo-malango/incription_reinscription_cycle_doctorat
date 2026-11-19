@@ -1394,7 +1394,7 @@ export default function App() {
                       <>
                         <button
                           onClick={() => handleTabChange('admin_comptes')}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0 ${
                             tab === 'admin_comptes'
                               ? 'bg-purple-800 text-purple-200'
                               : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
@@ -1405,18 +1405,18 @@ export default function App() {
                         </button>
                         <button
                           onClick={() => handleTabChange('admin_inscriptions')}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0 ${
                             tab === 'admin_inscriptions'
                               ? 'bg-purple-800 text-purple-200'
                               : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
                           }`}
                         >
-                          <GraduationCap size={14} />
+                          <Award size={14} />
                           <span>{fr.nav.adminInscriptions}</span>
                         </button>
                         <button
                           onClick={() => handleTabChange('admin_journal')}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0 ${
                             tab === 'admin_journal'
                               ? 'bg-purple-800 text-purple-200'
                               : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
