@@ -31,6 +31,7 @@ import {
   Plus,
   Archive,
   Edit3,
+  Send,
 } from 'lucide-react';
 import { Sujet, Candidat, Enseignant, UserRole, Notification, dossierComplet, Periode, QUOTA_SUJETS } from '../types';
 import { fr } from '../i18n/fr';
@@ -206,8 +207,9 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectedSujetForDetail]);
 
-  // Alerte 4e sujet refusé
+  // Alerte 4e sujet refusé & confirmation d'envoi direct depuis le catalogue
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [sendFeedback, setSendFeedback] = useState<string | null>(null);
 
   // Formulaire d'inscription avec mot de passe
   const [form, setForm] = useState({
@@ -635,6 +637,57 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
     storageService.setCandidat(updated);
   };
 
+  // Envoi direct d'un sujet depuis le catalogue (lorsque le candidat est connecté)
+  const handleDirectSendFromCatalog = (sujetId: string) => {
+    setErrorMsg(null);
+    setSendFeedback(null);
+    if (!isConnected) {
+      setAuthModalMode('login');
+      setIsAuthModalOpen(true);
+      return;
+    }
+    if (candidat.verificationStatut === 'non_verifie') {
+      setView('verify_code');
+      return;
+    }
+    const targetSujet = sujets.find((s) => s && s.id === sujetId);
+    if (!targetSujet || targetSujet.statut === 'archive' || (targetSujet.statutValidation || 'publie') !== 'publie') {
+      return;
+    }
+    const currentCandidatures = Array.isArray(candidat.candidatures) ? candidat.candidatures : [];
+    if (currentCandidatures.includes(sujetId)) return;
+    if (currentCandidatures.length >= 3) {
+      setErrorMsg(fr.sujetsModule.fourthRefusedAlert);
+      return;
+    }
+
+    const nextCandidatures = [...currentCandidatures, sujetId];
+    const statuts: Record<string, any> = {
+      ...(candidat.candidaturesStatuts || {}),
+    };
+    if (!statuts[sujetId]) {
+      statuts[sujetId] = 'brouillon';
+    }
+
+    const updated: Candidat = {
+      ...candidat,
+      candidatures: nextCandidatures,
+      interets: nextCandidatures,
+      candidaturesStatuts: statuts,
+      attesteLe: candidat.attesteLe || new Date().toISOString(),
+    };
+    const synced = persistUnifiedCandidate(updated, true);
+    onUpdateCandidat(synced);
+
+    if (nextCandidatures.length >= 3) {
+      setSendFeedback(fr.sujetsModule.catalogThreeSentFeedback);
+    } else {
+      setSendFeedback(
+        fr.sujetsModule.catalogSentFeedback.replace('{count}', String(nextCandidatures.length))
+      );
+    }
+  };
+
   // Connexion démo
   const handleLoginDemo = () => {
     const demo = storageService.loginAsDemo();
@@ -685,7 +738,7 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
   }, [candidat.verificationBloqueJusqua, candidat, onUpdateCandidat]);
 
   const saveSelectedSubjectsDraft = (targetCandidat: Candidat, selectedIds: string[]) => {
-    const remainingPanier = (targetCandidat.panier || []).filter((id) => !selectedIds.includes(id));
+    const keptPanier = Array.isArray(targetCandidat.panier) ? targetCandidat.panier : [];
     const statuts: Record<string, any> = {
       ...(targetCandidat.candidaturesStatuts || {}),
     };
@@ -696,8 +749,8 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
     });
     const updated: Candidat = {
       ...targetCandidat,
-      panier: remainingPanier,
-      panierInteret: remainingPanier,
+      panier: keptPanier,
+      panierInteret: keptPanier,
       candidatures: selectedIds,
       interets: selectedIds,
       candidaturesStatuts: statuts,
@@ -985,22 +1038,7 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
     }
   };
 
-  // Retirer automatiquement du panier les sujets déjà candidatés
-  React.useEffect(() => {
-    if (candidat.candidatures && candidat.candidatures.length > 0) {
-      const hasOverlap = candidat.panier.some((id) => candidat.candidatures.includes(id));
-      if (hasOverlap) {
-        const cleanedPanier = candidat.panier.filter((id) => !candidat.candidatures.includes(id));
-        const updated: Candidat = {
-          ...candidat,
-          panier: cleanedPanier,
-          panierInteret: cleanedPanier,
-        };
-        onUpdateCandidat(updated);
-        storageService.setCandidat(updated);
-      }
-    }
-  }, [candidat.candidatures, candidat.panier, onUpdateCandidat]);
+  // Le panier conserve ses sujets même après envoi des candidatures
 
   // Enregistrement des 3 sujets sans dépôt ni notification (envoi unique depuis Mon dossier)
   const finalizeValidateCandidatures = (targetCandidat: Candidat) => {
@@ -1196,6 +1234,23 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
             </div>
           </div>
 
+          {(errorMsg || sendFeedback) && (
+            <div className="px-5 sm:px-6 pb-2">
+              {errorMsg && (
+                <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2">
+                  <AlertTriangle size={14} className="text-rose-600 shrink-0" />
+                  <span>{errorMsg}</span>
+                </div>
+              )}
+              {!errorMsg && sendFeedback && (
+                <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold flex items-center gap-2">
+                  <CheckCircle2 size={14} className="text-emerald-600 shrink-0" />
+                  <span>{sendFeedback}</span>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="px-5 py-3.5 sm:px-6 bg-slate-50 border-t border-slate-200 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-2.5">
             <button
               type="button"
@@ -1214,6 +1269,15 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
                 >
                   <FileCheck2 size={16} className="text-emerald-600 shrink-0" />
                   <span>{fr.sujetsModule.candidatureDeposeeBadge}</span>
+                </button>
+              ) : isConnected ? (
+                <button
+                  type="button"
+                  onClick={() => handleDirectSendFromCatalog(selectedSujetForDetail.id)}
+                  className="w-full sm:w-auto px-4 py-2.5 rounded-xl border bg-emerald-700 border-emerald-700 text-white hover:bg-emerald-800 text-sm font-bold transition flex items-center justify-center gap-2 active:scale-95 cursor-pointer"
+                >
+                  <Send size={15} className="text-white shrink-0" />
+                  <span>{fr.sujetsModule.btnEnvoyer}</span>
                 </button>
               ) : (
                 <button
@@ -1788,6 +1852,11 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
     const wishesCount = combinedAvailableIds.length;
     const hasEnoughWishes = wishesCount >= 3;
     const missingWishesCount = Math.max(0, 3 - wishesCount);
+    const allCartSent =
+      isConnected &&
+      cartAvailableItems.length > 0 &&
+      cartAvailableItems.every((s) => candidat.candidatures.includes(s.id)) &&
+      candidat.candidatures.length >= 3;
     const completerDisabled = isUnverified || !hasEnoughWishes;
     const wishesMissingReason = !hasEnoughWishes
       ? fr.sujetsModule.voeuxIncompletsRaison.replace('{manques}', String(missingWishesCount))
@@ -1805,19 +1874,38 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
 
           {cartItems.length > 0 && (
             <div className="flex flex-col items-end gap-1">
-              <button
-                type="button"
-                disabled={completerDisabled}
-                onClick={handleStartCandidater}
-                className={`min-h-[42px] px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs ${
-                  completerDisabled
-                    ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
-                    : 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer'
-                }`}
-              >
-                <span>{fr.sujetsModule.btnCompleterMonDossier}</span>
-                <ArrowRight size={14} />
-              </button>
+              {allCartSent ? (
+                <div className="flex items-center gap-2 flex-wrap justify-end">
+                  <span className="min-h-[42px] px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 flex items-center gap-1.5">
+                    <FileCheck2 size={15} className="text-emerald-600 shrink-0" />
+                    <span>{fr.sujetsModule.candidatureDeposeeBadge}</span>
+                  </span>
+                  {!candidat.dossier?.dateEnvoi && (
+                    <button
+                      type="button"
+                      onClick={() => onNavigateTab?.('dossier')}
+                      className="min-h-[42px] px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-700 hover:bg-emerald-800 text-white transition flex items-center gap-1.5 shadow-xs cursor-pointer"
+                    >
+                      <span>{fr.sujetsModule.btnCompleterMonDossier}</span>
+                      <ArrowRight size={14} />
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  disabled={completerDisabled}
+                  onClick={handleStartCandidater}
+                  className={`min-h-[42px] px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs ${
+                    completerDisabled
+                      ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                      : 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer'
+                  }`}
+                >
+                  <Send size={14} />
+                  <span>{fr.sujetsModule.btnEnvoyer}</span>
+                </button>
+              )}
               {isUnverified && (
                 <div className="flex items-center gap-1 text-[11px] text-amber-800 font-medium">
                   <span>{fr.sujetsModule.compteNonVerifieNotice}</span>
@@ -1889,7 +1977,7 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
                         {isApplied && (
                           <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full inline-flex items-center gap-1">
                             <FileCheck2 size={12} className="text-emerald-600 shrink-0" />
-                            <span>{fr.sujetsModule.alreadyAppliedBadge}</span>
+                            <span>{fr.sujetsModule.candidatureDeposeeBadge}</span>
                           </span>
                         )}
                       </div>
@@ -1921,19 +2009,32 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
             })}
 
             <div className="pt-2 space-y-1.5">
-              <button
-                type="button"
-                disabled={completerDisabled}
-                onClick={handleStartCandidater}
-                className={`w-full min-h-[48px] py-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-2 shadow-xs ${
-                  completerDisabled
-                    ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
-                    : 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer'
-                }`}
-              >
-                <span>{fr.sujetsModule.btnCompleterMonDossier}</span>
-                <ArrowRight size={16} />
-              </button>
+              {allCartSent ? (
+                !candidat.dossier?.dateEnvoi && (
+                  <button
+                    type="button"
+                    onClick={() => onNavigateTab?.('dossier')}
+                    className="w-full min-h-[48px] py-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-2 shadow-xs bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer"
+                  >
+                    <span>{fr.sujetsModule.btnCompleterMonDossier}</span>
+                    <ArrowRight size={16} />
+                  </button>
+                )
+              ) : (
+                <button
+                  type="button"
+                  disabled={completerDisabled}
+                  onClick={handleStartCandidater}
+                  className={`w-full min-h-[48px] py-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-2 shadow-xs ${
+                    completerDisabled
+                      ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                      : 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer'
+                  }`}
+                >
+                  <Send size={15} />
+                  <span>{fr.sujetsModule.btnEnvoyer}</span>
+                </button>
+              )}
               {isUnverified && (
                 <div className="flex items-center justify-center gap-1.5 text-[11px] text-amber-800 font-medium text-center">
                   <span>{fr.sujetsModule.candidaterDisabledUnverifiedReason}</span>
@@ -1979,7 +2080,7 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
                 ...(candidat.panier || []),
                 ...(Array.isArray(storedBefore?.panier) ? storedBefore.panier : []),
               ])
-            ).filter((id) => !(base.candidatures || []).includes(id));
+            );
             const updatedCand: Candidat = persistUnifiedCandidate(
               {
                 ...base,
@@ -3134,6 +3235,47 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
         </div>
       )}
 
+      {isCandidateOrVisitor && isConnected && errorMsg && (
+        <div className="p-3 rounded-xl bg-rose-50 border border-rose-300 text-rose-800 text-xs flex items-center justify-between gap-2 shadow-xs">
+          <div className="flex items-center gap-2">
+            <AlertTriangle size={15} className="text-rose-600 shrink-0" />
+            <span className="font-semibold">{errorMsg}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setErrorMsg(null)}
+            aria-label={fr.common.close}
+            className="p-1 text-rose-600 hover:text-rose-900 cursor-pointer"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
+      {isCandidateOrVisitor && isConnected && (sendFeedback || (candidat.candidatures.length > 0 && !candidat.dossier?.dateEnvoi)) && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2.5 flex items-center justify-between gap-3 flex-wrap shadow-xs">
+          <div className="flex items-center gap-2 text-xs font-semibold text-emerald-950">
+            <CheckCircle2 size={15} className="text-emerald-700 shrink-0" />
+            <span>
+              {sendFeedback ||
+                (candidat.candidatures.length >= 3
+                  ? fr.sujetsModule.catalogThreeSentFeedback
+                  : fr.sujetsModule.catalogSentFeedback.replace('{count}', String(candidat.candidatures.length)))}
+            </span>
+          </div>
+          {candidat.candidatures.length >= 3 && !candidat.dossier?.dateEnvoi && (
+            <button
+              type="button"
+              onClick={() => onNavigateTab?.('dossier')}
+              className="min-h-[38px] px-3.5 py-1.5 rounded-xl text-xs font-bold bg-emerald-700 hover:bg-emerald-800 text-white transition flex items-center gap-1.5 shadow-xs cursor-pointer active:scale-98"
+            >
+              <span>{fr.sujetsModule.btnCompleterMonDossier}</span>
+              <ArrowRight size={14} />
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Puces de critères actifs retirables (✕) sous la barre */}
       {activeCriteriaCount > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">
@@ -3312,7 +3454,7 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
                     </button>
                   </div>
 
-                  {/* Bouton Ajouter aux vœux / Dans mes vœux (pleine largeur sur mobile) */}
+                  {/* Bouton Envoyer (si connecté) ou Ajouter aux vœux (si visiteur) */}
                   <div className="shrink-0 w-full sm:w-auto">
                     {isApplied ? (
                       <button
@@ -3322,6 +3464,15 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
                       >
                         <FileCheck2 size={16} className="text-emerald-600 shrink-0" />
                         <span>{fr.sujetsModule.candidatureDeposeeBadge}</span>
+                      </button>
+                    ) : isConnected ? (
+                      <button
+                        type="button"
+                        onClick={() => handleDirectSendFromCatalog(sujet.id)}
+                        className="w-full sm:w-auto min-h-[44px] text-sm font-bold py-2.5 px-4 rounded-xl border bg-emerald-700 border-emerald-700 text-white hover:bg-emerald-800 transition flex items-center justify-center gap-2 active:scale-95 cursor-pointer"
+                      >
+                        <Send size={15} className="text-white shrink-0" />
+                        <span>{fr.sujetsModule.btnEnvoyer}</span>
                       </button>
                     ) : (
                       <button

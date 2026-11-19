@@ -54,6 +54,7 @@ interface MobileNavProps {
   badgeCounts?: {
     panierCount?: number;
     candidaturesCount?: number;
+    creneauxCount?: number;
     piecesPretes?: number;
     alertesCed?: number;
     reinscriptionsCount?: number;
@@ -118,6 +119,7 @@ export const MobileNav: React.FC<MobileNavProps> = ({
       badge: badgeCounts.candidaturesCount
         ? String(badgeCounts.candidaturesCount)
         : undefined,
+      badgeColor: 'bg-rose-600',
     },
     entretiens: {
       id: 'entretiens',
@@ -125,6 +127,11 @@ export const MobileNav: React.FC<MobileNavProps> = ({
         ? fr.nav.court.creneaux
         : fr.nav.court.entretiens,
       icon: <CalendarCheck2 size={18} />,
+      badge:
+        normalizedRoles.includes('enseignant') && badgeCounts.creneauxCount
+          ? String(badgeCounts.creneauxCount)
+          : undefined,
+      badgeColor: 'bg-rose-600',
     },
     commission: {
       id: 'commission',

@@ -760,24 +760,56 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
               </span>
             </div>
           </div>
-          {isDossierEnvoye ? (
-            <span className="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 shrink-0">
-              <Send size={12} />
-              <span>
-                {fr.dossierDirecteur.envoyeLePrefix.replace(
-                  '{date}',
-                  (candidat.dossier?.dateEnvoi || candidat.envoyeLe)
-                    ? new Date(candidat.dossier?.dateEnvoi || candidat.envoyeLe!).toLocaleDateString('fr-FR')
-                    : fr.dossierDirecteur.nonRenseigne
-                )}
+          <div className="flex items-center gap-2 flex-wrap shrink-0">
+            <span
+              className={`inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full border ${
+                isDossierValide
+                  ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                  : 'bg-rose-100 text-rose-800 border-rose-300'
+              }`}
+            >
+              {isDossierValide ? (
+                <CheckCircle2 size={12} className="text-emerald-700 shrink-0" />
+              ) : (
+                <XCircle size={12} className="text-rose-600 shrink-0" />
+              )}
+              <span>{isDossierValide ? fr.dossierDirecteur.badgeValidee : fr.dossierDirecteur.badgeNonValidee}</span>
+            </span>
+
+            <span
+              className={`inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full border ${
+                existingConvocation
+                  ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                  : 'bg-rose-100 text-rose-800 border-rose-300'
+              }`}
+            >
+              {existingConvocation ? (
+                <CheckCircle2 size={12} className="text-emerald-700 shrink-0" />
+              ) : (
+                <Calendar size={12} className="text-rose-600 shrink-0" />
+              )}
+              <span>{existingConvocation ? fr.dossierDirecteur.badgeConvoquee : fr.dossierDirecteur.badgeNonConvoquee}</span>
+            </span>
+
+            {isDossierEnvoye ? (
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 shrink-0">
+                <Send size={12} />
+                <span>
+                  {fr.dossierDirecteur.envoyeLePrefix.replace(
+                    '{date}',
+                    (candidat.dossier?.dateEnvoi || candidat.envoyeLe)
+                      ? new Date(candidat.dossier?.dateEnvoi || candidat.envoyeLe!).toLocaleDateString('fr-FR')
+                      : fr.dossierDirecteur.nonRenseigne
+                  )}
+                </span>
               </span>
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-full bg-amber-100 text-amber-900 border border-amber-300 shrink-0">
-              <AlertCircle size={12} />
-              <span>{fr.dossierDirecteur.badgeEnAttenteCandidat}</span>
-            </span>
-          )}
+            ) : (
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-full bg-amber-100 text-amber-900 border border-amber-300 shrink-0">
+                <AlertCircle size={12} />
+                <span>{fr.dossierDirecteur.badgeEnAttenteCandidat}</span>
+              </span>
+            )}
+          </div>
         </div>
       </div>
 

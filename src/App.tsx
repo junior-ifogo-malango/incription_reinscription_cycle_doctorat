@@ -26,6 +26,7 @@ import {
   Users,
   Eye,
   ExternalLink,
+  XCircle,
 } from 'lucide-react';
 import { UserRole, Role, Compte, Candidat, Enseignant, Sujet, Piece, Creneau, Notification, type Dossier as DossierData, Rapport, Vote, CandidatureStatut, normaliserRole, getCompteRoles, dossierComplet } from './types';
 import { storageService } from './services/storage';
@@ -337,6 +338,7 @@ export default function App() {
     window.addEventListener('usmba_sujets_updated', handleSync);
     window.addEventListener('usmba_candidat_updated', handleSync);
     window.addEventListener('usmba_dossier_updated', handleSync);
+    window.addEventListener('usmba_creneaux_updated', handleSync);
     window.addEventListener('usmba_account_updated', handleAccountUpdated);
     window.addEventListener('storage', handleSync);
     return () => {
@@ -345,6 +347,7 @@ export default function App() {
       window.removeEventListener('usmba_sujets_updated', handleSync);
       window.removeEventListener('usmba_candidat_updated', handleSync);
       window.removeEventListener('usmba_dossier_updated', handleSync);
+      window.removeEventListener('usmba_creneaux_updated', handleSync);
       window.removeEventListener('usmba_account_updated', handleAccountUpdated);
       window.removeEventListener('storage', handleSync);
     };
@@ -387,6 +390,17 @@ export default function App() {
     setPieces(storageService.getPieces());
     setDossier(storageService.getDossier());
     setCreneaux(storageService.getCreneaux());
+    try {
+      const rawSim = localStorage.getItem('usmba_simulated_statuts');
+      if (rawSim) {
+        const parsedSim = JSON.parse(rawSim);
+        if (parsedSim && typeof parsedSim === 'object') {
+          setSimulatedStatuts(parsedSim);
+        }
+      }
+    } catch {
+      // safe fallback
+    }
     try {
       const raw = localStorage.getItem('usmba_doctorat_rapports') || localStorage.getItem('usmba_rapports');
       if (raw) setRapports(JSON.parse(raw));
@@ -505,7 +519,6 @@ export default function App() {
       window.dispatchEvent(new CustomEvent('storage'));
     } catch {}
 
-    let shouldOpenDossierForThreeSubjects = false;
     if (userRole === 'candidat') {
       const storedBefore = storageService.getCandidat();
       const visitorPanier = Array.from(
@@ -524,40 +537,13 @@ export default function App() {
         : [];
       const mergedPanier = Array.from(
         new Set([...(baseCandidate.panier || []), ...visitorPanier])
-      ).filter((id) => !existingCandidatures.includes(id));
+      );
 
-      const availablePanierIds = mergedPanier.filter((id) => {
-        const s = sujets.find((x) => x && x.id === id);
-        return s && s.statut !== 'archive' && (s.statutValidation || 'publie') === 'publie';
-      });
-      const combinedIds = Array.from(new Set([...existingCandidatures, ...availablePanierIds]));
-
-      let finalCandidate: Candidat;
-      if (existingCandidatures.length === 0 && combinedIds.length === 3) {
-        const nextStatuts: Record<string, CandidatureStatut> = {
-          ...(baseCandidate.candidaturesStatuts || {}),
-        };
-        combinedIds.forEach((id) => {
-          if (!nextStatuts[id]) nextStatuts[id] = 'brouillon';
-        });
-        const remainingPanier = mergedPanier.filter((id) => !combinedIds.includes(id));
-        finalCandidate = {
-          ...baseCandidate,
-          panier: remainingPanier,
-          panierInteret: remainingPanier,
-          candidatures: combinedIds,
-          interets: combinedIds,
-          candidaturesStatuts: nextStatuts,
-          attesteLe: baseCandidate.attesteLe || new Date().toISOString(),
-        };
-        shouldOpenDossierForThreeSubjects = true;
-      } else {
-        finalCandidate = {
-          ...baseCandidate,
-          panier: mergedPanier,
-          panierInteret: mergedPanier,
-        };
-      }
+      const finalCandidate: Candidat = {
+        ...baseCandidate,
+        panier: mergedPanier,
+        panierInteret: mergedPanier,
+      };
 
       const syncedCandidate = persistUnifiedCandidate(finalCandidate, true);
       setCandidat(syncedCandidate);
@@ -590,10 +576,7 @@ export default function App() {
     const pendingTarget = pendingTabRef.current;
     pendingTabRef.current = null;
 
-    if (shouldOpenDossierForThreeSubjects && isTabAllowedForRoles('dossier', effectiveRolesAfterLogin)) {
-      setSelectedCandidatForDossier(null);
-      setTab('dossier');
-    } else if (pendingTarget && isTabAllowedForRoles(pendingTarget, effectiveRolesAfterLogin)) {
+    if (pendingTarget && isTabAllowedForRoles(pendingTarget, effectiveRolesAfterLogin)) {
       setSelectedCandidatForDossier(null);
       setTab(pendingTarget);
     } else if (userRole === 'candidat') {
@@ -846,7 +829,14 @@ export default function App() {
       candidatesById.set(candidat.id, candidat);
     }
 
-    candidatesById.forEach((cand) => {
+    MOCK_CANDIDATS.forEach((mc) => {
+      if (mc && mc.id && mc.compteCree && !candidatesById.has(mc.id)) {
+        candidatesById.set(mc.id, mc);
+      }
+    });
+
+    candidatesById.forEach((rawCand) => {
+      const cand = reconcileCandidateFromStorage(rawCand);
       if (!cand.compteCree || !Array.isArray(cand.candidatures)) return;
       const activePiecesDeclarees = (cand.pieces || []).filter(
         (p) => p.statut === 'declaree' || p.statut === 'prouvee'
@@ -872,9 +862,13 @@ export default function App() {
         seenSubjects.add(id);
         const s = sujets.find((x) => x.id === id);
         if (s) {
-          const st = cand.candidaturesStatuts?.[id] || 'brouillon';
+          const itemKey = `${cand.id}-${id}`;
+          const st: CandidatureStatut =
+            (simulatedStatuts[itemKey] as CandidatureStatut | undefined) ||
+            cand.candidaturesStatuts?.[id] ||
+            'brouillon';
           list.push({
-            key: `${cand.id}-${id}`,
+            key: itemKey,
             candidatId: cand.id,
             sujetId: s.id,
             candidatNom: cand.nom?.trim() || fr.dossierDirecteur.nonRenseigne,
@@ -895,22 +889,35 @@ export default function App() {
     return list;
   }, [candidat, teacherSubjectIds, sujets, activeEnseignant, simulatedStatuts, candidateSyncTick]);
 
-  // Badge de Candidatures = nombre de dossiers envoyés complets non validés
-  const candidaturesCompletsNonValidesCount = useMemo(() => {
+  // Actions en attente pour le directeur : dossiers envoyés non validés OU validés non encore convoqués
+  const candidaturesActionCount = useMemo(() => {
     return candidaturesEnseignant.filter((c) => {
-      if (c.statut === 'retenue') return false;
       const candObj = c.isCurrentCandidat ? candidat : findCandidateApp(c.candidatId);
       if (!candObj) return false;
-      const hasACorr = Object.values(candObj.candidaturesStatuts || {}).some((s) => s === 'a_corriger');
+      const reconciled = reconcileCandidateFromStorage(candObj);
+      const isValide =
+        c.statut === 'retenue' ||
+        reconciled.candidaturesStatuts?.[c.sujetId] === 'retenue' ||
+        simulatedStatuts[c.key] === 'retenue' ||
+        Object.values(reconciled.candidaturesStatuts || {}).some((s) => s === 'retenue');
+      const hasACorr = Object.values(reconciled.candidaturesStatuts || {}).some((s) => s === 'a_corriger');
       const sent = Boolean(
-        candObj.dossier?.dateEnvoi ||
+        reconciled.dossier?.dateEnvoi ||
         (!hasACorr &&
-          (candObj.envoyeLe ||
-            (candObj.candidaturesEnvoyeLe && Object.keys(candObj.candidaturesEnvoyeLe).length > 0)))
+          (reconciled.envoyeLe ||
+            (reconciled.candidaturesEnvoyeLe && Object.keys(reconciled.candidaturesEnvoyeLe).length > 0) ||
+            isValide))
       );
-      return sent && dossierComplet(candObj).complet;
+      if (!sent) return false;
+      const isConvoque = creneaux.some(
+        (cr) =>
+          cr.candidatId === c.candidatId &&
+          cr.enseignantId === activeEnseignant.id &&
+          (cr.statut === 'reserve' || cr.statut === 'confirme')
+      );
+      return !isValide || !isConvoque;
     }).length;
-  }, [candidaturesEnseignant, candidat, candidateSyncTick]);
+  }, [candidaturesEnseignant, candidat, simulatedStatuts, creneaux, activeEnseignant.id, candidateSyncTick]);
 
   const structureConnecteeNom = useMemo(() => {
     if (activeCompte) {
@@ -1216,14 +1223,17 @@ export default function App() {
                           }`}
                         >
                           <span>{fr.nav.candidatures}</span>
-                          {candidaturesCompletsNonValidesCount > 0 && (
-                            <span className="px-1.5 py-0.2 rounded-full bg-emerald-600 text-white font-bold text-[10px]">
-                              {candidaturesCompletsNonValidesCount}
+                          {candidaturesActionCount > 0 ? (
+                            <span className="px-1.5 py-0.5 rounded-full bg-rose-600 text-white font-bold text-[10px] inline-flex items-center gap-1 shadow-xs">
+                              <AlertCircle size={11} className="shrink-0" />
+                              <span>{candidaturesActionCount}</span>
                             </span>
-                          )}
+                          ) : candidaturesEnseignant.length > 0 ? (
+                            <CheckCircle2 size={13} className="text-emerald-400 shrink-0" />
+                          ) : null}
                         </button>
 
-                        {/* 2. Créneaux */}
+                        {/* 2. Créneaux / Convocations */}
                         <button
                           onClick={() => handleTabChange('entretiens')}
                           className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
@@ -1233,6 +1243,12 @@ export default function App() {
                           }`}
                         >
                           <span>{fr.nav.mesCreneaux}</span>
+                          {candidaturesActionCount > 0 && (
+                            <span className="px-1.5 py-0.5 rounded-full bg-rose-600 text-white font-bold text-[10px] inline-flex items-center gap-1 shadow-xs">
+                              <AlertCircle size={11} className="shrink-0" />
+                              <span>{candidaturesActionCount}</span>
+                            </span>
+                          )}
                         </button>
 
                         {/* 3. Commission */}
@@ -1805,7 +1821,7 @@ export default function App() {
             ) : (() => {
               const enrichedItems = candidaturesEnseignant.map((item) => {
                 const resolved = findCandidateApp(item.candidatId);
-                const itemCandidate = resolved || (item.isCurrentCandidat
+                const rawCandidate = resolved || (item.isCurrentCandidat
                   ? candidat
                   : {
                       id: item.candidatId,
@@ -1817,17 +1833,29 @@ export default function App() {
                         { type: 'DIPLOME', statut: item.piecesProuvees >= 3 ? 'prouvee' : 'absente', source: 'apogee' },
                       ],
                     });
+                const itemCandidate = reconcileCandidateFromStorage(rawCandidate as Candidat);
                 const check = dossierComplet(itemCandidate as any);
-                const candObj = itemCandidate as Candidat;
-                const hasACorr = Object.values(candObj?.candidaturesStatuts || {}).some((s) => s === 'a_corriger');
+                const statuts = itemCandidate?.candidaturesStatuts || {};
+                const isValide =
+                  item.statut === 'retenue' ||
+                  statuts[item.sujetId] === 'retenue' ||
+                  simulatedStatuts[item.key] === 'retenue' ||
+                  Object.values(statuts).some((s) => s === 'retenue');
+                const isConvoque = creneaux.some(
+                  (cr) =>
+                    cr.candidatId === item.candidatId &&
+                    cr.enseignantId === activeEnseignant.id &&
+                    (cr.statut === 'reserve' || cr.statut === 'confirme')
+                );
+                const hasACorr = Object.values(statuts).some((s) => s === 'a_corriger');
                 const hasLegacySent = Boolean(
                   !hasACorr &&
-                  (candObj?.envoyeLe ||
-                    (candObj?.candidaturesEnvoyeLe && Object.keys(candObj.candidaturesEnvoyeLe).length > 0) ||
-                    Object.values(candObj?.candidaturesStatuts || {}).some((s) => s === 'retenue'))
+                  (itemCandidate?.envoyeLe ||
+                    (itemCandidate?.candidaturesEnvoyeLe && Object.keys(itemCandidate.candidaturesEnvoyeLe).length > 0) ||
+                    isValide)
                 );
-                const isSent = Boolean(candObj?.dossier?.dateEnvoi || hasLegacySent);
-                return { item, itemCandidate, check, isSent };
+                const isSent = Boolean(itemCandidate?.dossier?.dateEnvoi || hasLegacySent);
+                return { item, itemCandidate, check, isSent, isValide, isConvoque };
               });
 
               const aTraiterList = enrichedItems.filter((x) => x.isSent);
@@ -1837,19 +1865,52 @@ export default function App() {
                 item,
                 check,
                 isSent,
+                isValide,
+                isConvoque,
               }: {
                 item: (typeof candidaturesEnseignant)[number];
                 check: ReturnType<typeof dossierComplet>;
                 isSent: boolean;
-              }) => (
+                isValide: boolean;
+                isConvoque: boolean;
+              }) => {
+                const actionNeeded = isSent && (!isValide || !isConvoque);
+                const actionLabel = !isValide
+                  ? fr.dossierDirecteur.actionAValider
+                  : fr.dossierDirecteur.actionAConvoquer;
+
+                return (
                 <div
                   key={item.key}
-                  className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-xs space-y-3 hover:border-slate-300 transition-colors"
+                  className={`bg-white border rounded-2xl p-4 shadow-xs space-y-3 transition-colors ${
+                    actionNeeded
+                      ? 'border-rose-200 hover:border-rose-300'
+                      : 'border-slate-200/90 hover:border-slate-300'
+                  }`}
                 >
-                  <div className="flex items-center justify-between gap-2">
-                    <h3 className="text-sm font-bold text-slate-900 truncate">
-                      {item.candidatNom || fr.dossierDirecteur.nonRenseigne}
-                    </h3>
+                  <div className="flex items-start justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                      <h3 className="text-sm font-bold text-slate-900 truncate">
+                        {item.candidatNom || fr.dossierDirecteur.nonRenseigne}
+                      </h3>
+                      {actionNeeded ? (
+                        <span
+                          title={actionLabel}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-600 text-white shadow-xs shrink-0"
+                        >
+                          <AlertCircle size={12} className="shrink-0" />
+                          <span>{actionLabel}</span>
+                        </span>
+                      ) : isSent && isValide && isConvoque ? (
+                        <span
+                          title={fr.dossierDirecteur.aucuneAction}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-600 text-white shadow-xs shrink-0"
+                        >
+                          <CheckCircle2 size={12} className="shrink-0" />
+                          <span>{fr.dossierDirecteur.aucuneAction}</span>
+                        </span>
+                      ) : null}
+                    </div>
                     {isSent && formatDateJJMM(item.date) && (
                       <span className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md shrink-0">
                         <Calendar size={12} className="text-slate-500 shrink-0" />
@@ -1883,6 +1944,32 @@ export default function App() {
                         </span>
                       </span>
                     )}
+
+                    {/* Badge Validée / Non validée (vert / rouge) */}
+                    {isValide ? (
+                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
+                        <CheckCircle2 size={13} className="text-emerald-700 shrink-0" />
+                        <span>{fr.dossierDirecteur.badgeValidee}</span>
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-rose-100 text-rose-800 border border-rose-300">
+                        <XCircle size={13} className="text-rose-700 shrink-0" />
+                        <span>{fr.dossierDirecteur.badgeNonValidee}</span>
+                      </span>
+                    )}
+
+                    {/* Badge Convoquée / Non convoquée (vert / rouge) */}
+                    {isConvoque ? (
+                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
+                        <CalendarCheck2 size={13} className="text-emerald-700 shrink-0" />
+                        <span>{fr.dossierDirecteur.badgeConvoquee}</span>
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-rose-100 text-rose-800 border border-rose-300">
+                        <AlertCircle size={13} className="text-rose-700 shrink-0" />
+                        <span>{fr.dossierDirecteur.badgeNonConvoquee}</span>
+                      </span>
+                    )}
                   </div>
 
                   <div className="pt-2 border-t border-slate-100 flex items-center justify-end">
@@ -1896,7 +1983,8 @@ export default function App() {
                     </button>
                   </div>
                 </div>
-              );
+                );
+              };
 
               return (
                 <div className="space-y-4">
@@ -1990,7 +2078,13 @@ export default function App() {
 
           {/* Onglet Mes créneaux (Enseignant) */}
           {tab === 'entretiens' && role === 'enseignant' && (
-            <MesCreneaux enseignantId={activeEnseignant.id} />
+            <MesCreneaux
+              enseignantId={activeEnseignant.id}
+              onOpenDossier={(id, nom) => {
+                setSelectedCandidatForDossier({ id, nom });
+                setTab('candidatures_recues');
+              }}
+            />
           )}
 
           {/* Onglet Commission (Directeur de thèse) */}
@@ -2196,7 +2290,8 @@ export default function App() {
           onDemoDateChange={handleDemoDateChange}
           onResetDemoDate={handleResetDemoDate}
           badgeCounts={{
-            candidaturesCount: candidaturesCompletsNonValidesCount,
+            candidaturesCount: candidaturesActionCount,
+            creneauxCount: candidaturesActionCount,
             piecesPretes: piecesAProverCount,
             alertesCed: alertesCreneaux.length,
             reinscriptionsCount: rapportsAValider.length,

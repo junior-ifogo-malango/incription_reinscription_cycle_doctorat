@@ -1297,27 +1297,6 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
     );
   };
 
-  const selectedCandidatureSujets = useMemo(() => {
-    if (candidatures.length === 0) return [];
-    const allSujets = storageService.getSujets();
-    const allEnseignants = storageService.getEnseignants();
-    return candidatures.map((sujetId) => {
-      const sujet = allSujets.find((s) => s.id === sujetId);
-      const directeur = sujet
-        ? allEnseignants.find((e) => e.id === sujet.enseignantId)
-        : undefined;
-      const rawStatut = statuts[sujetId] || 'brouillon';
-      const effectiveStatut: CandidatureStatut | 'envoyee' =
-        rawStatut === 'brouillon' && isDossierEnvoye ? 'envoyee' : rawStatut;
-      return {
-        id: sujetId,
-        titre: sujet?.titre || sujetId,
-        directeurNom: directeur?.nom || '',
-        statut: effectiveStatut,
-      };
-    });
-  }, [candidatures, statuts, isDossierEnvoye]);
-
   return (
     <div className="space-y-4 max-w-2xl mx-auto">
       {/* Progression du candidat en haut de Mon dossier */}
@@ -1404,53 +1383,6 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
           />
         </div>
       </div>
-
-      {/* Sujets de candidature du candidat */}
-      {!isDirecteur && selectedCandidatureSujets.length > 0 && (
-        <div id="mes-sujets-candidature" className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-2.5">
-          <h3 className="text-xs font-bold text-slate-900">
-            {fr.dossier.mesSujetsCandidatureTitle.replace('{count}', String(selectedCandidatureSujets.length))}
-          </h3>
-          <div className="space-y-2">
-            {selectedCandidatureSujets.map((item, idx) => {
-              const badgeLabel =
-                fr.dossier.statutsCandidature[
-                  item.statut as keyof typeof fr.dossier.statutsCandidature
-                ] || item.statut;
-              const badgeClasses =
-                item.statut === 'retenue'
-                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                  : item.statut === 'envoyee' || item.statut === 'deposee'
-                  ? 'bg-sky-50 text-sky-800 border-sky-200'
-                  : item.statut === 'a_corriger'
-                  ? 'bg-rose-50 text-rose-800 border-rose-200'
-                  : 'bg-slate-100 text-slate-700 border-slate-200';
-              return (
-                <div
-                  key={item.id}
-                  className="flex items-start justify-between gap-2.5 p-2.5 rounded-xl border border-slate-100 bg-slate-50/70"
-                >
-                  <div className="min-w-0 space-y-0.5">
-                    <p className="text-xs font-semibold text-slate-900 leading-snug">
-                      {idx + 1}. {item.titre}
-                    </p>
-                    {item.directeurNom && (
-                      <p className="text-[11px] text-slate-500">
-                        {fr.dossier.directeurPrefix} {item.directeurNom}
-                      </p>
-                    )}
-                  </div>
-                  <span
-                    className={`shrink-0 inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border ${badgeClasses}`}
-                  >
-                    {badgeLabel}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
 
       {/* Coordonnées du candidat : Code Massar et Numéro WhatsApp */}
       {!isDirecteur && (
