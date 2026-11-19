@@ -13,6 +13,7 @@ import {
   Calendar,
   Award,
   Users,
+  GraduationCap,
 } from 'lucide-react';
 import { UserRole, Role, normaliserRole } from '../types';
 import { fr } from '../i18n/fr';
@@ -29,6 +30,7 @@ export type TabType =
   | 'reinscriptions'
   | 'commission'
   | 'admin_comptes'
+  | 'admin_inscriptions'
   | 'admin_journal'
   | 'rapport'
   | 'suivi'
@@ -152,6 +154,11 @@ export const MobileNav: React.FC<MobileNavProps> = ({
       label: fr.nav.adminComptes,
       icon: <Users size={18} />,
     },
+    admin_inscriptions: {
+      id: 'admin_inscriptions',
+      label: fr.nav.court.adminInscriptions,
+      icon: <GraduationCap size={18} />,
+    },
     admin_journal: {
       id: 'admin_journal',
       label: fr.nav.adminJournal,
@@ -205,6 +212,7 @@ export const MobileNav: React.FC<MobileNavProps> = ({
     }
     if (normalizedRoles.includes('admin')) {
       addTab('admin_comptes');
+      addTab('admin_inscriptions');
       addTab('admin_journal');
     }
 

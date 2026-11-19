@@ -6,7 +6,6 @@ import {
   Circle,
   XCircle,
   FileSignature,
-  FileCheck2,
   AlertCircle,
   Calendar,
   Lock,
@@ -21,6 +20,7 @@ import {
   FileCheck,
   CloudUpload,
   Loader2,
+  Camera,
 } from 'lucide-react';
 import { Creneau, Resultat, ResultatType, PV, Candidat, calculerNoteResultat, StatutSeance, SeanceStatutRecord } from '../types';
 import {
@@ -35,6 +35,7 @@ import {
   aujourdhui,
 } from '../data/mockData';
 import { PVDocument } from './PVDocument';
+import { CameraCapture } from './CameraCapture';
 import { fr } from '../i18n/fr';
 import { logEvent, logPresenceConstatee, logAbsenceConstatee } from '../utils/journal';
 import { ajouterNotification, messageAbsenceConstatee, trouverCandidat } from '../utils/messages';
@@ -164,8 +165,9 @@ export const Commission: React.FC<CommissionProps> = ({
   const [absentMotif, setAbsentMotif] = useState('');
   const [absentError, setAbsentError] = useState<string | null>(null);
 
-  // Validation des 3 signatures papier par PV & synchronisation Firebase
-  const [signaturesChecks, setSignaturesChecks] = useState<Record<string, [boolean, boolean, boolean]>>({});
+  // Scan caméra PV & synchronisation Firebase
+  const [cameraScanPvId, setCameraScanPvId] = useState<string | null>(null);
+  const scanFileInputsRef = React.useRef<Record<string, HTMLInputElement | null>>({});
   const [syncingFirebase, setSyncingFirebase] = useState(false);
   const [syncFeedback, setSyncFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -702,7 +704,7 @@ export const Commission: React.FC<CommissionProps> = ({
     setActivePV({ pv, autoPrint: true });
   };
 
-  const handleDeposerScanCommission = (pvId: string) => {
+  const handleDeposerScanCommission = (pvId: string, dataUrl?: string, fileName?: string) => {
     try {
       const raw = localStorage.getItem('usmba_doctorat_pvs');
       let curPvs: PV[] = raw ? JSON.parse(raw) : [];
@@ -713,21 +715,44 @@ export const Commission: React.FC<CommissionProps> = ({
         curPvs[idx].scanDeposeLe = nowIso;
         curPvs[idx].scanStatut = 'valide';
         curPvs[idx].signaturesCount = 3;
+        if (dataUrl) curPvs[idx].scanDataUrl = dataUrl;
+        if (fileName) curPvs[idx].scanNom = fileName;
         delete curPvs[idx].scanMotifRefus;
         localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(curPvs));
+        setPvDownloaded((prev) => {
+          const next = { ...prev, [curPvs[idx].date]: true, [pvId]: true };
+          try {
+            localStorage.setItem('usmba_commission_pv_downloaded', JSON.stringify(next));
+          } catch {}
+          return next;
+        });
         setPvs(curPvs.map(enrichirPVLecture));
         window.dispatchEvent(new CustomEvent('usmba_pvs_updated'));
         logEvent(
           { id: enseignantId, nom: enseignantNom, role: 'enseignant' },
           fr.journalActions.scanPvDepose,
           `PV-${curPvs[idx].date}-${(curPvs[idx].code || '').slice(0, 4)}`,
-          'Scan signé déposé par le directeur'
+          fileName ? `Scan déposé (${fileName})` : 'Scan signé déposé par le directeur'
         );
-        setFeedback({ id: pvId, text: fr.commission.scanDeposeToast });
+        setFeedback({ id: pvId, text: dataUrl ? fr.commission.scanAutoDeposeToast : fr.commission.scanDeposeToast });
         setTimeout(() => setFeedback(null), 3000);
         void syncPvBestEffort();
       }
     } catch {}
+  };
+
+  const handleCommissionScanFile = (pvId: string, file?: File | null) => {
+    if (!file) return;
+    if (file.size > 1.5 * 1024 * 1024) {
+      setSyncFeedback({ type: 'error', text: fr.commission.fichierTropLourd });
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = typeof reader.result === 'string' ? reader.result : undefined;
+      handleDeposerScanCommission(pvId, dataUrl, file.name);
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleEnvoyerStructure = (pvId: string) => {
@@ -760,68 +785,6 @@ export const Commission: React.FC<CommissionProps> = ({
     } catch {}
   };
 
-  const getSignatureChecks = (pvId: string): [boolean, boolean, boolean] =>
-    signaturesChecks[pvId] || [true, true, true];
-
-  const handleToggleSignatureCheck = (pvId: string, index: 0 | 1 | 2) => {
-    setSignaturesChecks((prev) => {
-      const cur = prev[pvId] || [true, true, true];
-      const next: [boolean, boolean, boolean] = [
-        index === 0 ? !cur[0] : cur[0],
-        index === 1 ? !cur[1] : cur[1],
-        index === 2 ? !cur[2] : cur[2],
-      ];
-      return { ...prev, [pvId]: next };
-    });
-  };
-
-  const handleValider3SignaturesEtDeposer = (pvId: string) => {
-    const checks = getSignatureChecks(pvId);
-    if (!checks[0] || !checks[1] || !checks[2]) return;
-
-    try {
-      const raw = localStorage.getItem('usmba_doctorat_pvs');
-      const curPvs: PV[] = raw ? JSON.parse(raw) : [];
-      const idx = curPvs.findIndex((p) => p.id === pvId);
-      if (idx !== -1) {
-        const nowIso = new Date().toISOString();
-        const pv = curPvs[idx];
-        pv.statut = 'envoye';
-        pv.signaturesCount = 3;
-        pv.scanDeposeLe = pv.scanDeposeLe || nowIso;
-        pv.scanStatut = 'valide';
-        pv.envoyeLe = nowIso;
-        pv.envoyePar = enseignantNom;
-        delete pv.scanMotifRefus;
-        localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(curPvs));
-        setPvDownloaded((prev) => {
-          const next = { ...prev, [pv.date]: true, [pv.id]: true };
-          try {
-            localStorage.setItem('usmba_commission_pv_downloaded', JSON.stringify(next));
-          } catch {}
-          return next;
-        });
-        setPvs(curPvs.map(enrichirPVLecture));
-        window.dispatchEvent(new CustomEvent('usmba_pvs_updated'));
-        logEvent(
-          { id: enseignantId, nom: enseignantNom, role: 'enseignant' },
-          fr.journalActions.scanPvDepose,
-          `PV-${pv.date}-${(pv.code || '').slice(0, 4)}`,
-          '3 signatures validées et scan déposé'
-        );
-        logEvent(
-          { id: enseignantId, nom: enseignantNom, role: 'enseignant' },
-          fr.journalActions.pvEnvoye,
-          `PV-${pv.date}-${(pv.code || '').slice(0, 4)}`,
-          `Déposé chez le Directeur de structure (${pv.structure || ''})`
-        );
-        setFeedback({ id: pvId, text: fr.commission.signatures3DeposeToast });
-        setTimeout(() => setFeedback(null), 4000);
-        void syncPvBestEffort();
-      }
-    } catch {}
-  };
-
   const handleSyncFirebaseClick = async () => {
     setSyncingFirebase(true);
     setSyncFeedback(null);
@@ -841,6 +804,12 @@ export const Commission: React.FC<CommissionProps> = ({
         lower.includes('cancelled-popup-request')
       ) {
         setSyncFeedback({ type: 'error', text: fr.commission.syncFirebaseAuthCancelled });
+      } else if (lower.includes('unauthorized-domain')) {
+        const host = typeof window !== 'undefined' ? window.location.hostname : '';
+        setSyncFeedback({
+          type: 'error',
+          text: fr.commission.syncFirebaseUnauthorizedDomain.replace('{host}', host),
+        });
       } else if (lower.includes('permission-denied') || lower.includes('insufficient permissions')) {
         setSyncFeedback({ type: 'error', text: fr.commission.syncFirebaseRulesError });
       } else {
@@ -1903,72 +1872,92 @@ export const Commission: React.FC<CommissionProps> = ({
                         </div>
                       </>
                     )
-                  ) : !isDownloaded ? (
-                    /* Étape 2 : Télécharger le PV */
-                    <>
-                      <div className="text-xs text-slate-600 flex items-center gap-2">
-                        <span className="font-semibold text-slate-800">PV prêt à signer</span>
-                        <span className="text-slate-400">•</span>
-                        <span className="text-[11px] font-mono text-slate-500">Ref {(existingPV.code || '').slice(0, 4)}</span>
+                  ) : !isEnvoye ? (
+                    /* Étape 2 / 3 / 4 : Télécharger le PDF, Scanner (automatique), Importer et Envoyer */
+                    <div className="w-full space-y-2.5">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 flex-wrap">
+                        <div className="flex items-center gap-2 flex-wrap text-xs text-slate-700">
+                          <span className="font-semibold text-slate-900">
+                            {isScanDepose ? 'PV scanné et prêt' : 'PV généré et rempli'}
+                          </span>
+                          <span className="text-slate-400">•</span>
+                          <span className="text-[11px] font-mono text-slate-500">
+                            Ref {(existingPV.code || '').slice(0, 4)}
+                          </span>
+                          {isScanDepose && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                              <FileCheck size={12} className="text-emerald-600 shrink-0" />
+                              <span>{fr.commission.scanAjouteBadge}</span>
+                              {existingPV.scanNom && (
+                                <span className="font-mono text-[10px] text-emerald-700">({existingPV.scanNom})</span>
+                              )}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={() => handleDownloadPV(existingPV)}
+                            className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl shadow-2xs transition cursor-pointer"
+                          >
+                            <Printer size={14} />
+                            <span>{fr.commission.btnTelechargerPdf}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setCameraScanPvId(existingPV.id)}
+                            className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-indigo-700 hover:bg-indigo-800 rounded-xl shadow-xs transition cursor-pointer"
+                          >
+                            <Camera size={14} />
+                            <span>{isScanDepose ? fr.commission.remplacerScan : fr.commission.btnScannerPdf}</span>
+                          </button>
+
+                          <label className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-indigo-800 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-xl transition cursor-pointer">
+                            <Upload size={14} />
+                            <span>{fr.commission.btnImporterScan}</span>
+                            <input
+                              ref={(el) => {
+                                scanFileInputsRef.current[existingPV.id] = el;
+                              }}
+                              type="file"
+                              accept=".pdf,image/*"
+                              className="hidden"
+                              onChange={(e) => {
+                                handleCommissionScanFile(existingPV.id, e.target.files?.[0]);
+                                e.target.value = '';
+                              }}
+                            />
+                          </label>
+
+                          <button
+                            type="button"
+                            disabled={!isScanDepose}
+                            onClick={() => isScanDepose && handleEnvoyerStructure(existingPV.id)}
+                            className={`inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-xl transition ${
+                              isScanDepose
+                                ? 'text-white bg-emerald-700 hover:bg-emerald-800 shadow-xs cursor-pointer'
+                                : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
+                            }`}
+                          >
+                            <Send size={14} />
+                            <span>{fr.commission.btnEnvoyer}</span>
+                          </button>
+                        </div>
                       </div>
-                      <div className="flex flex-col items-start sm:items-end gap-1">
-                        <button
-                          type="button"
-                          onClick={() => handleDownloadPV(existingPV)}
-                          className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl shadow-xs transition cursor-pointer"
-                        >
-                          <Printer size={14} />
-                          <span>{fr.commission.btnTelechargerSeance}</span>
-                        </button>
-                        <p className="text-[11px] text-slate-500 font-medium">
-                          {fr.commission.indicationPdf}
+
+                      {!isScanDepose && (
+                        <p className="text-[11px] font-medium text-amber-800 flex items-center gap-1.5">
+                          <AlertCircle size={12} className="text-amber-600 shrink-0" />
+                          <span>{fr.commission.pvNonEnvoyeReason}</span>
                         </p>
-                      </div>
-                    </>
-                  ) : !isScanDepose ? (
-                    /* Étape 3 : Déposer le scan */
-                    <>
-                      <div className="text-xs text-slate-600 flex items-center gap-2">
-                        <span className="font-semibold text-slate-800">PV téléchargé</span>
-                        <button
-                          type="button"
-                          onClick={() => handleDownloadPV(existingPV)}
-                          className="text-[11px] text-emerald-700 underline hover:text-emerald-800 cursor-pointer"
-                        >
-                          (Réimprimer la séance)
-                        </button>
-                      </div>
-                      <label className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl shadow-xs transition cursor-pointer">
-                        <Upload size={14} />
-                        <span>Déposer le scan</span>
-                        <input
-                          type="file"
-                          accept=".pdf,image/*"
-                          className="hidden"
-                          onChange={() => handleDeposerScanCommission(existingPV.id)}
-                        />
-                      </label>
-                    </>
-                  ) : existingPV.statut === 'signe' ? (
-                    /* Étape 4 : Envoyer à la Structure (actif) */
-                    <>
-                      <div className="text-xs text-indigo-900 font-semibold flex items-center gap-1.5">
-                        <FileCheck size={14} className="text-indigo-600 shrink-0" />
-                        <span>Scan signé déposé · Prêt pour transmission</span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleEnvoyerStructure(existingPV.id)}
-                        className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl shadow-xs transition cursor-pointer"
-                      >
-                        <Send size={14} />
-                        <span>Envoyer à la Structure</span>
-                      </button>
-                    </>
+                      )}
+                    </div>
                   ) : (
                     /* Étape 4 : Déjà envoyé (grisé avec raison écrite) */
                     <>
-                      <div className="text-xs text-sky-900 font-semibold flex items-center gap-1.5">
+                      <div className="text-xs text-sky-900 font-semibold flex items-center gap-1.5 flex-wrap">
                         <Send size={14} className="text-sky-600 shrink-0" />
                         <span>
                           {existingPV.publieLe
@@ -1976,82 +1965,27 @@ export const Commission: React.FC<CommissionProps> = ({
                             : `Transmis à la Structure${existingPV.envoyeLe ? ` le ${formatJJMM(existingPV.envoyeLe.split('T')[0])}` : ''}`}
                         </span>
                       </div>
-                      <button
-                        type="button"
-                        disabled
-                        className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-xl bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed"
-                      >
-                        <Send size={14} />
-                        <span>Envoyé à la Structure</span>
-                      </button>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadPV(existingPV)}
+                          className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl transition cursor-pointer"
+                        >
+                          <Printer size={13} />
+                          <span>{fr.commission.btnTelechargerPdf}</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled
+                          className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-xl bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed"
+                        >
+                          <Send size={14} />
+                          <span>Envoyé à la Structure</span>
+                        </button>
+                      </div>
                     </>
                   )}
                 </div>
-
-                {/* Validation des 3 signatures papier et dépôt direct chez le Directeur de structure */}
-                {existingPV &&
-                  !existingPV.rouvertLe &&
-                  (existingPV.statut === 'a_signer' || existingPV.statut === 'signe') && (() => {
-                    const checks = getSignatureChecks(existingPV.id);
-                    const all3Checked = checks[0] && checks[1] && checks[2];
-                    return (
-                      <div className="p-3 bg-indigo-50/70 border border-indigo-200 rounded-xl space-y-2.5">
-                        <div className="flex items-center gap-2 text-xs font-bold text-indigo-950">
-                          <FileSignature size={14} className="text-indigo-700 shrink-0" />
-                          <span>{fr.commission.signatures3Title}</span>
-                        </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                          <label className="flex items-center gap-2 text-[11px] font-medium text-slate-800 bg-white border border-indigo-100 rounded-lg px-2.5 py-1.5 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={checks[0]}
-                              onChange={() => handleToggleSignatureCheck(existingPV.id, 0)}
-                              className="rounded border-slate-300 text-indigo-700 focus:ring-indigo-500"
-                            />
-                            <span>{fr.commission.signatures3Check1}</span>
-                          </label>
-                          <label className="flex items-center gap-2 text-[11px] font-medium text-slate-800 bg-white border border-indigo-100 rounded-lg px-2.5 py-1.5 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={checks[1]}
-                              onChange={() => handleToggleSignatureCheck(existingPV.id, 1)}
-                              className="rounded border-slate-300 text-indigo-700 focus:ring-indigo-500"
-                            />
-                            <span>{fr.commission.signatures3Check2}</span>
-                          </label>
-                          <label className="flex items-center gap-2 text-[11px] font-medium text-slate-800 bg-white border border-indigo-100 rounded-lg px-2.5 py-1.5 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={checks[2]}
-                              onChange={() => handleToggleSignatureCheck(existingPV.id, 2)}
-                              className="rounded border-slate-300 text-indigo-700 focus:ring-indigo-500"
-                            />
-                            <span>{fr.commission.signatures3Check3}</span>
-                          </label>
-                        </div>
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                          {!all3Checked ? (
-                            <span className="text-[11px] text-amber-800 font-medium">
-                              {fr.commission.signatures3RequiredHint}
-                            </span>
-                          ) : (
-                            <span className="text-[11px] text-indigo-800 font-medium">
-                              3/3 signatures attestées · Réf. {(existingPV.code || '').slice(0, 6)}
-                            </span>
-                          )}
-                          <button
-                            type="button"
-                            disabled={!all3Checked}
-                            onClick={() => handleValider3SignaturesEtDeposer(existingPV.id)}
-                            className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-indigo-700 hover:bg-indigo-800 disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed rounded-xl shadow-xs transition cursor-pointer"
-                          >
-                            <FileCheck2 size={14} />
-                            <span>{fr.commission.btnValider3SignaturesDeposer}</span>
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })()}
 
                 {/* Option de réouverture si PV existant non publié */}
                 {existingPV && !existingPV.publieLe && !existingPV.rouvertLe && (
@@ -2230,6 +2164,25 @@ export const Commission: React.FC<CommissionProps> = ({
             );
           })}
         </div>
+      )}
+
+      {cameraScanPvId && (
+        <CameraCapture
+          title={fr.commission.cameraScanTitre}
+          autoOcrOnCapture
+          onCapture={(dataUrl) => {
+            handleDeposerScanCommission(cameraScanPvId, dataUrl, 'scan-pv-commission.jpg');
+            setCameraScanPvId(null);
+          }}
+          onErrorFallback={() => {
+            const targetId = cameraScanPvId;
+            setCameraScanPvId(null);
+            if (targetId) {
+              scanFileInputsRef.current[targetId]?.click();
+            }
+          }}
+          onClose={() => setCameraScanPvId(null)}
+        />
       )}
     </div>
   );

@@ -17,13 +17,18 @@ import {
   User,
   Shield,
   FileText,
+  Eye,
+  ExternalLink,
+  X,
+  GraduationCap,
 } from 'lucide-react';
-import { Compte, EvenementJournal, UserRole } from '../types';
-import { getComptes, saveComptes } from '../data/mockData';
-import { lireJournal, logEvent } from '../utils/journal';
+import { Candidat, Compte, EvenementJournal, Piece, PV, UserRole } from '../types';
+import { getComptes, MOCK_CANDIDATS, saveComptes } from '../data/mockData';
+import { lireJournal, logEvent, logInscriptionValidee } from '../utils/journal';
+import { ajouterNotification, persistUnifiedCandidate, reconcileCandidateFromStorage, trouverCandidat } from '../utils/messages';
 import { fr } from '../i18n/fr';
 
-export type AdminTab = 'admin_comptes' | 'admin_journal';
+export type AdminTab = 'admin_comptes' | 'admin_inscriptions' | 'admin_journal';
 
 interface AdminProps {
   currentTab: AdminTab;
@@ -50,6 +55,27 @@ export const Admin: React.FC<AdminProps> = ({ currentTab, onSelectTab }) => {
   const [filtreAction, setFiltreAction] = useState<string>('all');
   const [page, setPage] = useState<number>(1);
 
+  // Onglet Inscriptions (PVs publiés par la Structure)
+  const [pvs, setPvs] = useState<PV[]>(() => {
+    try {
+      const raw = localStorage.getItem('usmba_doctorat_pvs');
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [candRefreshTick, setCandRefreshTick] = useState(0);
+  const [docsModalTarget, setDocsModalTarget] = useState<{
+    candidatId: string;
+    nom: string;
+    cin: string;
+    cne: string;
+    refPv: string;
+    pv: PV;
+    pieces: Piece[];
+    isValidated: boolean;
+  } | null>(null);
+
   // Rechargement des données
   const refreshComptes = () => {
     setComptes(getComptes());
@@ -66,15 +92,46 @@ export const Admin: React.FC<AdminProps> = ({ currentTab, onSelectTab }) => {
     }
   };
 
+  const refreshInscriptionsData = () => {
+    try {
+      const raw = localStorage.getItem('usmba_doctorat_pvs');
+      setPvs(raw ? JSON.parse(raw) : []);
+    } catch {
+      setPvs([]);
+    }
+    setCandRefreshTick((t) => t + 1);
+  };
+
   useEffect(() => {
     const handleJournalUpdate = () => refreshJournal();
+    const handleDataSync = () => {
+      refreshComptes();
+      refreshInscriptionsData();
+    };
     window.addEventListener('gcd_journal_updated', handleJournalUpdate);
+    window.addEventListener('usmba_pvs_updated', handleDataSync);
+    window.addEventListener('usmba_candidat_updated', handleDataSync);
+    window.addEventListener('usmba_pieces_updated', handleDataSync);
     window.addEventListener('storage', handleJournalUpdate);
+    window.addEventListener('storage', handleDataSync);
     return () => {
       window.removeEventListener('gcd_journal_updated', handleJournalUpdate);
+      window.removeEventListener('usmba_pvs_updated', handleDataSync);
+      window.removeEventListener('usmba_candidat_updated', handleDataSync);
+      window.removeEventListener('usmba_pieces_updated', handleDataSync);
       window.removeEventListener('storage', handleJournalUpdate);
+      window.removeEventListener('storage', handleDataSync);
     };
   }, []);
+
+  useEffect(() => {
+    if (!docsModalTarget) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setDocsModalTarget(null);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [docsModalTarget]);
 
   // Comptes en attente
   const comptesEnAttente = useMemo(() => {
@@ -166,6 +223,178 @@ export const Admin: React.FC<AdminProps> = ({ currentTab, onSelectTab }) => {
     setRefusCompteId(null);
     setMotifRefus('');
     setTimeout(() => setFlashMsg(null), 3500);
+  };
+
+  const findCandidateFull = (candidatId: string): Candidat | null => {
+    if (!candidatId) return null;
+    let found: Candidat | null = null;
+    try {
+      const rawOverrides = localStorage.getItem('usmba_candidats_overrides');
+      if (rawOverrides) {
+        const overrides: Record<string, Candidat> = JSON.parse(rawOverrides);
+        if (overrides[candidatId]) found = overrides[candidatId];
+      }
+    } catch {}
+    if (!found) {
+      try {
+        const rawCur = localStorage.getItem('usmba_doctorat_candidat');
+        if (rawCur) {
+          const cur: Candidat = JSON.parse(rawCur);
+          if (cur.id === candidatId) found = cur;
+        }
+      } catch {}
+    }
+    if (!found) {
+      try {
+        const rawAccounts = localStorage.getItem('usmba_registered_accounts');
+        if (rawAccounts) {
+          const accounts: Candidat[] = JSON.parse(rawAccounts);
+          found = accounts.find((a) => a.id === candidatId) || null;
+        }
+      } catch {}
+    }
+    if (!found) {
+      found = MOCK_CANDIDATS.find((c) => c.id === candidatId) || null;
+    }
+    if (!found) return null;
+    const reconciled = reconcileCandidateFromStorage(found);
+    if ((!reconciled.pieces || reconciled.pieces.length === 0) && reconciled.id) {
+      try {
+        const rawCur = localStorage.getItem('usmba_doctorat_candidat');
+        const cur: Candidat | null = rawCur ? JSON.parse(rawCur) : null;
+        if (cur?.id === reconciled.id) {
+          const rawPieces = localStorage.getItem('usmba_doctorat_pieces');
+          if (rawPieces) {
+            const parsedPieces: Piece[] = JSON.parse(rawPieces);
+            if (Array.isArray(parsedPieces) && parsedPieces.length > 0) {
+              return { ...reconciled, pieces: parsedPieces };
+            }
+          }
+        }
+      } catch {}
+    }
+    return reconciled;
+  };
+
+  const inscriptionsEligibles = useMemo(() => {
+    const items: {
+      key: string;
+      pv: PV;
+      candidatId: string;
+      refPv: string;
+      nom: string;
+      cin: string;
+      cne: string;
+      email: string;
+      tel: string;
+      structure: string;
+      publieLe?: string;
+      pieces: Piece[];
+      cand: Candidat | null;
+      isValidated: boolean;
+      valideeLe?: string;
+    }[] = [];
+
+    pvs
+      .filter((pv) => !pv.remplaceePar && (Boolean(pv.publieLe) || pv.statut === 'publie'))
+      .forEach((pv) => {
+        const baseCode = (pv.code || '').slice(0, 4);
+        (pv.resultats || []).forEach((res, idx) => {
+          if (res.resultat !== 'ADMIS') return;
+          const cand = findCandidateFull(res.candidatId);
+          const info = trouverCandidat(res.candidatId);
+          const nom = cand?.nom || info.nom || res.candidatId;
+          const isValidated = Boolean(cand?.inscriptionStatut === 'validee' || cand?.inscriptionValideeLe);
+          items.push({
+            key: `${pv.id}:${res.candidatId}`,
+            pv,
+            candidatId: res.candidatId,
+            refPv: `PV-${pv.date}-${baseCode}-${idx + 1}`,
+            nom,
+            cin: cand?.cin || '—',
+            cne: cand?.cne || '—',
+            email: cand?.email || info.email || '—',
+            tel: cand?.tel || info.tel || '—',
+            structure: pv.structure || '—',
+            publieLe: pv.publieLe,
+            pieces: Array.isArray(cand?.pieces) ? cand!.pieces! : [],
+            cand,
+            isValidated,
+            valideeLe: cand?.inscriptionValideeLe,
+          });
+        });
+      });
+
+    return items;
+  }, [pvs, candRefreshTick]);
+
+  const inscriptionsEnAttenteCount = useMemo(
+    () => inscriptionsEligibles.filter((i) => !i.isValidated).length,
+    [inscriptionsEligibles]
+  );
+
+  const openPdfInNewTab = (dataUrl: string) => {
+    try {
+      const arr = dataUrl.split(',');
+      const mimeMatch = arr[0].match(/:(.*?);/);
+      const mime = mimeMatch ? mimeMatch[1] : 'application/pdf';
+      const bstr = atob(arr[1]);
+      let n = bstr.length;
+      const u8arr = new Uint8Array(n);
+      while (n--) {
+        u8arr[n] = bstr.charCodeAt(n);
+      }
+      const blob = new Blob([u8arr], { type: mime });
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+    } catch {}
+  };
+
+  const handleValiderInscription = (item: (typeof inscriptionsEligibles)[number]) => {
+    const nowIso = new Date().toISOString();
+    const baseCand: Candidat = item.cand || {
+      id: item.candidatId,
+      nom: item.nom,
+      email: item.email === '—' ? '' : item.email,
+      tel: item.tel === '—' ? '' : item.tel,
+      panier: [],
+      candidatures: [],
+      compteCree: true,
+    };
+
+    const updatedCand: Candidat = {
+      ...baseCand,
+      inscriptionStatut: 'validee',
+      inscriptionValideeLe: nowIso,
+      inscriptionValideePar: 'Service Scolarité',
+    };
+
+    persistUnifiedCandidate(updatedCand, true);
+    try {
+      window.dispatchEvent(new CustomEvent('usmba_candidat_updated', { detail: updatedCand }));
+    } catch {}
+
+    ajouterNotification({
+      destinataireId: item.candidatId,
+      texte: fr.admin.inscriptions.notifInscriptionValidee,
+      type: 'info',
+    });
+
+    logInscriptionValidee(
+      { id: 'admin-scolarite', nom: 'Service Scolarité', role: 'admin' },
+      item.nom,
+      `${item.refPv} • ${item.structure}`
+    );
+
+    refreshInscriptionsData();
+    setDocsModalTarget((prev) =>
+      prev && prev.candidatId === item.candidatId ? { ...prev, isValidated: true } : prev
+    );
+    setFlashMsg({
+      type: 'success',
+      text: fr.admin.inscriptions.inscriptionValideeToast.replace('{nom}', item.nom),
+    });
+    setTimeout(() => setFlashMsg(null), 4000);
   };
 
   // Formatage de date
@@ -294,6 +523,23 @@ export const Admin: React.FC<AdminProps> = ({ currentTab, onSelectTab }) => {
             {comptesEnAttente.length > 0 && (
               <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] font-extrabold bg-amber-400 text-slate-950">
                 {comptesEnAttente.length}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => onSelectTab('admin_inscriptions')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+              currentTab === 'admin_inscriptions'
+                ? 'bg-purple-600 text-white shadow-xs'
+                : 'text-slate-300 hover:text-white hover:bg-slate-700/60'
+            }`}
+          >
+            <GraduationCap size={14} />
+            <span>{fr.admin.tabs.inscriptions}</span>
+            {inscriptionsEnAttenteCount > 0 && (
+              <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] font-extrabold bg-emerald-400 text-slate-950">
+                {inscriptionsEnAttenteCount}
               </span>
             )}
           </button>
@@ -495,6 +741,250 @@ export const Admin: React.FC<AdminProps> = ({ currentTab, onSelectTab }) => {
                     }`}
                   >
                     {fr.admin.comptes.btnRefuser}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* =================================================================== */}
+      {/* ONGLET 2 : VALIDATION DES INSCRIPTIONS (APRÈS PUBLICATION STRUCTURE) */}
+      {/* =================================================================== */}
+      {currentTab === 'admin_inscriptions' && (
+        <div className="space-y-4">
+          <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs">
+            <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                  {fr.admin.inscriptions.titre}
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">{fr.admin.inscriptions.sousTitre}</p>
+              </div>
+              <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                {inscriptionsEnAttenteCount} à valider
+              </span>
+            </div>
+
+            {inscriptionsEligibles.length === 0 ? (
+              <div className="py-10 px-4 text-center text-xs text-slate-500 bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                <GraduationCap size={26} className="mx-auto mb-2 text-slate-400" />
+                <p className="font-semibold text-slate-600 max-w-md mx-auto">
+                  {fr.admin.inscriptions.aucunCandidat}
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {inscriptionsEligibles.map((item) => (
+                  <div
+                    key={item.key}
+                    className="p-4 rounded-xl border border-slate-200 bg-white hover:border-slate-300 transition shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4"
+                  >
+                    <div className="space-y-1.5">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <User size={15} className="text-purple-700 shrink-0" />
+                        <h4 className="text-xs sm:text-sm font-bold text-slate-900">{item.nom}</h4>
+                        {item.isValidated ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                            <CheckCircle2 size={12} className="text-emerald-600 shrink-0" />
+                            <span>
+                              {fr.admin.inscriptions.badgeValidee}
+                              {item.valideeLe ? ` (${formatDateTime(item.valideeLe).split(' à ')[0]})` : ''}
+                            </span>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                            <Clock size={12} className="text-amber-600 shrink-0" />
+                            <span>{fr.admin.inscriptions.badgeEnAttente}</span>
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-3 flex-wrap text-[11px] text-slate-600">
+                        <span className="font-mono">CIN : <strong className="text-slate-800">{item.cin}</strong></span>
+                        <span className="font-mono">CNE : <strong className="text-slate-800">{item.cne}</strong></span>
+                        <span className="font-mono">{item.email}</span>
+                      </div>
+
+                      <div className="flex items-center gap-2 flex-wrap text-[11px] text-slate-500">
+                        <span className="inline-flex items-center gap-1 bg-slate-50 px-2 py-0.5 rounded border border-slate-200 font-medium text-slate-700">
+                          <Building size={11} className="text-slate-400" />
+                          <span>{item.structure}</span>
+                        </span>
+                        <span className="font-mono bg-slate-100 px-2 py-0.5 rounded text-slate-700">
+                          {fr.admin.inscriptions.pvReferenceLabel} {item.refPv}
+                        </span>
+                        {item.publieLe && (
+                          <span>
+                            {fr.admin.inscriptions.pvPublieLeLabel}{' '}
+                            {formatDateTime(item.publieLe).split(' à ')[0]}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-wrap shrink-0">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setDocsModalTarget({
+                            candidatId: item.candidatId,
+                            nom: item.nom,
+                            cin: item.cin,
+                            cne: item.cne,
+                            refPv: item.refPv,
+                            pv: item.pv,
+                            pieces: item.pieces,
+                            isValidated: item.isValidated,
+                          })
+                        }
+                        className="min-h-[38px] px-3.5 py-1.5 rounded-xl text-xs font-semibold text-sky-800 bg-sky-50 hover:bg-sky-100 border border-sky-200 transition cursor-pointer inline-flex items-center gap-1.5"
+                      >
+                        <Eye size={14} />
+                        <span>{fr.admin.inscriptions.btnVoirDocuments}</span>
+                      </button>
+
+                      {!item.isValidated && (
+                        <button
+                          type="button"
+                          onClick={() => handleValiderInscription(item)}
+                          className="min-h-[38px] px-4 py-1.5 rounded-xl text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 shadow-xs active:scale-95 transition cursor-pointer inline-flex items-center gap-1.5"
+                        >
+                          <UserCheck size={14} />
+                          <span>{fr.admin.inscriptions.btnValiderInscription}</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {docsModalTarget && (
+            <div
+              role="dialog"
+              aria-modal="true"
+              className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4"
+              onClick={() => setDocsModalTarget(null)}
+            >
+              <div
+                className="w-full max-w-2xl bg-white rounded-2xl p-5 shadow-2xl border border-slate-200 space-y-4 max-h-[90vh] overflow-y-auto"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                      <FileText size={16} className="text-purple-700" />
+                      <span>
+                        {fr.admin.inscriptions.documentsTitre} — {docsModalTarget.nom}
+                      </span>
+                    </h3>
+                    <p className="text-[11px] text-slate-500 font-mono mt-0.5">
+                      CIN : {docsModalTarget.cin} • CNE : {docsModalTarget.cne} • {docsModalTarget.refPv}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setDocsModalTarget(null)}
+                    aria-label={fr.admin.inscriptions.btnFermerDocuments}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                <div className="space-y-3">
+                  {(() => {
+                    const pieceCin = docsModalTarget.pieces.find((p) => p.type?.toUpperCase() === 'CIN');
+                    const pieceDiplome = docsModalTarget.pieces.find((p) => p.type?.toUpperCase() === 'DIPLOME');
+                    const pieceReleves = docsModalTarget.pieces.find((p) => p.type?.toUpperCase() === 'RELEVES');
+                    const pieceCv = docsModalTarget.pieces.find((p) => p.type?.toUpperCase() === 'CV');
+                    const pvScanUrl =
+                      docsModalTarget.pv.structureScanDataUrl || docsModalTarget.pv.scanDataUrl;
+
+                    const docCards: { label: string; dataUrl?: string }[] = [
+                      { label: fr.admin.inscriptions.pieceCinRecto, dataUrl: pieceCin?.fichier },
+                      { label: fr.admin.inscriptions.pieceCinVerso, dataUrl: pieceCin?.fichierVerso },
+                      { label: fr.admin.inscriptions.pieceDiplome, dataUrl: pieceDiplome?.fichier },
+                      { label: fr.admin.inscriptions.pieceReleves, dataUrl: pieceReleves?.fichier },
+                      { label: fr.admin.inscriptions.pieceCv, dataUrl: pieceCv?.fichier },
+                      { label: fr.admin.inscriptions.pvScanLabel, dataUrl: pvScanUrl },
+                    ];
+
+                    return docCards.map((doc) => {
+                      const isPdf =
+                        Boolean(doc.dataUrl) &&
+                        (doc.dataUrl!.startsWith('data:application/pdf') ||
+                          doc.dataUrl!.toLowerCase().endsWith('.pdf'));
+
+                      return (
+                        <div
+                          key={doc.label}
+                          className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs font-bold text-slate-800">{doc.label}</span>
+                            {doc.dataUrl ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                <CheckCircle2 size={11} className="text-emerald-600" />
+                                <span>Fourni</span>
+                              </span>
+                            ) : (
+                              <span className="text-[11px] text-slate-400 italic">
+                                {fr.admin.inscriptions.aucunePiece}
+                              </span>
+                            )}
+                          </div>
+
+                          {doc.dataUrl && (
+                            isPdf ? (
+                              <button
+                                type="button"
+                                onClick={() => openPdfInNewTab(doc.dataUrl!)}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-sky-800 bg-white hover:bg-sky-50 border border-sky-200 rounded-lg transition cursor-pointer"
+                              >
+                                <ExternalLink size={13} />
+                                <span>{fr.admin.inscriptions.voirPdf}</span>
+                              </button>
+                            ) : (
+                              <img
+                                src={doc.dataUrl}
+                                alt={doc.label}
+                                className="w-full max-h-56 object-contain rounded-lg border border-slate-200 bg-white"
+                              />
+                            )
+                          )}
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                  {!docsModalTarget.isValidated && (() => {
+                    const matched = inscriptionsEligibles.find(
+                      (i) => i.candidatId === docsModalTarget.candidatId && i.refPv === docsModalTarget.refPv
+                    );
+                    if (!matched) return null;
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => handleValiderInscription(matched)}
+                        className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 shadow-xs transition cursor-pointer inline-flex items-center gap-1.5"
+                      >
+                        <UserCheck size={14} />
+                        <span>{fr.admin.inscriptions.btnValiderInscription}</span>
+                      </button>
+                    );
+                  })()}
+                  <button
+                    type="button"
+                    onClick={() => setDocsModalTarget(null)}
+                    className="px-4 py-2 rounded-xl text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 transition cursor-pointer"
+                  >
+                    {fr.admin.inscriptions.btnFermerDocuments}
                   </button>
                 </div>
               </div>

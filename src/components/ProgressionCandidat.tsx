@@ -258,8 +258,10 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
     (hasThreeSubjects && hasCompleteDossier && hasSavedCinInfos && isCandidatureEnvoyee) ||
     isLegacySubmitted;
 
-  // Étape 5 : Inscription (toujours grisée, 'future')
-  const step5Done = false;
+  // Étape 5 : Inscription (validée par la Scolarité)
+  const step5Done = Boolean(
+    candidat?.inscriptionValideeLe || candidat?.inscriptionStatut === 'validee'
+  );
 
   const rawDones = [step1Done, step2Done, step3Done, step4Done, step5Done];
 
@@ -428,6 +430,8 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
         doneDate = presentCreneau?.presenceConstateeLe || presentCreneau?.date;
       } else if (etape.cle === 'resultat') {
         doneDate = publishedPv?.publieLe;
+      } else if (etape.cle === 'inscription') {
+        doneDate = candidat?.inscriptionValideeLe;
       }
       return {
         kind: 'faite' as const,

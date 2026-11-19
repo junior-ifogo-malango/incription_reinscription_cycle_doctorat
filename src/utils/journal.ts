@@ -144,3 +144,69 @@ export function logAbsenceConstatee(
     `${date} • Motif : ${motif}`
   );
 }
+
+export function logScanPvConsulte(
+  acteur: ActeurJournal,
+  refPv: string,
+  candidatNom?: string
+): EvenementJournal | null {
+  return logEvent(
+    acteur,
+    'Scan du PV consulté',
+    refPv,
+    candidatNom
+  );
+}
+
+export function logScanPvRefuse(
+  acteur: ActeurJournal,
+  refPv: string,
+  motif: string
+): EvenementJournal | null {
+  return logEvent(
+    acteur,
+    'Scan du PV refusé',
+    refPv,
+    motif
+  );
+}
+
+export function logPvPublie(
+  acteur: ActeurJournal,
+  refPv: string,
+  detail?: string
+): EvenementJournal | null {
+  return logEvent(
+    acteur,
+    'Résultats publiés',
+    refPv,
+    detail
+  );
+}
+
+export function logStructureScanDepose(
+  acteur: ActeurJournal,
+  refPv: string,
+  detail?: string
+): EvenementJournal | null {
+  return logEvent(
+    acteur,
+    'Scan signé Structure déposé',
+    refPv,
+    detail
+  );
+}
+
+export function logInscriptionValidee(
+  acteur: ActeurJournal,
+  candidatNom: string,
+  refPv?: string
+): EvenementJournal | null {
+  return logEvent(
+    acteur,
+    'Inscription définitive validée',
+    candidatNom,
+    refPv
+  );
+}
+

@@ -69,6 +69,7 @@ export type AppTabType =
   | 'vote_comite'
   | 'guichet'
   | 'admin_comptes'
+  | 'admin_inscriptions'
   | 'admin_journal'
   | 'ced_sujets';
 
@@ -396,9 +397,17 @@ export default function App() {
 
   const isTabAllowedForRoles = (targetTab: AppTabType, rolesList: UserRole[]): boolean => {
     if (rolesList.includes('admin') && !rolesList.some((r) => r !== 'admin')) {
-      return targetTab === 'admin_comptes' || targetTab === 'admin_journal';
+      return (
+        targetTab === 'admin_comptes' ||
+        targetTab === 'admin_inscriptions' ||
+        targetTab === 'admin_journal'
+      );
     }
-    if (targetTab === 'admin_comptes' || targetTab === 'admin_journal') {
+    if (
+      targetTab === 'admin_comptes' ||
+      targetTab === 'admin_inscriptions' ||
+      targetTab === 'admin_journal'
+    ) {
       return rolesList.includes('admin');
     }
     if (targetTab === 'sujets' || targetTab === 'panier' || targetTab === 'vote_comite') {
@@ -656,9 +665,13 @@ export default function App() {
     const currentLoggedIn = isLoggedInRef.current;
     const currentRoles = getEffectiveNormalizedRoles();
 
-    // Protection stricte Admin : navigation exclusive entre ses 2 onglets, aucun accès aux autres écrans
+    // Protection stricte Admin : navigation exclusive entre ses onglets, aucun accès aux autres écrans
     if (currentLoggedIn && currentRoles.includes('admin') && !currentRoles.some((r) => r !== 'admin')) {
-      if (targetTab === 'admin_comptes' || targetTab === 'admin_journal') {
+      if (
+        targetTab === 'admin_comptes' ||
+        targetTab === 'admin_inscriptions' ||
+        targetTab === 'admin_journal'
+      ) {
         setTab(targetTab);
       }
       return;
@@ -1391,6 +1404,17 @@ export default function App() {
                           <span>{fr.nav.adminComptes}</span>
                         </button>
                         <button
+                          onClick={() => handleTabChange('admin_inscriptions')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                            tab === 'admin_inscriptions'
+                              ? 'bg-purple-800 text-purple-200'
+                              : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
+                          }`}
+                        >
+                          <GraduationCap size={14} />
+                          <span>{fr.nav.adminInscriptions}</span>
+                        </button>
+                        <button
                           onClick={() => handleTabChange('admin_journal')}
                           className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
                             tab === 'admin_journal'
@@ -1682,7 +1706,13 @@ export default function App() {
             />
           ) : role === 'admin' && isLoggedIn ? (
             <Admin
-              currentTab={tab === 'admin_journal' ? 'admin_journal' : 'admin_comptes'}
+              currentTab={
+                tab === 'admin_journal'
+                  ? 'admin_journal'
+                  : tab === 'admin_inscriptions'
+                  ? 'admin_inscriptions'
+                  : 'admin_comptes'
+              }
               onSelectTab={(newTab) => setTab(newTab)}
             />
           ) : (

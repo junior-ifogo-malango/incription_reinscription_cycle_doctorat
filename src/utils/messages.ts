@@ -862,5 +862,28 @@ export const notifierDirecteurCandidatureEnvoyee = (
   notifierDirecteurDossierEnvoye(directeurIds, texte);
 };
 
+export const messageScanRefuse = (
+  refPv: string,
+  date: string,
+  motif: string
+): string => {
+  const dateFr = formatDatePourMessage(date);
+  return `Le scan du PV ${refPv} (séance du ${dateFr}) a été refusé par la Structure. Motif : ${motif}. Merci de déposer un nouveau scan conforme.`;
+};
+
+export const notifierDirecteurScanRefuse = (
+  directeurId: string,
+  refPv: string,
+  date: string,
+  motif: string
+): void => {
+  ajouterNotification({
+    destinataireId: directeurId || 'ens-1',
+    texte: messageScanRefuse(refPv, date, motif),
+    type: 'action',
+    actionTab: 'commission',
+  });
+};
+
 
 
