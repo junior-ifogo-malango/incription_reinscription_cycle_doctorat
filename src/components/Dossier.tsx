@@ -6,7 +6,12 @@ import { storageService } from '../services/storage';
 import { CameraCapture } from './CameraCapture';
 import { fr } from '../i18n/fr';
 import { logCandidatureEnvoyee } from '../utils/journal';
-import { normaliserTel, notifierDirecteurCandidatureEnvoyee } from '../utils/messages';
+import {
+  normaliserTel,
+  notifierDirecteurCandidatureEnvoyee,
+  reconcileCandidateFromStorage,
+  persistUnifiedCandidate,
+} from '../utils/messages';
 import { lireCinDeuxFaces, prechargerOcrCin, CinOcrOptions, CinOcrFields } from '../utils/ocrCin';
 import { ProgressionCandidat } from './ProgressionCandidat';
 
@@ -26,14 +31,14 @@ function findCandidateById(id?: string): Candidat | null {
     const rawOverrides = localStorage.getItem('usmba_candidats_overrides');
     if (rawOverrides) {
       const overrides: Record<string, Candidat> = JSON.parse(rawOverrides);
-      if (overrides[id]) return overrides[id];
+      if (overrides[id]) return reconcileCandidateFromStorage(overrides[id]);
     }
   } catch {}
   try {
     const rawCur = localStorage.getItem('usmba_doctorat_candidat');
     if (rawCur) {
       const cur: Candidat = JSON.parse(rawCur);
-      if (cur.id === id) return cur;
+      if (cur.id === id) return reconcileCandidateFromStorage(cur);
     }
   } catch {}
   try {
@@ -41,39 +46,16 @@ function findCandidateById(id?: string): Candidat | null {
     if (rawAccounts) {
       const accounts: Candidat[] = JSON.parse(rawAccounts);
       const found = accounts.find((a) => a.id === id);
-      if (found) return found;
+      if (found) return reconcileCandidateFromStorage(found);
     }
   } catch {}
   const mock = MOCK_CANDIDATS.find((c) => c.id === id);
-  if (mock) return mock;
+  if (mock) return reconcileCandidateFromStorage(mock);
   return null;
 }
 
 function persistCandidate(cand: Candidat): void {
-  try {
-    const rawOverrides = localStorage.getItem('usmba_candidats_overrides');
-    const overrides: Record<string, Candidat> = rawOverrides ? JSON.parse(rawOverrides) : {};
-    overrides[cand.id] = cand;
-    localStorage.setItem('usmba_candidats_overrides', JSON.stringify(overrides));
-
-    const rawCur = localStorage.getItem('usmba_doctorat_candidat');
-    if (rawCur) {
-      const cur: Candidat = JSON.parse(rawCur);
-      if (cur.id === cand.id) {
-        localStorage.setItem('usmba_doctorat_candidat', JSON.stringify(cand));
-      }
-    }
-
-    const rawAccounts = localStorage.getItem('usmba_registered_accounts');
-    if (rawAccounts) {
-      const accounts: Candidat[] = JSON.parse(rawAccounts);
-      const idx = accounts.findIndex((a) => a.id === cand.id);
-      if (idx !== -1) {
-        accounts[idx] = cand;
-        localStorage.setItem('usmba_registered_accounts', JSON.stringify(accounts));
-      }
-    }
-  } catch {}
+  persistUnifiedCandidate(cand, true);
 }
 
 function resolveCandidate(candidatId?: string, fallback?: Candidat | null): Candidat {
@@ -83,9 +65,9 @@ function resolveCandidate(candidatId?: string, fallback?: Candidat | null): Cand
   }
   try {
     const raw = localStorage.getItem('usmba_doctorat_candidat');
-    if (raw) return JSON.parse(raw);
+    if (raw) return reconcileCandidateFromStorage(JSON.parse(raw));
   } catch {}
-  return fallback || {
+  return fallback ? reconcileCandidateFromStorage(fallback) : {
     id: 'visiteur-001',
     nom: '',
     cne: '',
@@ -237,6 +219,12 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
             parsed = JSON.parse(raw);
           }
         }
+        if (parsed) {
+          parsed = reconcileCandidateFromStorage(parsed);
+          if (!candidatId && parsed.compteCree) {
+            localStorage.setItem('usmba_doctorat_candidat', JSON.stringify(parsed));
+          }
+        }
 
         if (parsed) {
           setCandidat(parsed);
@@ -276,6 +264,29 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
             setPieces(normalized);
           } else if (candidatId) {
             setPieces(DEFAULT_PIECES);
+          } else {
+            let restoredPieces: Piece[] | null = null;
+            try {
+              const rawDossier = localStorage.getItem('usmba_doctorat_dossier');
+              const rawPieces = localStorage.getItem('usmba_doctorat_pieces');
+              if (rawDossier && rawPieces) {
+                const storedDossier = JSON.parse(rawDossier);
+                const storedPieces: Piece[] = JSON.parse(rawPieces);
+                if (
+                  storedDossier?.candidatId === parsed.id &&
+                  Array.isArray(storedPieces) &&
+                  storedPieces.length > 0
+                ) {
+                  restoredPieces = ORDERED_TYPES.map((t) => {
+                    const found = storedPieces.find(
+                      (p) => p.type.toUpperCase() === t.toUpperCase()
+                    );
+                    return found ? { ...found, type: t } : { type: t, statut: 'absente' as const };
+                  });
+                }
+              }
+            } catch {}
+            setPieces(restoredPieces || DEFAULT_PIECES);
           }
         } else {
           // Fallback depuis usmba_doctorat_pieces
@@ -368,7 +379,10 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
 
   const handleConfirmEnvoyerDossier = () => {
     const cur = resolveCandidate(candidatId, candidat);
-    if (cur.dossier?.dateEnvoi) return;
+    const curHasACorriger = (cur.candidatures || []).some(
+      (id) => cur.candidaturesStatuts?.[id] === 'a_corriger'
+    );
+    if (cur.dossier?.dateEnvoi && !curHasACorriger) return;
     const check = dossierComplet(cur);
     const hasThreeSubjectsCur = Array.isArray(cur.candidatures) && cur.candidatures.length >= 3;
     const cinOk = Boolean(
@@ -402,6 +416,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
     cur.candidaturesEnvoyeLe = updatedEnvoyeLe;
     cur.envoyeLe = cur.envoyeLe || nowIso;
     cur.anomalie = undefined;
+    cur.candidaturesAnomalies = undefined;
     cur.dossier = {
       casParticulier: Boolean(cur.dossier?.casParticulier),
       motif: cur.dossier?.motif,
@@ -419,6 +434,24 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
     setCandidat({ ...cur });
     setIsCinEditing(false);
     setConfirmEnvoiOpen(false);
+
+    try {
+      const rawSim = localStorage.getItem('usmba_simulated_statuts');
+      if (rawSim) {
+        const simParsed = JSON.parse(rawSim);
+        let simChanged = false;
+        (cur.candidatures || []).forEach((sId) => {
+          const k = `${cur.id}-${sId}`;
+          if (simParsed[k] === 'a_corriger') {
+            simParsed[k] = 'deposee';
+            simChanged = true;
+          }
+        });
+        if (simChanged) {
+          localStorage.setItem('usmba_simulated_statuts', JSON.stringify(simParsed));
+        }
+      }
+    } catch {}
 
     try {
       const rawDossier = localStorage.getItem('usmba_doctorat_dossier');
@@ -455,7 +488,9 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
     window.dispatchEvent(new CustomEvent('usmba_pieces_updated'));
     window.dispatchEvent(new CustomEvent('usmba_dossier_updated'));
 
-    setTransmissionSuccess(fr.dossier.candidatureEnvoyeeSucces);
+    setTransmissionSuccess(
+      curHasACorriger ? fr.dossier.candidatureRenvoyeeSucces : fr.dossier.candidatureEnvoyeeSucces
+    );
     setTimeout(() => setTransmissionSuccess(null), 5000);
   };
 
@@ -504,12 +539,14 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
             return found || { type: t, statut: 'absente' as const };
           });
 
+    const nowIso = new Date().toISOString();
     const updated = currentList.map((p) => {
       if (p.type.toUpperCase() === type.toUpperCase()) {
         return {
           ...p,
           ...updates,
           type,
+          dateMaj: updates.dateMaj || nowIso,
         };
       }
       return p;
@@ -530,6 +567,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
             return found || { type: t, statut: 'absente' as const };
           });
 
+    const nowIso = new Date().toISOString();
     const updated = currentList.map((p) => {
       if (p.type.toUpperCase() === 'CIN') {
         const nextRecto = side === 'recto' ? fichier : p.fichier;
@@ -549,6 +587,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
           ...p,
           type: 'CIN' as const,
           statut: nextStatut,
+          dateMaj: nowIso,
           fichier: nextRecto,
           source: nextSourceRecto,
           fichierVerso: nextVerso,
@@ -1159,11 +1198,11 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
   const hasThreeSubjects = candidaturesCount >= 3;
   const missingSubjectsCount = Math.max(0, 3 - candidaturesCount);
   const hasLegacyRetenue = Object.values(statuts).some((s) => s === 'retenue');
-  const dateEnvoi =
-    candidat?.dossier?.dateEnvoi ||
-    (!hasACorriger
-      ? candidat?.envoyeLe || Object.values(candidat?.candidaturesEnvoyeLe || {})[0]
-      : undefined);
+  const dateEnvoi = !hasACorriger
+    ? candidat?.dossier?.dateEnvoi ||
+      candidat?.envoyeLe ||
+      Object.values(candidat?.candidaturesEnvoyeLe || {})[0]
+    : undefined;
   const isDossierEnvoye = Boolean(dateEnvoi || (hasLegacyRetenue && !hasACorriger));
 
   useEffect(() => {
@@ -1177,8 +1216,45 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
   const hasSavedWhatsapp = Boolean(
     candidat?.tel?.trim() && normaliserTel(candidat.tel.trim())
   );
+
+  const activeAnomaliePieces = activeAnomalie
+    ? activeAnomalie.pieces && activeAnomalie.pieces.length > 0
+      ? activeAnomalie.pieces
+      : [activeAnomalie.piece]
+    : [];
+
+  const isPieceFlaggedUnreplaced = (type: PieceType, pieceObj?: Piece): boolean => {
+    if (isDirecteur || (!hasACorriger && pieceObj?.statut !== 'illisible')) return false;
+    const upper = type.toUpperCase();
+    const matches =
+      pieceObj?.statut === 'illisible' ||
+      activeAnomaliePieces.some(
+        (ap) =>
+          (ap === 'CIN' && upper === 'CIN') ||
+          (ap === 'DIPLOME' && upper === 'DIPLOME') ||
+          (ap === 'RELEVES' && upper === 'RELEVES') ||
+          (ap === 'CURSUS' && upper === 'DIPLOME')
+      );
+    if (!matches) return false;
+    if (!pieceObj || pieceObj.statut !== 'prouvee') return true;
+    const pieceTime = pieceObj.dateMaj ? Date.parse(pieceObj.dateMaj) : 0;
+    const anomalieTime = activeAnomalie?.le ? Date.parse(activeAnomalie.le) : 0;
+    return !pieceTime || Number.isNaN(pieceTime) || (anomalieTime > 0 && pieceTime < anomalieTime);
+  };
+
+  const unreplacedAnomalieLabels = ORDERED_TYPES.filter((t) => {
+    const found = safePieces.find((p) => p && p.type?.toUpperCase() === t.toUpperCase());
+    return isPieceFlaggedUnreplaced(t, found);
+  }).map((t) => (t === 'CIN' ? 'CIN' : t === 'DIPLOME' ? 'Diplôme' : 'Relevés'));
+
+  const hasUnreplacedAnomaliePiece = unreplacedAnomalieLabels.length > 0;
   const canSendDossier =
-    hasThreeSubjects && checkDossier.complet && hasSavedCinInfos && hasSavedMassar && hasSavedWhatsapp;
+    hasThreeSubjects &&
+    checkDossier.complet &&
+    !hasUnreplacedAnomaliePiece &&
+    hasSavedCinInfos &&
+    hasSavedMassar &&
+    hasSavedWhatsapp;
 
   const missingItems: string[] = [];
   if (!hasThreeSubjects) {
@@ -1188,8 +1264,9 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
         : fr.dossier.raisonSujetsPluriel.replace('{count}', String(missingSubjectsCount))
     );
   }
-  if (!checkDossier.complet) {
-    missingItems.push(...checkDossier.manques);
+  const mergedMissingPieces = Array.from(new Set([...checkDossier.manques, ...unreplacedAnomalieLabels]));
+  if (mergedMissingPieces.length > 0) {
+    missingItems.push(...mergedMissingPieces);
   }
   if (!hasSavedMassar) {
     missingItems.push(fr.dossier.codeMassarManque);
@@ -1219,6 +1296,27 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
       fichier.match(/\.(png|jpe?g|webp|gif)$/i)
     );
   };
+
+  const selectedCandidatureSujets = useMemo(() => {
+    if (candidatures.length === 0) return [];
+    const allSujets = storageService.getSujets();
+    const allEnseignants = storageService.getEnseignants();
+    return candidatures.map((sujetId) => {
+      const sujet = allSujets.find((s) => s.id === sujetId);
+      const directeur = sujet
+        ? allEnseignants.find((e) => e.id === sujet.enseignantId)
+        : undefined;
+      const rawStatut = statuts[sujetId] || 'brouillon';
+      const effectiveStatut: CandidatureStatut | 'envoyee' =
+        rawStatut === 'brouillon' && isDossierEnvoye ? 'envoyee' : rawStatut;
+      return {
+        id: sujetId,
+        titre: sujet?.titre || sujetId,
+        directeurNom: directeur?.nom || '',
+        statut: effectiveStatut,
+      };
+    });
+  }, [candidatures, statuts, isDossierEnvoye]);
 
   return (
     <div className="space-y-4 max-w-2xl mx-auto">
@@ -1251,12 +1349,18 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
         </div>
       )}
 
-      {/* Candidat à corriger : bandeau "À corriger : [élément], [motif]" */}
+      {/* Candidat à corriger : bandeau "À corriger : [élément(s)], [motif]" */}
       {!isDirecteur && hasACorriger && activeAnomalie && (
         <div className="bg-rose-50 border border-rose-300 text-rose-950 rounded-2xl p-4 text-xs space-y-1.5 shadow-xs">
           <div className="flex items-center gap-2 font-bold text-rose-900 text-sm">
             <AlertTriangle size={18} className="text-rose-600 shrink-0" />
-            <span>À corriger : {activeAnomalie.piece}, {activeAnomalie.motif}</span>
+            <span>
+              À corriger :{' '}
+              {activeAnomalie.pieces && activeAnomalie.pieces.length > 0
+                ? activeAnomalie.pieces.join(', ')
+                : activeAnomalie.piece}
+              , {activeAnomalie.motif}
+            </span>
           </div>
           <p className="text-[11px] text-rose-800">
             Nature : <span className="font-semibold uppercase">{activeAnomalie.nature}</span>. Veuillez fournir à nouveau la pièce pour pouvoir renvoyer votre candidature.
@@ -1300,6 +1404,53 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
           />
         </div>
       </div>
+
+      {/* Sujets de candidature du candidat */}
+      {!isDirecteur && selectedCandidatureSujets.length > 0 && (
+        <div id="mes-sujets-candidature" className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-2.5">
+          <h3 className="text-xs font-bold text-slate-900">
+            {fr.dossier.mesSujetsCandidatureTitle.replace('{count}', String(selectedCandidatureSujets.length))}
+          </h3>
+          <div className="space-y-2">
+            {selectedCandidatureSujets.map((item, idx) => {
+              const badgeLabel =
+                fr.dossier.statutsCandidature[
+                  item.statut as keyof typeof fr.dossier.statutsCandidature
+                ] || item.statut;
+              const badgeClasses =
+                item.statut === 'retenue'
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                  : item.statut === 'envoyee' || item.statut === 'deposee'
+                  ? 'bg-sky-50 text-sky-800 border-sky-200'
+                  : item.statut === 'a_corriger'
+                  ? 'bg-rose-50 text-rose-800 border-rose-200'
+                  : 'bg-slate-100 text-slate-700 border-slate-200';
+              return (
+                <div
+                  key={item.id}
+                  className="flex items-start justify-between gap-2.5 p-2.5 rounded-xl border border-slate-100 bg-slate-50/70"
+                >
+                  <div className="min-w-0 space-y-0.5">
+                    <p className="text-xs font-semibold text-slate-900 leading-snug">
+                      {idx + 1}. {item.titre}
+                    </p>
+                    {item.directeurNom && (
+                      <p className="text-[11px] text-slate-500">
+                        {fr.dossier.directeurPrefix} {item.directeurNom}
+                      </p>
+                    )}
+                  </div>
+                  <span
+                    className={`shrink-0 inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border ${badgeClasses}`}
+                  >
+                    {badgeLabel}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Coordonnées du candidat : Code Massar et Numéro WhatsApp */}
       {!isDirecteur && (
@@ -1439,13 +1590,16 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
               );
 
           const pieceMatchesAnomalie = Boolean(
-            (activeAnomalie && (
-              (activeAnomalie.piece === 'CIN' && isCin) ||
-              (activeAnomalie.piece === 'DIPLOME' && isDiplome) ||
-              (activeAnomalie.piece === 'RELEVES' && type === 'RELEVES') ||
-              (activeAnomalie.piece === 'CURSUS' && isDiplome)
-            )) || piece.statut === 'illisible'
+            activeAnomaliePieces.some(
+              (ap) =>
+                (ap === 'CIN' && isCin) ||
+                (ap === 'DIPLOME' && isDiplome) ||
+                (ap === 'RELEVES' && type === 'RELEVES') ||
+                (ap === 'CURSUS' && isDiplome)
+            ) || piece.statut === 'illisible'
           );
+          const isFlaggedForCorrection = isPieceFlaggedUnreplaced(type, piece);
+          const effectiveIsProven = isProven && !isFlaggedForCorrection;
 
           const cardId = isDiplome
             ? 'carte-piece-diplome'
@@ -1453,7 +1607,13 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
             ? 'carte-piece-cin'
             : 'carte-piece-releves';
 
-          const isCinCollapsed = isCin && hasSavedCinInfos && !isCinEditing && !cinVerifyModalOpen && (isProven || isDossierEnvoye);
+          const isCinCollapsed =
+            isCin &&
+            hasSavedCinInfos &&
+            !isCinEditing &&
+            !cinVerifyModalOpen &&
+            !isFlaggedForCorrection &&
+            (effectiveIsProven || isDossierEnvoye);
 
           if (isCinCollapsed) {
             const nomMaj = (candidat?.nomFamille || '').trim().toUpperCase();
@@ -1520,7 +1680,11 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
             <React.Fragment key={type}>
               <div
                 id={cardId}
-                className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3"
+                className={`rounded-2xl p-4 shadow-xs space-y-3 border ${
+                  isFlaggedForCorrection
+                    ? 'bg-rose-50/30 border-rose-300 ring-1 ring-rose-200'
+                    : 'bg-white border-slate-200'
+                }`}
               >
               {/* Ligne 1 : Nom de la pièce + Badge */}
               <div className="flex items-start justify-between gap-3">
@@ -1528,14 +1692,19 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                   <h3 className="text-xs font-bold text-slate-900 leading-snug">
                     {isCin ? fr.dossier.cinCardTitle : getPieceName(type)}
                   </h3>
-                  {!isCin && piece.source && isProven && (
+                  {!isCin && piece.source && effectiveIsProven && (
                     <p className="text-[10px] text-slate-400">
                       {fr.dossier.sources[piece.source] || piece.source}
                     </p>
                   )}
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap justify-end">
-                  {isProven ? (
+                  {isFlaggedForCorrection ? (
+                    <span className="inline-flex items-center gap-1.5 font-bold rounded-full bg-rose-50 text-rose-800 border border-rose-300 text-xs px-2.5 py-0.5">
+                      <AlertTriangle size={13} className="text-rose-600 shrink-0" />
+                      <span>{fr.dossier.aCorriger}</span>
+                    </span>
+                  ) : effectiveIsProven ? (
                     <span className="inline-flex items-center gap-1.5 font-medium rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs px-2.5 py-0.5">
                       <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />
                       <span>{fr.dossier.fournieBadge}</span>
@@ -1558,6 +1727,19 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                   )}
                 </div>
               </div>
+
+              {/* Alerte explicite sur la pièce signalée à corriger / remplacer */}
+              {isFlaggedForCorrection && (
+                <div className="bg-rose-50 border border-rose-200 text-rose-900 rounded-xl p-2.5 text-xs flex items-start gap-2">
+                  <AlertTriangle size={14} className="text-rose-600 shrink-0 mt-0.5" />
+                  <span className="font-medium">
+                    {fr.dossier.pieceACorrigerHint.replace(
+                      '{motif}',
+                      activeAnomalie?.motif || fr.dossier.aCorriger
+                    )}
+                  </span>
+                </div>
+              )}
 
               {/* Cas particulier attestation sur la carte Diplôme */}
               {isDiplome && casParticulier && (
@@ -1733,7 +1915,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                   )}
 
                   {/* Boutons Scanner / Téléverser OU panneau divisé Recto / Verso avec Retour */}
-                  {!isDirecteur && !isDossierEnvoye && !isProven && (
+                  {!isDirecteur && !isDossierEnvoye && !effectiveIsProven && (
                     <div className="space-y-2">
                       {!cinUploadSplitOpen ? (
                         <div className="space-y-2">
@@ -1967,7 +2149,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
               )}
 
               {/* Autres pièces (Diplôme, Relevés) 'prouvee' : aperçu + boutons Voir et Remplacer */}
-              {!isCin && isProven && (
+              {!isCin && effectiveIsProven && (
                 <div className="pt-2 border-t border-slate-100 space-y-2">
                   <div className="flex items-center gap-2 flex-wrap justify-between">
                     {/* Miniature ou résumé */}
@@ -2256,7 +2438,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
               )}
 
               {/* Boutons Prendre en photo et Téléverser pour les autres pièces (Diplôme, Relevés, CV) */}
-              {!isCin && !isDirecteur && !isDossierEnvoye && !isProven && (
+              {!isCin && !isDirecteur && !isDossierEnvoye && !effectiveIsProven && (
                 <div className="space-y-1.5 pt-2 border-t border-slate-100">
                   <div className="flex items-center gap-2">
                     <button
@@ -2440,7 +2622,9 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                 }`}
               >
                 <Send size={15} />
-                <span>{fr.dossier.btnEnvoyerCandidature}</span>
+                <span>
+                  {hasACorriger ? fr.dossier.btnRenvoyerCandidature : fr.dossier.btnEnvoyerCandidature}
+                </span>
               </button>
               {!canSendDossier && sendDisabledReason && (
                 <p className="text-xs font-medium text-rose-700 flex items-center gap-1.5">

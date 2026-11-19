@@ -7,6 +7,11 @@ import { storageService } from '../services/storage';
 import { logEvent, logCompteCree } from '../utils/journal';
 import { signInWithGoogle, signOutFirebase, isUsmbaEmail } from '../firebase';
 import { resolveGoogleSession } from '../utils/googleAuthResolver';
+import {
+  findExistingCandidateForLogin,
+  persistUnifiedCandidate,
+  reconcileCandidateFromStorage,
+} from '../utils/messages';
 
 interface LoginModalProps {
   isOpen: boolean;
@@ -23,6 +28,11 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const DEMO_KNOWN_EMAILS = new Set([
   'etudiant@gmail.com',
   'directeurthese@gmail.com',
+  'amina.bennani@usmba.ac.ma',
+  'mehdi.berrada@usmba.ac.ma',
+  'fatima.chraibi@usmba.ac.ma',
+  'hassan.tahiri@usmba.ac.ma',
+  'zineb.idrissi@usmba.ac.ma',
   'directeurstructure@gmail.com',
   'admin@gmail.com',
 ]);
@@ -42,6 +52,13 @@ function checkIsKnownEmail(cleanEmail: string): boolean {
     if (rawAccounts) {
       const accounts: Candidat[] = JSON.parse(rawAccounts);
       if (accounts.some((a) => a.email && a.email.toLowerCase().trim() === cleanEmail)) return true;
+    }
+    const rawOverrides = localStorage.getItem('usmba_candidats_overrides');
+    if (rawOverrides) {
+      const overrides: Record<string, Candidat> = JSON.parse(rawOverrides);
+      if (Object.values(overrides).some((ov) => ov?.email && ov.email.toLowerCase().trim() === cleanEmail)) {
+        return true;
+      }
     }
     const rawCur = localStorage.getItem('usmba_doctorat_candidat');
     if (rawCur) {
@@ -82,9 +99,9 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   const isKnown = isEmailValid && checkIsKnownEmail(cleanEmail);
   const isTestAccount = DEMO_KNOWN_EMAILS.has(cleanEmail);
   const cleanPassword = password.trim();
-  const isPasswordLongEnough = isTestAccount
+  const isPasswordLongEnough = isTestAccount || isKnown
     ? cleanPassword.length > 0
-    : cleanPassword.length >= 8;
+    : cleanPassword.length >= 6;
   const isFormValid = isEmailValid && isPasswordLongEnough;
 
   useEffect(() => {
@@ -208,6 +225,32 @@ export const LoginModal: React.FC<LoginModalProps> = ({
     }
     if (mode === 'register' && isKnown) return;
 
+    // Si l'e-mail comporte une légère faute de frappe mais correspond à un compte existant (mot de passe identique),
+    // connecter directement ce compte plutôt que de créer un dossier vide parallèle.
+    if (!isKnown && mode !== 'register') {
+      const fuzzyMatched = findExistingCandidateForLogin(cleanEmail, cleanPassword);
+      if (fuzzyMatched) {
+        if (fuzzyMatched.desactive) {
+          setError(fr.auth.accountDeactivated);
+          return;
+        }
+        const resolvedEmail = fuzzyMatched.email?.trim().toLowerCase() || cleanEmail;
+        logEvent(
+          {
+            id: fuzzyMatched.id,
+            nom: fuzzyMatched.nom?.trim() || resolvedEmail,
+            role: 'candidat',
+          },
+          fr.journalActions.connexion,
+          resolvedEmail
+        );
+        const syncedMatched = persistUnifiedCandidate(fuzzyMatched, true);
+        onLoginSuccess('candidat', resolvedEmail, syncedMatched);
+        onClose();
+        return;
+      }
+    }
+
     // Cas création de nouveau compte (e-mail inconnu -> toujours Candidat)
     if (!isKnown) {
       const newCandId = `cand-${Date.now()}`;
@@ -235,21 +278,9 @@ export const LoginModal: React.FC<LoginModalProps> = ({
         verificationStatut: 'verifie',
       };
 
-      try {
-        const rawAccounts = localStorage.getItem('usmba_registered_accounts');
-        const accounts: Candidat[] = rawAccounts ? JSON.parse(rawAccounts) : [];
-        const filtered = accounts.filter(
-          (a) => !a.email || a.email.toLowerCase().trim() !== cleanEmail
-        );
-        filtered.push(newCandidat);
-        localStorage.setItem('usmba_registered_accounts', JSON.stringify(filtered));
-      } catch {
-        // safe fallback
-      }
-
-      storageService.setCandidat(newCandidat);
+      const syncedNewCandidat = persistUnifiedCandidate(newCandidat, true);
       logCompteCree(newCandId, cleanEmail);
-      onLoginSuccess('candidat', cleanEmail, newCandidat);
+      onLoginSuccess('candidat', cleanEmail, syncedNewCandidat);
       onClose();
       return;
     }
@@ -292,22 +323,23 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       );
 
       if (foundInAccounts) {
-        if (foundInAccounts.desactive) {
+        const reconciledAccount = reconcileCandidateFromStorage(foundInAccounts);
+        if (reconciledAccount.desactive) {
           setError(fr.auth.accountDeactivated);
           return;
         }
-        const expectedPass = foundInAccounts.motDePasse || candMatch?.motDePasse;
+        const expectedPass = reconciledAccount.motDePasse || foundInAccounts.motDePasse || candMatch?.motDePasse;
         if (expectedPass && expectedPass === cleanPassword) {
           logEvent(
             {
-              id: foundInAccounts.id,
-              nom: foundInAccounts.nom?.trim() || cleanEmail,
+              id: reconciledAccount.id,
+              nom: reconciledAccount.nom?.trim() || cleanEmail,
               role: 'candidat',
             },
             fr.journalActions.connexion,
             cleanEmail
           );
-          onLoginSuccess('candidat', cleanEmail, foundInAccounts);
+          onLoginSuccess('candidat', cleanEmail, reconciledAccount);
           onClose();
           return;
         } else {
@@ -316,26 +348,60 @@ export const LoginModal: React.FC<LoginModalProps> = ({
         }
       }
 
-      const rawCur = localStorage.getItem('usmba_doctorat_candidat');
-      if (rawCur) {
-        const cur: Candidat = JSON.parse(rawCur);
-        if (cur.email && cur.email.toLowerCase().trim() === cleanEmail) {
-          if (cur.desactive) {
+      const rawOverrides = localStorage.getItem('usmba_candidats_overrides');
+      if (rawOverrides) {
+        const overrides: Record<string, Candidat> = JSON.parse(rawOverrides);
+        const foundOverride = Object.values(overrides).find(
+          (ov) => ov?.email && ov.email.toLowerCase().trim() === cleanEmail
+        );
+        if (foundOverride) {
+          const reconciledOverride = reconcileCandidateFromStorage(foundOverride);
+          if (reconciledOverride.desactive) {
             setError(fr.auth.accountDeactivated);
             return;
           }
-          const expectedPass = cur.motDePasse || candMatch?.motDePasse;
+          const expectedPass = reconciledOverride.motDePasse || candMatch?.motDePasse;
           if (expectedPass && expectedPass === cleanPassword) {
             logEvent(
               {
-                id: cur.id,
-                nom: cur.nom?.trim() || cleanEmail,
+                id: reconciledOverride.id,
+                nom: reconciledOverride.nom?.trim() || cleanEmail,
                 role: 'candidat',
               },
               fr.journalActions.connexion,
               cleanEmail
             );
-            onLoginSuccess('candidat', cleanEmail, cur);
+            onLoginSuccess('candidat', cleanEmail, reconciledOverride);
+            onClose();
+            return;
+          } else if (expectedPass) {
+            setError(fr.auth.invalidCredentials);
+            return;
+          }
+        }
+      }
+
+      const rawCur = localStorage.getItem('usmba_doctorat_candidat');
+      if (rawCur) {
+        const cur: Candidat = JSON.parse(rawCur);
+        if (cur.email && cur.email.toLowerCase().trim() === cleanEmail) {
+          const reconciledCur = reconcileCandidateFromStorage(cur);
+          if (reconciledCur.desactive) {
+            setError(fr.auth.accountDeactivated);
+            return;
+          }
+          const expectedPass = reconciledCur.motDePasse || candMatch?.motDePasse;
+          if (expectedPass && expectedPass === cleanPassword) {
+            logEvent(
+              {
+                id: reconciledCur.id,
+                nom: reconciledCur.nom?.trim() || cleanEmail,
+                role: 'candidat',
+              },
+              fr.journalActions.connexion,
+              cleanEmail
+            );
+            onLoginSuccess('candidat', cleanEmail, reconciledCur);
             onClose();
             return;
           }

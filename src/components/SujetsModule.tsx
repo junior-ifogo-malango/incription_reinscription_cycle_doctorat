@@ -38,7 +38,12 @@ import { storageService } from '../services/storage';
 import { StatusBadge } from './StatusBadge';
 import { AdvancedSearchModal, AdvancedFilterCriteria } from './AdvancedSearchModal';
 import { normalizeText } from './Autocomplete';
-import { normaliserTel, ajouterNotification } from '../utils/messages';
+import {
+  normaliserTel,
+  ajouterNotification,
+  persistUnifiedCandidate,
+  reconcileCandidateFromStorage,
+} from '../utils/messages';
 import { logEvent } from '../utils/journal';
 import { MOCK_CANDIDATS, getPeriodeCandidature, formatDateJJMM } from '../data/mockData';
 import { LoginModal } from './LoginModal';
@@ -121,6 +126,7 @@ const getDisciplineConfig = (discipline?: string) => {
 
 interface SujetsModuleProps {
   role: UserRole | string;
+  isLoggedIn?: boolean;
   sujets: Sujet[];
   enseignants: Enseignant[];
   candidat: Candidat;
@@ -135,6 +141,7 @@ type InternalView = 'catalog' | 'panier' | 'register' | 'verify_code' | 'select3
 
 export const SujetsModule: React.FC<SujetsModuleProps> = ({
   role,
+  isLoggedIn,
   sujets,
   enseignants,
   candidat,
@@ -144,6 +151,8 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
   onNavigateTab,
   onUpdateSujets,
 }) => {
+  const isConnected =
+    isLoggedIn !== undefined ? Boolean(isLoggedIn && candidat.compteCree) : Boolean(candidat.compteCree);
   const [view, setView] = useState<InternalView>(initialView);
 
   // Synchronisation si initialView change depuis la barre de navigation
@@ -694,47 +703,25 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
       candidaturesStatuts: statuts,
       attesteLe: targetCandidat.attesteLe || new Date().toISOString(),
     };
-    onUpdateCandidat(updated);
-    storageService.setCandidat(updated);
-    try {
-      const rawAccounts = localStorage.getItem('usmba_registered_accounts');
-      if (rawAccounts) {
-        const accounts: Candidat[] = JSON.parse(rawAccounts);
-        const idx = accounts.findIndex(
-          (a) =>
-            a.id === updated.id ||
-            (a.email && updated.email && a.email.toLowerCase().trim() === updated.email.toLowerCase().trim())
-        );
-        if (idx !== -1) {
-          accounts[idx] = { ...accounts[idx], ...updated };
-          localStorage.setItem('usmba_registered_accounts', JSON.stringify(accounts));
-        }
-      }
-      const rawOverrides = localStorage.getItem('usmba_candidats_overrides');
-      if (rawOverrides) {
-        const overrides: Record<string, Candidat> = JSON.parse(rawOverrides);
-        if (overrides[updated.id]) {
-          overrides[updated.id] = updated;
-          localStorage.setItem('usmba_candidats_overrides', JSON.stringify(overrides));
-        }
-      }
-    } catch {}
-    return updated;
+    const synced = persistUnifiedCandidate(updated, true);
+    onUpdateCandidat(synced);
+    return synced;
   };
 
   // Clic sur "Compléter mon dossier" depuis Mes vœux
   const handleStartCandidater = () => {
     setErrorMsg(null);
     const availableCartIds = cartItems.filter((s) => s.statut !== 'archive').map((s) => s.id);
-    const combinedIds = Array.from(new Set([...(candidat.candidatures || []), ...availableCartIds]));
+    const activeCandidatures = isConnected ? (candidat.candidatures || []) : [];
+    const combinedIds = Array.from(new Set([...activeCandidatures, ...availableCartIds]));
     if (combinedIds.length < 3) return;
 
-    if (!candidat.compteCree) {
+    if (!isConnected) {
       setAuthModalMode('register');
       setIsAuthModalOpen(true);
     } else if (candidat.verificationStatut === 'non_verifie') {
       setView('verify_code');
-    } else if ((candidat.candidatures || []).length >= 3) {
+    } else if (activeCandidatures.length >= 3) {
       onNavigateTab?.('dossier');
     } else if (combinedIds.length === 3) {
       saveSelectedSubjectsDraft(candidat, combinedIds);
@@ -868,20 +855,8 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
       panier: candidat.panier,
       candidatures: [],
     };
-    onUpdateCandidat(updated);
-    storageService.setCandidat(updated);
-
-    try {
-      const rawAccounts = localStorage.getItem('usmba_registered_accounts');
-      const accounts: Candidat[] = rawAccounts ? JSON.parse(rawAccounts) : [];
-      const filtered = accounts.filter(
-        (a) => a.email.toLowerCase().trim() !== updated.email.toLowerCase().trim()
-      );
-      filtered.push(updated);
-      localStorage.setItem('usmba_registered_accounts', JSON.stringify(filtered));
-    } catch {
-      // safe fallback
-    }
+    const syncedReg = persistUnifiedCandidate(updated, true);
+    onUpdateCandidat(syncedReg);
 
     setVerifyCodeInput('');
     setVerifyCodeError(null);
@@ -905,21 +880,25 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
         verificationEssaisRestants: 3,
         verificationBloqueJusqua: 0,
       };
-      onUpdateCandidat(updated);
-      storageService.setCandidat(updated);
+      const syncedVerified = persistUnifiedCandidate(updated, true);
+      onUpdateCandidat(syncedVerified);
 
-      try {
-        const rawAccounts = localStorage.getItem('usmba_registered_accounts');
-        const accounts: Candidat[] = rawAccounts ? JSON.parse(rawAccounts) : [];
-        const updatedAccounts = accounts.map((a) =>
-          a.id === updated.id || a.email.toLowerCase() === updated.email.toLowerCase() ? updated : a
-        );
-        localStorage.setItem('usmba_registered_accounts', JSON.stringify(updatedAccounts));
-      } catch {
-        // safe fallback
+      const availableIds = updated.panier.filter((id) => {
+        const s = sujets.find((x) => x && x.id === id);
+        return s && s.statut !== 'archive' && (s.statutValidation || 'publie') === 'publie';
+      });
+      const combinedAfterVerify = Array.from(
+        new Set([...(updated.candidatures || []), ...availableIds])
+      );
+      if (combinedAfterVerify.length === 3) {
+        saveSelectedSubjectsDraft(updated, combinedAfterVerify);
+        if (onNavigateTab) {
+          setView('catalog');
+          onNavigateTab('dossier');
+          return;
+        }
       }
-
-      setTempSelection(candidat.panier.slice(0, Math.min(3, candidat.panier.length)));
+      setTempSelection(updated.panier.slice(0, Math.min(3, updated.panier.length)));
       setView('select3');
     } else {
       // Code incorrect
@@ -1118,7 +1097,7 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
     if (!selectedSujetForDetail) return null;
     const ens = getEnseignant(selectedSujetForDetail.enseignantId);
     const inCart = candidat.panier.includes(selectedSujetForDetail.id);
-    const isApplied = candidat.candidatures.includes(selectedSujetForDetail.id);
+    const isApplied = isConnected && candidat.candidatures.includes(selectedSujetForDetail.id);
     const showWishButton = role === 'candidat' || role === 'visiteur';
     const {
       Icon: DisciplineIcon,
@@ -1272,8 +1251,9 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
   }, [cartItems]);
 
   const combinedAvailableIds = useMemo(() => {
-    return Array.from(new Set([...(candidat?.candidatures || []), ...cartAvailableItems.map((s) => s.id)]));
-  }, [candidat?.candidatures, cartAvailableItems]);
+    const activeCandidatures = isConnected ? (candidat?.candidatures || []) : [];
+    return Array.from(new Set([...activeCandidatures, ...cartAvailableItems.map((s) => s.id)]));
+  }, [isConnected, candidat?.candidatures, cartAvailableItems]);
 
   const select3DisplayItems = useMemo(() => {
     const existingIds = new Set(cartItems.map((s) => s.id));
@@ -1804,7 +1784,7 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
   /* VUE PANIER / MES VŒUX                                                     */
   /* ========================================================================= */
   if (view === 'panier') {
-    const isUnverified = Boolean(candidat.compteCree && candidat.verificationStatut === 'non_verifie');
+    const isUnverified = Boolean(isConnected && candidat.verificationStatut === 'non_verifie');
     const wishesCount = combinedAvailableIds.length;
     const hasEnoughWishes = wishesCount >= 3;
     const missingWishesCount = Math.max(0, 3 - wishesCount);
@@ -1877,7 +1857,7 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
         ) : (
           <div className="space-y-3">
             {cartItems.map((sujet) => {
-              const isApplied = candidat.candidatures.includes(sujet.id);
+              const isApplied = isConnected && candidat.candidatures.includes(sujet.id);
               const { Icon: DisciplineIcon, barColor, iconPill, badge: badgeColor, cardBg, cardBorder } = getDisciplineConfig(sujet.discipline);
 
               return (
@@ -1990,16 +1970,36 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
         onLoginSuccess={(userRole, _email, candidateData, connectedCompte) => {
           setIsAuthModalOpen(false);
           if (userRole === 'candidat') {
-            const base = candidateData || storageService.loginAsDemo();
+            const storedBefore = storageService.getCandidat();
+            const rawBase = candidateData || storageService.loginAsDemo();
+            const base = reconcileCandidateFromStorage(rawBase);
             const mergedPanier = Array.from(
-              new Set([...(base.panier || []), ...(candidat.panier || [])])
+              new Set([
+                ...(base.panier || []),
+                ...(candidat.panier || []),
+                ...(Array.isArray(storedBefore?.panier) ? storedBefore.panier : []),
+              ])
             ).filter((id) => !(base.candidatures || []).includes(id));
-            const updatedCand: Candidat = {
-              ...base,
-              panier: mergedPanier,
-              panierInteret: mergedPanier,
-            };
-            storageService.setCandidat(updatedCand);
+            const updatedCand: Candidat = persistUnifiedCandidate(
+              {
+                ...base,
+                panier: mergedPanier,
+                panierInteret: mergedPanier,
+              },
+              true
+            );
+            if (Array.isArray(updatedCand.pieces) && updatedCand.pieces.length > 0) {
+              storageService.setPieces(updatedCand.pieces);
+            }
+            storageService.setDossier({
+              candidatId: updatedCand.id,
+              casParticulier: Boolean(updatedCand.dossier?.casParticulier),
+              motif: updatedCand.dossier?.motif,
+              motifAutre: updatedCand.dossier?.motifAutre,
+              consentementApogee: false,
+              statutGlobal: updatedCand.dossier?.dateEnvoi ? 'soumis' : 'en_cours',
+              dateEnvoi: updatedCand.dossier?.dateEnvoi,
+            });
             onUpdateCandidat(updatedCand);
             const availableIds = updatedCand.panier.filter((id) => {
               const s = sujets.find((x) => x && x.id === id);
@@ -3118,7 +3118,7 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
         </div>
       </div>
 
-      {isCandidateOrVisitor && !candidat.compteCree && cartAvailableItems.length >= 3 && (
+      {isCandidateOrVisitor && !isConnected && cartAvailableItems.length >= 3 && (
         <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2.5 flex items-center justify-between gap-3 flex-wrap shadow-xs">
           <span className="text-xs font-semibold text-emerald-950">
             {fr.sujetsModule.panierCount.replace('{count}', String(cartAvailableItems.length))}
@@ -3273,7 +3273,7 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
         ) : (
           paginatedSujets.map((sujet) => {
             const inCart = candidat.panier.includes(sujet.id);
-            const isApplied = candidat.candidatures.includes(sujet.id);
+            const isApplied = isConnected && candidat.candidatures.includes(sujet.id);
             const { Icon: DisciplineIcon, barColor, iconPill, badge: badgeColor, cardBg, cardBorder } = getDisciplineConfig(sujet.discipline);
 
             return (

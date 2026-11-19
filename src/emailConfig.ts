@@ -10,6 +10,7 @@ export const emailConfig = {
 export interface AdmissionEmailParams {
   toEmail: string;
   toName: string;
+  subject?: string;
   message: string;
 }
 
@@ -24,6 +25,17 @@ function isConfiguredValue(val: string | undefined): boolean {
   return Boolean(trimmed && trimmed !== '[COLLE]');
 }
 
+function resolveEmailJsConfig() {
+  const envService = import.meta.env?.VITE_EMAILJS_SERVICE_ID as string | undefined;
+  const envTemplate = import.meta.env?.VITE_EMAILJS_TEMPLATE_ID as string | undefined;
+  const envPublic = import.meta.env?.VITE_EMAILJS_PUBLIC_KEY as string | undefined;
+  return {
+    serviceId: isConfiguredValue(envService) ? envService!.trim() : emailConfig.serviceId,
+    templateId: isConfiguredValue(envTemplate) ? envTemplate!.trim() : emailConfig.templateId,
+    publicKey: isConfiguredValue(envPublic) ? envPublic!.trim() : emailConfig.publicKey,
+  };
+}
+
 /**
  * Envoie un e-mail réel via l'API REST d'EmailJS.
  * Ne retourne ok: true qu'en cas de réponse HTTP positive de l'API.
@@ -31,10 +43,11 @@ function isConfiguredValue(val: string | undefined): boolean {
 export async function sendAdmissionEmail(
   params: AdmissionEmailParams
 ): Promise<AdmissionEmailResult> {
+  const resolved = resolveEmailJsConfig();
   if (
-    !isConfiguredValue(emailConfig.serviceId) ||
-    !isConfiguredValue(emailConfig.templateId) ||
-    !isConfiguredValue(emailConfig.publicKey)
+    !isConfiguredValue(resolved.serviceId) ||
+    !isConfiguredValue(resolved.templateId) ||
+    !isConfiguredValue(resolved.publicKey)
   ) {
     return { ok: false, error: fr.cedSeances.emailConfigMissing };
   }
@@ -54,12 +67,13 @@ export async function sendAdmissionEmail(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        service_id: emailConfig.serviceId.trim(),
-        template_id: emailConfig.templateId.trim(),
-        user_id: emailConfig.publicKey.trim(),
+        service_id: resolved.serviceId,
+        template_id: resolved.templateId,
+        user_id: resolved.publicKey,
         template_params: {
           to_email: params.toEmail.trim(),
           to_name: (params.toName || '').trim() || params.toEmail.trim(),
+          subject: (params.subject || '').trim() || 'Notification USMBA Doctorat',
           message: params.message,
         },
       }),

@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import { Candidat, GuichetStatut, JournalGuichetEntry } from '../types';
 import { MOCK_CANDIDATS, DEMO_AGENT_KARIMA } from '../data/mockData';
-import { normaliserTel, lienWhatsApp } from '../utils/messages';
+import { normaliserTel, lienWhatsApp, persistUnifiedCandidate } from '../utils/messages';
 import { Dossier } from './Dossier';
 import { fr } from '../i18n/fr';
 
@@ -47,28 +47,7 @@ function formatDateFr(isoOrDate?: string): string {
 
 function persistCandidateUpdate(cand: Candidat): void {
   try {
-    const rawOverrides = localStorage.getItem('usmba_candidats_overrides');
-    const overrides: Record<string, Candidat> = rawOverrides ? JSON.parse(rawOverrides) : {};
-    overrides[cand.id] = cand;
-    localStorage.setItem('usmba_candidats_overrides', JSON.stringify(overrides));
-
-    const rawCur = localStorage.getItem('usmba_doctorat_candidat');
-    if (rawCur) {
-      const cur: Candidat = JSON.parse(rawCur);
-      if (cur.id === cand.id) {
-        localStorage.setItem('usmba_doctorat_candidat', JSON.stringify(cand));
-      }
-    }
-
-    const rawAccounts = localStorage.getItem('usmba_registered_accounts');
-    if (rawAccounts) {
-      const accounts: Candidat[] = JSON.parse(rawAccounts);
-      const idx = accounts.findIndex((a) => a.id === cand.id);
-      if (idx !== -1) {
-        accounts[idx] = cand;
-        localStorage.setItem('usmba_registered_accounts', JSON.stringify(accounts));
-      }
-    }
+    persistUnifiedCandidate(cand, true);
     window.dispatchEvent(new CustomEvent('usmba_pieces_updated'));
   } catch {
     // safe fallback

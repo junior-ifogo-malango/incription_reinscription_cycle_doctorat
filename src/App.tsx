@@ -29,8 +29,9 @@ import {
 } from 'lucide-react';
 import { UserRole, Role, Compte, Candidat, Enseignant, Sujet, Piece, Creneau, Notification, type Dossier as DossierData, Rapport, Vote, CandidatureStatut, normaliserRole, getCompteRoles, dossierComplet } from './types';
 import { storageService } from './services/storage';
-import { INITIAL_RAPPORTS, DEMO_DOCTORANT_NADIA, aujourdhui, getComptes, MOCK_CANDIDATS, getDirectorStructure } from './data/mockData';
+import { INITIAL_RAPPORTS, DEMO_DOCTORANT_NADIA, aujourdhui, getComptes, MOCK_CANDIDATS, getDirectorStructure, INITIAL_PIECES, INITIAL_DOSSIER } from './data/mockData';
 import { fr } from './i18n/fr';
+import { reconcileCandidateFromStorage, persistUnifiedCandidate } from './utils/messages';
 import { LoginModal } from './components/LoginModal';
 import { MobileNav, TabType } from './components/MobileNav';
 import { Notifications } from './components/Notifications';
@@ -378,7 +379,8 @@ export default function App() {
   }, []);
 
   const refreshState = () => {
-    setCandidat(storageService.getCandidat());
+    const rawCand = storageService.getCandidat();
+    setCandidat(rawCand?.compteCree ? reconcileCandidateFromStorage(rawCand) : rawCand);
     setSujets(storageService.getSujets());
     setEnseignants(storageService.getEnseignants());
     setPieces(storageService.getPieces());
@@ -494,6 +496,7 @@ export default function App() {
       window.dispatchEvent(new CustomEvent('storage'));
     } catch {}
 
+    let shouldOpenDossierForThreeSubjects = false;
     if (userRole === 'candidat') {
       const storedBefore = storageService.getCandidat();
       const visitorPanier = Array.from(
@@ -502,30 +505,72 @@ export default function App() {
           ...(Array.isArray(storedBefore?.panier) ? storedBefore.panier : []),
         ])
       );
-      if (candidateData) {
-        const mergedPanier = Array.from(
-          new Set([...(candidateData.panier || []), ...visitorPanier])
-        ).filter((id) => !(candidateData.candidatures || []).includes(id));
-        const mergedCandidate: Candidat = {
-          ...candidateData,
-          panier: mergedPanier,
-          panierInteret: mergedPanier,
+      const rawBaseCandidate = candidateData || storageService.loginAsDemo();
+      const baseCandidate = reconcileCandidateFromStorage({
+        ...rawBaseCandidate,
+        ...(userEmail && !rawBaseCandidate.email ? { email: userEmail.trim().toLowerCase() } : {}),
+      });
+      const existingCandidatures = Array.isArray(baseCandidate.candidatures)
+        ? baseCandidate.candidatures
+        : [];
+      const mergedPanier = Array.from(
+        new Set([...(baseCandidate.panier || []), ...visitorPanier])
+      ).filter((id) => !existingCandidatures.includes(id));
+
+      const availablePanierIds = mergedPanier.filter((id) => {
+        const s = sujets.find((x) => x && x.id === id);
+        return s && s.statut !== 'archive' && (s.statutValidation || 'publie') === 'publie';
+      });
+      const combinedIds = Array.from(new Set([...existingCandidatures, ...availablePanierIds]));
+
+      let finalCandidate: Candidat;
+      if (existingCandidatures.length === 0 && combinedIds.length === 3) {
+        const nextStatuts: Record<string, CandidatureStatut> = {
+          ...(baseCandidate.candidaturesStatuts || {}),
         };
-        setCandidat(mergedCandidate);
-        storageService.setCandidat(mergedCandidate);
+        combinedIds.forEach((id) => {
+          if (!nextStatuts[id]) nextStatuts[id] = 'brouillon';
+        });
+        const remainingPanier = mergedPanier.filter((id) => !combinedIds.includes(id));
+        finalCandidate = {
+          ...baseCandidate,
+          panier: remainingPanier,
+          panierInteret: remainingPanier,
+          candidatures: combinedIds,
+          interets: combinedIds,
+          candidaturesStatuts: nextStatuts,
+          attesteLe: baseCandidate.attesteLe || new Date().toISOString(),
+        };
+        shouldOpenDossierForThreeSubjects = true;
       } else {
-        const demo = storageService.loginAsDemo();
-        const mergedPanier = Array.from(
-          new Set([...(demo.panier || []), ...visitorPanier])
-        ).filter((id) => !(demo.candidatures || []).includes(id));
-        const mergedDemo: Candidat = {
-          ...demo,
+        finalCandidate = {
+          ...baseCandidate,
           panier: mergedPanier,
           panierInteret: mergedPanier,
         };
-        setCandidat(mergedDemo);
-        storageService.setCandidat(mergedDemo);
       }
+
+      const syncedCandidate = persistUnifiedCandidate(finalCandidate, true);
+      setCandidat(syncedCandidate);
+      storageService.setCandidat(syncedCandidate);
+      if (Array.isArray(syncedCandidate.pieces) && syncedCandidate.pieces.length > 0) {
+        setPieces(syncedCandidate.pieces);
+        storageService.setPieces(syncedCandidate.pieces);
+      } else {
+        setPieces(INITIAL_PIECES);
+        storageService.setPieces(INITIAL_PIECES);
+      }
+      const nextDossier: DossierData = {
+        candidatId: syncedCandidate.id,
+        casParticulier: Boolean(syncedCandidate.dossier?.casParticulier),
+        motif: syncedCandidate.dossier?.motif,
+        motifAutre: syncedCandidate.dossier?.motifAutre,
+        consentementApogee: false,
+        statutGlobal: syncedCandidate.dossier?.dateEnvoi ? 'soumis' : 'en_cours',
+        dateEnvoi: syncedCandidate.dossier?.dateEnvoi,
+      };
+      setDossier(nextDossier);
+      storageService.setDossier(nextDossier);
     }
 
     const effectiveRolesAfterLogin = Array.from(
@@ -536,7 +581,10 @@ export default function App() {
     const pendingTarget = pendingTabRef.current;
     pendingTabRef.current = null;
 
-    if (pendingTarget && isTabAllowedForRoles(pendingTarget, effectiveRolesAfterLogin)) {
+    if (shouldOpenDossierForThreeSubjects && isTabAllowedForRoles('dossier', effectiveRolesAfterLogin)) {
+      setSelectedCandidatForDossier(null);
+      setTab('dossier');
+    } else if (pendingTarget && isTabAllowedForRoles(pendingTarget, effectiveRolesAfterLogin)) {
       setSelectedCandidatForDossier(null);
       setTab(pendingTarget);
     } else if (userRole === 'candidat') {
@@ -587,6 +635,10 @@ export default function App() {
     };
     setCandidat(visitor);
     storageService.setCandidat(visitor);
+    setPieces(INITIAL_PIECES);
+    storageService.setPieces(INITIAL_PIECES);
+    setDossier(INITIAL_DOSSIER);
+    storageService.setDossier(INITIAL_DOSSIER);
     setTab('sujets');
   };
 
@@ -595,7 +647,7 @@ export default function App() {
       const raw = localStorage.getItem('usmba_doctorat_candidat');
       if (raw) {
         const parsed: Candidat = JSON.parse(raw);
-        setCandidat(parsed);
+        setCandidat(parsed?.compteCree ? reconcileCandidateFromStorage(parsed) : parsed);
       }
     } catch {
       // safe fallback
@@ -664,14 +716,33 @@ export default function App() {
     setTimeout(() => setShowToast(false), 3000);
   };
 
-  // Enseignant actif pour la démo
-  const activeEnseignant = enseignants[0] || {
-    id: 'ens-1',
-    nom: 'Pr. Karim El Amrani',
-    email: 'k.elamrani@usmba.ac.ma',
-    etablissement: 'Faculté des Sciences Dhar El Mehraz (FSDM)',
-    structure: 'Laboratoire LISAC',
-  };
+  // Enseignant actif (lié au directeur connecté)
+  const activeEnseignant =
+    (activeCompte?.enseignantId &&
+      enseignants.find((e) => e.id === activeCompte.enseignantId)) ||
+    (activeCompte?.email &&
+      enseignants.find(
+        (e) =>
+          e.email &&
+          e.email.toLowerCase().trim() === activeCompte.email.toLowerCase().trim()
+      )) ||
+    (activeCompte && activeCompte.role === 'enseignant'
+      ? {
+          id: activeCompte.enseignantId || activeCompte.id,
+          nom: activeCompte.nom,
+          email: activeCompte.email,
+          etablissement: activeCompte.etablissement || '',
+          structure: activeCompte.structure || '',
+          role: 'enseignant' as const,
+        }
+      : null) ||
+    enseignants[0] || {
+      id: 'ens-1',
+      nom: 'Pr. Karim El Amrani',
+      email: 'directeurthese@gmail.com',
+      etablissement: 'Faculté des Sciences Dhar El Mehraz (FSDM)',
+      structure: 'LISAC - FSDM Fès',
+    };
 
   // Sujets de l'enseignant actif
   const sujetsEnseignant = sujets.filter((s) => s.enseignantId === activeEnseignant.id);
@@ -807,41 +878,6 @@ export default function App() {
         }
       });
     });
-
-    // Candidatures d'autres étudiants simulés pour la démo
-    if (activeEnseignant.id === 'ens-1') {
-      if (!list.some((x) => x.candidatId === 'cand-salma')) {
-        list.push({
-          key: 'salma-suj-07',
-          candidatId: 'cand-salma',
-          sujetId: 'suj-07',
-          candidatNom: 'Salma Alami',
-          cne: 'N149021873',
-          sujetTitre: 'Cybersécurité des Véhicules Connectés et Protocoles V2X',
-          date: '25/10/2026',
-          statut: simulatedStatuts['salma-suj-07'] || 'deposee',
-          piecesDeclarees: 4,
-          piecesProuvees: 3,
-          isCurrentCandidat: false,
-        });
-      }
-      if (!list.some((x) => x.candidatId === 'cand-khadija')) {
-        list.push({
-          key: 'khadija-suj-01',
-          candidatId: 'cand-khadija',
-          sujetId: 'suj-01',
-          candidatNom: 'Khadija Tazi',
-          cne: 'M142078911',
-          sujetTitre: 'Optimisation des Réseaux Électriques Intelligents (Smart Grids)',
-          date: '26/10/2026',
-          statut: simulatedStatuts['khadija-suj-01'] || 'deposee',
-          piecesDeclarees: 4,
-          piecesProuvees: 4,
-          motifCasParticulier: fr.dossier.casParticulierMotifs.DIPLOME_ETRANGER,
-          isCurrentCandidat: false,
-        });
-      }
-    }
 
     return list;
   }, [candidat, teacherSubjectIds, sujets, activeEnseignant, simulatedStatuts, candidateSyncTick]);
@@ -1490,7 +1526,9 @@ export default function App() {
               {isLoggedIn && role === 'candidat' && (
                 <Notifications
                   candidatId={candidat.id}
+                  candidatEmail={candidat.email}
                   onNavigateToDossier={() => handleTabChange('dossier')}
+                  onNavigateToEntretiens={() => handleTabChange('entretiens')}
                 />
               )}
 
@@ -1654,9 +1692,19 @@ export default function App() {
             <SujetsModule
               key="catalog"
               role={role}
+              isLoggedIn={isLoggedIn}
               sujets={sujets}
               enseignants={enseignants}
-              candidat={candidat}
+              candidat={
+                isLoggedIn
+                  ? candidat
+                  : {
+                      ...candidat,
+                      compteCree: false,
+                      candidatures: [],
+                      candidaturesStatuts: {},
+                    }
+              }
               onUpdateCandidat={(updated) => {
                 setCandidat(updated);
                 if (updated.compteCree && !isLoggedInRef.current) {
@@ -1682,9 +1730,19 @@ export default function App() {
             <SujetsModule
               key="panier"
               role={role}
+              isLoggedIn={isLoggedIn}
               sujets={sujets}
               enseignants={enseignants}
-              candidat={candidat}
+              candidat={
+                isLoggedIn
+                  ? candidat
+                  : {
+                      ...candidat,
+                      compteCree: false,
+                      candidatures: [],
+                      candidaturesStatuts: {},
+                    }
+              }
               onUpdateCandidat={(updated) => {
                 setCandidat(updated);
                 if (updated.compteCree && !isLoggedInRef.current) {
@@ -1762,9 +1820,12 @@ export default function App() {
                     <h3 className="text-sm font-bold text-slate-900 truncate">
                       {item.candidatNom || fr.dossierDirecteur.nonRenseigne}
                     </h3>
-                    <span className="text-xs font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md shrink-0">
-                      {formatDateJJMM(item.date)}
-                    </span>
+                    {isSent && formatDateJJMM(item.date) && (
+                      <span className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md shrink-0">
+                        <Calendar size={12} className="text-slate-500 shrink-0" />
+                        <span>{fr.dossierDirecteur.envoyeLePrefix.replace('{date}', formatDateJJMM(item.date))}</span>
+                      </span>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-2 flex-wrap">
@@ -2083,9 +2144,11 @@ export default function App() {
     </main>
 
         {/* Pied de page sobre et discret */}
-        <footer className="mt-auto px-4 py-5 border-t border-slate-100 text-center text-xs text-slate-500 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <span>{fr.footer.copyright}</span>
-        </footer>
+        {fr.footer.copyright && (
+          <footer className="mt-auto px-4 py-5 border-t border-slate-100 text-center text-xs text-slate-500 flex flex-col sm:flex-row items-center justify-between gap-3">
+            <span>{fr.footer.copyright}</span>
+          </footer>
+        )}
 
         {/* Barre de navigation mobile inférieure tactile (5 max + Plus) via MobileNav */}
         <MobileNav

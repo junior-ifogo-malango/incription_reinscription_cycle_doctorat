@@ -129,6 +129,7 @@ export type CandidatureStatut = 'brouillon' | 'deposee' | 'retenue' | 'a_corrige
 
 export interface AnomalieCandidature {
   piece: 'CIN' | 'DIPLOME' | 'RELEVES' | 'CV' | 'CURSUS';
+  pieces?: ('CIN' | 'DIPLOME' | 'RELEVES' | 'CV' | 'CURSUS')[];
   nature: 'illisible' | 'absente' | 'incoherente';
   motif: string;
   le: string;
@@ -204,6 +205,7 @@ export type NotificationType = 'info' | 'action';
 export interface Notification {
   id: string;
   destinataireId: string;
+  destinataireEmail?: string;
   texte: string;
   date: string; /* ISO */
   lue: boolean;

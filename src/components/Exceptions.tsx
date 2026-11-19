@@ -89,8 +89,6 @@ export const Exceptions: React.FC = () => {
 
   const getCandidatNom = (id?: string): string => {
     if (!id) return fr.exceptions.nonRenseigne;
-    if (id === 'cand-salma') return 'Salma Alami';
-    if (id === 'cand-khadija') return 'Khadija Tazi';
     if (id === 'cand-sara') return 'Sara Benjelloun';
     if (id === 'cand-omar') return 'Omar Idrissi';
     if (id === 'cand-001') return 'Yassine El Fassi';

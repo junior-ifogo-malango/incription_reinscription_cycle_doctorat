@@ -28,37 +28,42 @@ export const INITIAL_ENSEIGNANTS: Enseignant[] = [
   {
     id: 'ens-2',
     nom: 'Pr. Amina Bennani',
-    email: '',
+    email: 'amina.bennani@usmba.ac.ma',
     etablissement: 'Faculté des Sciences et Techniques (FST Fès)',
     structure: 'Laboratoire Génie Industriel & IA Appliquée',
+    role: 'enseignant',
   },
   {
     id: 'ens-3',
     nom: 'Pr. Mehdi Berrada',
-    email: '',
+    email: 'mehdi.berrada@usmba.ac.ma',
     etablissement: 'Faculté des Sciences Juridiques, Économiques et Sociales (FSJES)',
     structure: 'Laboratoire de Recherche en Économie et Management Durable',
+    role: 'enseignant',
   },
   {
     id: 'ens-4',
     nom: 'Pr. Fatima Chraibi',
-    email: '',
+    email: 'fatima.chraibi@usmba.ac.ma',
     etablissement: 'Faculté de Médecine, de Pharmacie et de Médecine Dentaire',
     structure: 'Laboratoire de Biotechnologie et Pharmacologie Médicale',
+    role: 'enseignant',
   },
   {
     id: 'ens-5',
     nom: 'Pr. Hassan Tahiri',
-    email: '',
+    email: 'hassan.tahiri@usmba.ac.ma',
     etablissement: 'Faculté des Lettres et des Sciences Humaines Saïs',
     structure: 'Laboratoire Patrimoine Fassi et Humanités Numériques',
+    role: 'enseignant',
   },
   {
     id: 'ens-6',
     nom: 'Pr. Zineb Idrissi',
-    email: '',
+    email: 'zineb.idrissi@usmba.ac.ma',
     etablissement: 'École Nationale des Sciences Appliquées (ENSA Fès)',
     structure: 'Laboratoire Énergies Renouvelables et Matériaux Avancés',
+    role: 'enseignant',
   },
 ];
 
@@ -331,15 +336,6 @@ export const APOGEE_FICTIF_DB: Record<string, ApogeeFictifEntry> = {
     etablissement: 'Faculté des Sciences Dhar El Mehraz (FSDM Fès)',
     anneeObtention: 2026,
   },
-  N149021873: {
-    cne: 'N149021873',
-    nom: 'Salma Alami',
-    cin: 'CD654321',
-    diplome: 'Master en Biotechnologie Appliquée à la Santé',
-    mention: 'Bien',
-    etablissement: 'Faculté de Médecine et de Pharmacie de Fès',
-    anneeObtention: 2025,
-  },
   M130098452: {
     cne: 'M130098452',
     nom: 'Othmane Benchekroun',
@@ -347,15 +343,6 @@ export const APOGEE_FICTIF_DB: Record<string, ApogeeFictifEntry> = {
     diplome: 'Master en Économie Appliquée et Développement Territorial',
     mention: 'Très Bien',
     etablissement: 'FSJES Fès',
-    anneeObtention: 2026,
-  },
-  M142078911: {
-    cne: 'M142078911',
-    nom: 'Khadija Tazi',
-    cin: 'CD321987',
-    diplome: 'Diplôme d’Ingénieur d’État en Énergies Renouvelables',
-    mention: 'Très Bien',
-    etablissement: 'ENSA Fès',
     anneeObtention: 2026,
   },
 };
@@ -487,6 +474,71 @@ export const INITIAL_COMPTES: Compte[] = [
     enseignantId: 'ens-1',
   },
   {
+    id: 'ens-2',
+    nom: 'Pr. Amina Bennani',
+    email: 'amina.bennani@usmba.ac.ma',
+    motDePasse: '1234',
+    role: 'enseignant',
+    roles: ['directeur'],
+    structure: 'Laboratoire Génie Industriel & IA Appliquée',
+    etablissement: 'Faculté des Sciences et Techniques (FST Fès)',
+    statut: 'actif',
+    dateCreation: '2026-10-01',
+    enseignantId: 'ens-2',
+  },
+  {
+    id: 'ens-3',
+    nom: 'Pr. Mehdi Berrada',
+    email: 'mehdi.berrada@usmba.ac.ma',
+    motDePasse: '1234',
+    role: 'enseignant',
+    roles: ['directeur'],
+    structure: 'Laboratoire de Recherche en Économie et Management Durable',
+    etablissement: 'Faculté des Sciences Juridiques, Économiques et Sociales (FSJES)',
+    statut: 'actif',
+    dateCreation: '2026-10-01',
+    enseignantId: 'ens-3',
+  },
+  {
+    id: 'ens-4',
+    nom: 'Pr. Fatima Chraibi',
+    email: 'fatima.chraibi@usmba.ac.ma',
+    motDePasse: '1234',
+    role: 'enseignant',
+    roles: ['directeur'],
+    structure: 'Laboratoire de Biotechnologie et Pharmacologie Médicale',
+    etablissement: 'Faculté de Médecine, de Pharmacie et de Médecine Dentaire',
+    statut: 'actif',
+    dateCreation: '2026-10-01',
+    enseignantId: 'ens-4',
+  },
+  {
+    id: 'ens-5',
+    nom: 'Pr. Hassan Tahiri',
+    email: 'hassan.tahiri@usmba.ac.ma',
+    motDePasse: '1234',
+    role: 'enseignant',
+    roles: ['directeur'],
+    structure: 'Laboratoire Patrimoine Fassi et Humanités Numériques',
+    etablissement: 'Faculté des Lettres et des Sciences Humaines Saïs',
+    statut: 'actif',
+    dateCreation: '2026-10-01',
+    enseignantId: 'ens-5',
+  },
+  {
+    id: 'ens-6',
+    nom: 'Pr. Zineb Idrissi',
+    email: 'zineb.idrissi@usmba.ac.ma',
+    motDePasse: '1234',
+    role: 'enseignant',
+    roles: ['directeur'],
+    structure: 'Laboratoire Énergies Renouvelables et Matériaux Avancés',
+    etablissement: 'École Nationale des Sciences Appliquées (ENSA Fès)',
+    statut: 'actif',
+    dateCreation: '2026-10-01',
+    enseignantId: 'ens-6',
+  },
+  {
     id: 'ced',
     nom: 'Directeur de structure',
     email: 'directeurstructure@gmail.com',
@@ -503,6 +555,8 @@ export const INITIAL_COMPTES: Compte[] = [
 export const STORAGE_KEY_COMPTES = 'gcd_comptes';
 const MIGRATION_4COMPTES_KEY = 'usmba_migration_4comptes_v1';
 const CLEANUP_ALAOUI_TARIQ_KEY = 'usmba_cleanup_alaoui_tariq_v1';
+const CLEANUP_SALMA_KHADIJA_KEY = 'usmba_cleanup_salma_khadija_v1';
+const SYNC_DIRECTORS_ACCOUNTS_KEY = 'usmba_sync_directors_accounts_v1';
 
 export function migrateTestAccountsIfNeeded(): void {
   try {
@@ -899,8 +953,137 @@ export function cleanupAlaouiTariqIfNeeded(): void {
   }
 }
 
+export function cleanupSalmaKhadijaIfNeeded(): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    if (localStorage.getItem(CLEANUP_SALMA_KHADIJA_KEY)) return;
+
+    const targetIds = new Set(['cand-salma', 'cand-khadija']);
+    const targetStatutKeys = new Set(['salma-suj-07', 'khadija-suj-01']);
+
+    try {
+      const rawSim = localStorage.getItem('usmba_simulated_statuts');
+      if (rawSim) {
+        const sim: Record<string, string> = JSON.parse(rawSim);
+        let changed = false;
+        Object.keys(sim).forEach((k) => {
+          if (targetStatutKeys.has(k) || k.startsWith('cand-salma-') || k.startsWith('cand-khadija-')) {
+            delete sim[k];
+            changed = true;
+          }
+        });
+        if (changed) localStorage.setItem('usmba_simulated_statuts', JSON.stringify(sim));
+      }
+    } catch {}
+
+    try {
+      const rawPvs = localStorage.getItem('usmba_doctorat_pvs');
+      if (rawPvs) {
+        const pvsList: PV[] = JSON.parse(rawPvs);
+        if (Array.isArray(pvsList)) {
+          let changed = false;
+          const nextPvs = pvsList.map((pv) => {
+            const filtered = (pv.resultats || []).filter((r) => !r.candidatId || !targetIds.has(r.candidatId));
+            if (filtered.length !== (pv.resultats || []).length) {
+              changed = true;
+              return { ...pv, resultats: filtered };
+            }
+            return pv;
+          });
+          if (changed) localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(nextPvs));
+        }
+      }
+    } catch {}
+
+    try {
+      const rawCr = localStorage.getItem('usmba_doctorat_creneaux');
+      if (rawCr) {
+        const crList: Creneau[] = JSON.parse(rawCr);
+        if (Array.isArray(crList)) {
+          const nextCr = crList.filter((c) => !c.candidatId || !targetIds.has(c.candidatId));
+          if (nextCr.length !== crList.length) {
+            localStorage.setItem('usmba_doctorat_creneaux', JSON.stringify(nextCr));
+          }
+        }
+      }
+    } catch {}
+
+    try {
+      const rawRes = localStorage.getItem('usmba_doctorat_resultats');
+      if (rawRes) {
+        const resList: import('../types').Resultat[] = JSON.parse(rawRes);
+        if (Array.isArray(resList)) {
+          const nextRes = resList.filter((r) => !r.candidatId || !targetIds.has(r.candidatId));
+          if (nextRes.length !== resList.length) {
+            localStorage.setItem('usmba_doctorat_resultats', JSON.stringify(nextRes));
+          }
+        }
+      }
+    } catch {}
+
+    localStorage.setItem(CLEANUP_SALMA_KHADIJA_KEY, 'true');
+  } catch {
+    // safe fallback
+  }
+}
+
+export function syncDirectorAccountsIfNeeded(): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    if (localStorage.getItem(SYNC_DIRECTORS_ACCOUNTS_KEY)) return;
+
+    const rawComptes = localStorage.getItem(STORAGE_KEY_COMPTES);
+    if (rawComptes) {
+      const parsed: Compte[] = JSON.parse(rawComptes);
+      if (Array.isArray(parsed)) {
+        const existingIds = new Set(parsed.map((c) => c.id));
+        const existingEmails = new Set(
+          parsed.map((c) => (c.email || '').toLowerCase().trim()).filter(Boolean)
+        );
+        let changed = false;
+        const nextComptes = [...parsed];
+        INITIAL_COMPTES.forEach((initCompte) => {
+          const emailLower = (initCompte.email || '').toLowerCase().trim();
+          if (!existingIds.has(initCompte.id) && (!emailLower || !existingEmails.has(emailLower))) {
+            nextComptes.push(initCompte);
+            changed = true;
+          }
+        });
+        if (changed) {
+          localStorage.setItem(STORAGE_KEY_COMPTES, JSON.stringify(nextComptes));
+        }
+      }
+    }
+
+    const rawEns = localStorage.getItem('usmba_doctorat_enseignants');
+    if (rawEns) {
+      const parsedEns: Enseignant[] = JSON.parse(rawEns);
+      if (Array.isArray(parsedEns)) {
+        let changed = false;
+        const nextEns = parsedEns.map((ens) => {
+          const initMatch = INITIAL_ENSEIGNANTS.find((ie) => ie.id === ens.id);
+          if (initMatch && (!ens.email || !ens.email.trim()) && initMatch.email) {
+            changed = true;
+            return { ...ens, email: initMatch.email, role: 'enseignant' as const };
+          }
+          return ens;
+        });
+        if (changed) {
+          localStorage.setItem('usmba_doctorat_enseignants', JSON.stringify(nextEns));
+        }
+      }
+    }
+
+    localStorage.setItem(SYNC_DIRECTORS_ACCOUNTS_KEY, 'true');
+  } catch {
+    // safe fallback
+  }
+}
+
 migrateTestAccountsIfNeeded();
 cleanupAlaouiTariqIfNeeded();
+cleanupSalmaKhadijaIfNeeded();
+syncDirectorAccountsIfNeeded();
 
 export function getDirectorStructure(directeurId?: string): string {
   if (!directeurId) return '';

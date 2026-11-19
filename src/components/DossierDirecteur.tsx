@@ -14,13 +14,23 @@ import {
   Send,
   Calendar,
   Clock,
+  Mail,
+  ChevronDown,
+  Check,
 } from 'lucide-react';
 import { Candidat, Creneau, Sujet, Piece, AnomalieCandidature, Notification, dossierComplet } from '../types';
 import { INITIAL_SUJETS, MOCK_CANDIDATS, aujourdhui } from '../data/mockData';
 import { fr } from '../i18n/fr';
 import { lireJournal, logEvent, logConvocationEnvoyee } from '../utils/journal';
 import { sendAdmissionEmail } from '../emailConfig';
-import { messageConvocation, trouverCandidat, ajouterNotification } from '../utils/messages';
+import {
+  messageConvocation,
+  trouverCandidat,
+  ajouterNotification,
+  lienMail,
+  reconcileCandidateFromStorage,
+  persistUnifiedCandidate,
+} from '../utils/messages';
 
 const STORAGE_KEY_CRENEAUX = 'usmba_doctorat_creneaux';
 
@@ -107,6 +117,10 @@ function findCandidate(id: string): Candidat | null {
     foundCandidate = mockMatch;
   }
 
+  if (foundCandidate) {
+    foundCandidate = reconcileCandidateFromStorage(foundCandidate);
+  }
+
   if (foundCandidate && !foundCandidate.email?.trim()) {
     const resolvedEmail =
       accMatch?.email?.trim() ||
@@ -127,30 +141,9 @@ function findCandidate(id: string): Candidat | null {
 }
 
 function persistCandidate(cand: Candidat): void {
+  const merged = persistUnifiedCandidate(cand, true);
   try {
-    const rawOverrides = localStorage.getItem('usmba_candidats_overrides');
-    const overrides: Record<string, Candidat> = rawOverrides ? JSON.parse(rawOverrides) : {};
-    overrides[cand.id] = cand;
-    localStorage.setItem('usmba_candidats_overrides', JSON.stringify(overrides));
-
-    const rawCur = localStorage.getItem('usmba_doctorat_candidat');
-    if (rawCur) {
-      const cur: Candidat = JSON.parse(rawCur);
-      if (cur.id === cand.id) {
-        localStorage.setItem('usmba_doctorat_candidat', JSON.stringify(cand));
-      }
-    }
-
-    const rawAccounts = localStorage.getItem('usmba_registered_accounts');
-    if (rawAccounts) {
-      const accounts: Candidat[] = JSON.parse(rawAccounts);
-      const idx = accounts.findIndex((a) => a.id === cand.id);
-      if (idx !== -1) {
-        accounts[idx] = cand;
-        localStorage.setItem('usmba_registered_accounts', JSON.stringify(accounts));
-      }
-    }
-    window.dispatchEvent(new CustomEvent('usmba_candidat_updated', { detail: cand }));
+    window.dispatchEvent(new CustomEvent('usmba_candidat_updated', { detail: merged }));
   } catch {}
 }
 
@@ -196,6 +189,12 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
   const [candidat, setCandidat] = useState<Candidat | null>(() => findCandidate(candidatId));
   const [creneaux, setCreneaux] = useState<Creneau[]>(() => readStoredCreneaux());
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [convocationEmailBanner, setConvocationEmailBanner] = useState<{
+    ok: boolean;
+    email: string;
+    mailtoHref?: string;
+    reason?: string;
+  } | null>(null);
 
   // Aperçu pièce plein écran
   const [viewingPiece, setViewingPiece] = useState<{ titre: string; fichier: string } | null>(null);
@@ -203,7 +202,8 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
 
   // Modale "Demander de compléter"
   const [showDemandeModal, setShowDemandeModal] = useState<boolean>(false);
-  const [demandePiece, setDemandePiece] = useState<'CIN' | 'DIPLOME' | 'RELEVES'>('CIN');
+  const [demandePieces, setDemandePieces] = useState<('CIN' | 'DIPLOME' | 'RELEVES')[]>(['CIN']);
+  const [piecesDropdownOpen, setPiecesDropdownOpen] = useState<boolean>(false);
   const [demandeMotif, setDemandeMotif] = useState<string>('');
   const [demandeError, setDemandeError] = useState<string | null>(null);
 
@@ -502,6 +502,7 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
 
       ajouterNotification({
         destinataireId: candidat.id,
+        destinataireEmail: emailToUse || undefined,
         texte: msg,
         type: 'action',
         actionLabel: fr.notifications.btnAllerEntretiens,
@@ -513,12 +514,22 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
           .replace('{date}', formatDateJJMMAAAA(trimmedDate))
           .replace('{heure}', trimmedHeure)
       );
-      setTimeout(() => setFeedback(null), 4000);
+      setTimeout(() => setFeedback(null), 5000);
 
+      const emailSubject = `Convocation à l'entretien de doctorat — ${formatDateJJMMAAAA(trimmedDate)} à ${trimmedHeure}`;
       const result = await sendAdmissionEmail({
         toEmail: emailToUse,
         toName: fullName,
+        subject: emailSubject,
         message: msg,
+      });
+
+      const mailtoHref = lienMail(emailToUse, emailSubject, msg) || undefined;
+      setConvocationEmailBanner({
+        ok: result.ok,
+        email: emailToUse,
+        mailtoHref,
+        reason: result.ok ? undefined : result.error || fr.cedSeances.emailNetworkError,
       });
 
       const emailSentAt = new Date().toISOString();
@@ -558,29 +569,45 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
     e.preventDefault();
     if (!candidat) return;
 
+    if (demandePieces.length === 0) {
+      setDemandeError(fr.dossierDirecteur.piecesRequiredError);
+      return;
+    }
+
     if (demandeMotif.trim().length < 2) {
       setDemandeError(fr.sujetsModule.modalAnomalieMotifError);
       return;
     }
 
+    const pieceLabelMap: Record<'CIN' | 'DIPLOME' | 'RELEVES', string> = {
+      CIN: fr.dossierDirecteur.cin,
+      DIPLOME: fr.dossierDirecteur.diplome,
+      RELEVES: fr.dossierDirecteur.releves,
+    };
+    const selectedLabels = demandePieces.map((p) => pieceLabelMap[p]);
     const nowIso = new Date().toISOString();
-    const texteManques = check.manques.length > 0 ? check.manques.join(', ') : demandePiece;
+    const texteManques = `${selectedLabels.join(', ')} — ${demandeMotif.trim()}`;
     const anomalieObj: AnomalieCandidature = {
-      piece: demandePiece,
+      piece: demandePieces[0],
+      pieces: [...demandePieces],
       nature: 'absente',
       motif: demandeMotif.trim(),
       le: nowIso,
     };
 
     const updatedPieces = pieces.map((p) => {
-      if (demandePiece === 'CIN' && p.type.toUpperCase() === 'CIN') {
-        return { ...p, statut: 'absente' as const };
-      }
-      if (demandePiece === 'DIPLOME' && p.type.toUpperCase() === 'DIPLOME') {
-        return { ...p, statut: 'absente' as const };
-      }
-      if (demandePiece === 'RELEVES' && p.type.toUpperCase() === 'RELEVES') {
-        return { ...p, statut: 'absente' as const };
+      const upperType = p.type.toUpperCase() as 'CIN' | 'DIPLOME' | 'RELEVES';
+      if (demandePieces.includes(upperType)) {
+        return {
+          type: p.type,
+          statut: 'absente' as const,
+          dateMaj: nowIso,
+          fichier: undefined,
+          fichierVerso: undefined,
+          source: undefined,
+          sourceVerso: undefined,
+          ocrResultat: undefined,
+        };
       }
       return p;
     });
@@ -645,32 +672,25 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
       localStorage.setItem('usmba_simulated_statuts', JSON.stringify(parsed));
     } catch {}
 
-    try {
-      const rawNotifs = localStorage.getItem('usmba_notifications');
-      const notifs: Notification[] = rawNotifs ? JSON.parse(rawNotifs) : [];
-      notifs.unshift({
-        id: `notif-demande-${Date.now()}`,
-        destinataireId: candidat.id,
-        texte: texteManques,
-        date: nowIso,
-        lue: false,
-        type: 'action',
-        actionLabel: fr.notifications.btnCompleterDossier,
-        actionTab: 'dossier',
-      });
-      localStorage.setItem('usmba_notifications', JSON.stringify(notifs));
-      window.dispatchEvent(new CustomEvent('usmba_notifications_updated'));
-    } catch {}
+    ajouterNotification({
+      destinataireId: candidat.id,
+      destinataireEmail: trouverCandidat(candidat.id).email || candidat.email,
+      texte: fr.notifications.notifDemandeCompleter.replace('{manques}', texteManques),
+      type: 'action',
+      actionLabel: fr.notifications.btnCompleterDossier,
+      actionTab: 'dossier',
+    });
 
     logEvent(
       { id: activeTeacher.id, nom: activeTeacher.nom, role: 'enseignant' },
       fr.journalActions.anomalieSignalee,
-      `${candidat.nom} : ${demandePiece} - ${demandeMotif.trim()}`
+      `${candidat.nom} : ${demandePieces.join(', ')} - ${demandeMotif.trim()}`
     );
 
     setFeedback(fr.dossierDirecteur.demandeEnvoyeeToast);
     setTimeout(() => setFeedback(null), 4000);
     setShowDemandeModal(false);
+    setPiecesDropdownOpen(false);
     setDemandeMotif('');
     setDemandeError(null);
   };
@@ -769,6 +789,53 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
         </div>
       )}
 
+      {convocationEmailBanner && (
+        <div
+          className={`rounded-xl p-3 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 border shadow-xs ${
+            convocationEmailBanner.ok
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+              : 'bg-sky-50 border-sky-200 text-sky-950'
+          }`}
+        >
+          <div className="flex items-start gap-2">
+            <Mail size={15} className={convocationEmailBanner.ok ? 'text-emerald-700 shrink-0 mt-0.5' : 'text-sky-700 shrink-0 mt-0.5'} />
+            <div className="space-y-0.5">
+              <p className="font-semibold">
+                {convocationEmailBanner.ok
+                  ? `Notification enregistrée dans l’application et e-mail envoyé à ${convocationEmailBanner.email}.`
+                  : `Notification enregistrée dans l’application${
+                      convocationEmailBanner.email ? ` (e-mail cible : ${convocationEmailBanner.email})` : ''
+                    }.`}
+              </p>
+              {!convocationEmailBanner.ok && (
+                <p className="text-[11px] text-sky-800">
+                  Envoi automatique non actif ({convocationEmailBanner.reason}). Utilisez le bouton ci-contre pour envoyer l’e-mail directement.
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {!convocationEmailBanner.ok && convocationEmailBanner.mailtoHref && (
+              <a
+                href={convocationEmailBanner.mailtoHref}
+                className="px-3 py-1.5 rounded-lg text-xs font-bold bg-sky-700 hover:bg-sky-800 text-white inline-flex items-center gap-1.5 shadow-xs"
+              >
+                <Mail size={13} />
+                <span>Envoyer par e-mail</span>
+              </a>
+            )}
+            <button
+              type="button"
+              onClick={() => setConvocationEmailBanner(null)}
+              className="p-1 rounded-lg hover:bg-black/5 text-slate-500 cursor-pointer"
+              aria-label={fr.dossierDirecteur.convoquerFermer}
+            >
+              <X size={14} />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* b) Verdict : "Dossier complet" ou "Dossier incomplet : [manques]" + Boutons */}
       <div className="bg-white border border-slate-200/90 rounded-2xl p-4 sm:p-5 shadow-xs space-y-3">
         <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -856,10 +923,12 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
             <button
               type="button"
               onClick={() => {
-                const firstManque = check.manques[0];
-                if (firstManque === 'Diplôme') setDemandePiece('DIPLOME');
-                else if (firstManque === 'Relevés') setDemandePiece('RELEVES');
-                else setDemandePiece('CIN');
+                const preSelected: ('CIN' | 'DIPLOME' | 'RELEVES')[] = [];
+                if (check.manques.includes('CIN')) preSelected.push('CIN');
+                if (check.manques.includes('Diplôme')) preSelected.push('DIPLOME');
+                if (check.manques.includes('Relevés')) preSelected.push('RELEVES');
+                setDemandePieces(preSelected.length > 0 ? preSelected : ['CIN']);
+                setPiecesDropdownOpen(false);
                 setShowDemandeModal(true);
                 setDemandeMotif(check.manques.length > 0 ? check.manques.join(', ') : '');
                 setDemandeError(null);
@@ -1291,7 +1360,10 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
               </div>
               <button
                 type="button"
-                onClick={() => setShowDemandeModal(false)}
+                onClick={() => {
+                  setShowDemandeModal(false);
+                  setPiecesDropdownOpen(false);
+                }}
                 className="p-1 rounded-lg text-slate-400 hover:text-slate-700 cursor-pointer"
               >
                 <X size={18} />
@@ -1299,19 +1371,77 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
             </div>
 
             <form onSubmit={handleDemanderCompleterSubmit} className="space-y-3.5">
-              <div>
+              <div className="relative">
                 <label className="block text-xs font-bold text-slate-700 mb-1">
                   {fr.dossierDirecteur.pieceACompleter}
                 </label>
-                <select
-                  value={demandePiece}
-                  onChange={(e) => setDemandePiece(e.target.value as any)}
-                  className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-600"
+                <button
+                  type="button"
+                  aria-expanded={piecesDropdownOpen}
+                  onClick={() => setPiecesDropdownOpen((prev) => !prev)}
+                  className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-600 flex items-center justify-between gap-2 text-left cursor-pointer"
                 >
-                  <option value="CIN">{fr.dossierDirecteur.cin}</option>
-                  <option value="DIPLOME">{fr.dossierDirecteur.diplome}</option>
-                  <option value="RELEVES">{fr.dossierDirecteur.releves}</option>
-                </select>
+                  <span className={demandePieces.length > 0 ? 'text-slate-900 font-medium truncate' : 'text-slate-400'}>
+                    {demandePieces.length > 0
+                      ? demandePieces
+                          .map((p) =>
+                            p === 'CIN'
+                              ? fr.dossierDirecteur.cin
+                              : p === 'DIPLOME'
+                              ? fr.dossierDirecteur.diplome
+                              : fr.dossierDirecteur.releves
+                          )
+                          .join(', ')
+                      : fr.dossierDirecteur.piecesPlaceholder}
+                  </span>
+                  <ChevronDown
+                    size={15}
+                    className={`text-slate-400 shrink-0 transition-transform ${piecesDropdownOpen ? 'rotate-180' : ''}`}
+                  />
+                </button>
+                {piecesDropdownOpen && (
+                  <div className="mt-1.5 w-full bg-white border border-slate-200 rounded-xl shadow-md p-1.5 space-y-1 z-20">
+                    {(
+                      [
+                        { id: 'CIN', label: fr.dossierDirecteur.cin },
+                        { id: 'DIPLOME', label: fr.dossierDirecteur.diplome },
+                        { id: 'RELEVES', label: fr.dossierDirecteur.releves },
+                      ] as const
+                    ).map((opt) => {
+                      const isChecked = demandePieces.includes(opt.id);
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => {
+                            setDemandePieces((prev) =>
+                              prev.includes(opt.id)
+                                ? prev.filter((item) => item !== opt.id)
+                                : [...prev, opt.id]
+                            );
+                            setDemandeError(null);
+                          }}
+                          className={`w-full px-2.5 py-2 rounded-lg text-xs flex items-center gap-2.5 text-left transition cursor-pointer ${
+                            isChecked
+                              ? 'bg-emerald-50 text-emerald-950 font-semibold'
+                              : 'hover:bg-slate-50 text-slate-700'
+                          }`}
+                        >
+                          <span
+                            className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
+                              isChecked
+                                ? 'bg-emerald-600 border-emerald-600 text-white'
+                                : 'border-slate-300 bg-white'
+                            }`}
+                          >
+                            {isChecked && <Check size={11} strokeWidth={3} />}
+                          </span>
+                          <span className="flex-1">{opt.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
               <div>
@@ -1387,6 +1517,16 @@ export const DossierDirecteur: React.FC<DossierDirecteurProps> = ({
             </div>
 
             <form onSubmit={handleConvoquerSubmit} className="space-y-3.5">
+              <div className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-[11px] text-slate-700 flex items-center gap-2">
+                <Mail size={14} className="text-emerald-700 shrink-0" />
+                <span className="truncate">
+                  Notification appli + e-mail :{' '}
+                  <strong className="text-slate-900">
+                    {trouverCandidat(candidat.id).email || candidat.email || fr.dossierDirecteur.nonRenseigne}
+                  </strong>
+                </span>
+              </div>
+
               <div>
                 <label htmlFor="convoquer-date" className="block text-xs font-bold text-slate-700 mb-1">
                   {fr.dossierDirecteur.convoquerDateLabel}

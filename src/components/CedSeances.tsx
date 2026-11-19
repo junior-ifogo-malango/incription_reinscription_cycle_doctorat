@@ -121,8 +121,14 @@ export const CedSeances: React.FC = () => {
       const raw = localStorage.getItem('usmba_doctorat_pvs');
       if (raw) {
         const parsed: PV[] = JSON.parse(raw);
+        const cleaned = parsed.map((p) => ({
+          ...p,
+          resultats: (p.resultats || []).filter(
+            (r) => r.candidatId !== 'cand-salma' && r.candidatId !== 'cand-khadija'
+          ),
+        }));
         // Ignore les versions remplacées et enrichit à la lecture sans modifier les données
-        setPvs(parsed.filter((p) => !p.remplaceePar).map(enrichirPVLecture));
+        setPvs(cleaned.filter((p) => !p.remplaceePar).map(enrichirPVLecture));
       } else {
         // PV de démonstration initial prêt à être publié si aucun PV n'a encore été généré
         const demoResults: Resultat[] = [
@@ -145,14 +151,6 @@ export const CedSeances: React.FC = () => {
             candidatId: 'cand-omar',
             note: 14.5,
             resultat: 'LISTE_COMPLEMENTAIRE',
-            saisiLe: new Date().toISOString(),
-          },
-          {
-            creneauId: 'cr-101',
-            candidatId: 'cand-salma',
-            note: 9.0,
-            resultat: 'REFUSE',
-            motif: 'Prérequis scientifiques et méthodologiques insuffisants',
             saisiLe: new Date().toISOString(),
           },
         ];
