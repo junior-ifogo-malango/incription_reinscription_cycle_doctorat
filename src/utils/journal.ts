@@ -144,3 +144,16 @@ export function logAbsenceConstatee(
     `${date} • Motif : ${motif}`
   );
 }
+
+export function logPvConsulte(
+  acteur: ActeurJournal,
+  cible: string,
+  detail?: string
+): EvenementJournal | null {
+  return logEvent(
+    acteur,
+    'PV consulté',
+    cible,
+    detail
+  );
+}

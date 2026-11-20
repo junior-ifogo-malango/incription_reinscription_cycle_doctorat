@@ -17,14 +17,13 @@ import {
   Download,
   Upload,
   ExternalLink,
-  Printer,
 } from 'lucide-react';
 import { collection, getDocs, query, where } from 'firebase/firestore';
 import { PV, Notification, Resultat, getCompteRoles } from '../types';
 import { getConnectedDirecteurId, getDirectorStructure, enrichirPVLecture, getComptes, formatDateJJMM, isSalmaOrAlamiRecord } from '../data/mockData';
 import { storageService } from '../services/storage';
 import { fr } from '../i18n/fr';
-import { logEvent } from '../utils/journal';
+import { logEvent, logPvConsulte } from '../utils/journal';
 import { sendAdmissionEmail } from '../emailConfig';
 import { auth, db } from '../firebase';
 import { syncPvBestEffort } from '../utils/firebaseSync';
@@ -171,13 +170,34 @@ export const CedSeances: React.FC = () => {
   const [pvs, setPvs] = useState<PV[]>([]);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [scanModalPv, setScanModalPv] = useState<PV | null>(null);
-  const [scanTab, setScanTab] = useState<'directeur' | 'structure' | 'officiel'>('directeur');
-  const [activeDocPv, setActiveDocPv] = useState<{ pv: PV; autoPrint?: boolean } | null>(null);
+  const [scanModalCandidatId, setScanModalCandidatId] = useState<string | null>(null);
+  const [scanTab, setScanTab] = useState<'directeur' | 'structure'>('directeur');
+  const [openedPvIds, setOpenedPvIds] = useState<Record<string, boolean>>({});
+  const [activeDocPv, setActiveDocPv] = useState<{ pv: PV; candidatId?: string; autoPrint?: boolean } | null>(null);
   const [scanCameraPvId, setScanCameraPvId] = useState<string | null>(null);
   const [refusModalPvId, setRefusModalPvId] = useState<string | null>(null);
   const [refusMotif, setRefusMotif] = useState('');
   const [refusError, setRefusError] = useState<string | null>(null);
   const [sendingEmailMap, setSendingEmailMap] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (scanModalPv) {
+          setScanModalPv(null);
+          setScanModalCandidatId(null);
+        } else if (refusModalPvId) {
+          setRefusModalPvId(null);
+        } else if (scanCameraPvId) {
+          setScanCameraPvId(null);
+        } else if (activeDocPv) {
+          setActiveDocPv(null);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [scanModalPv, refusModalPvId, scanCameraPvId, activeDocPv]);
 
   const getConnectedAccountInfo = (): { isMainCed: boolean; structureName: string } => {
     try {
@@ -492,6 +512,10 @@ export const CedSeances: React.FC = () => {
       setMessage({ type: 'error', text: fr.cedSeances.conflitDirecteur });
       return;
     }
+    if (!openedPvIds[pvId]) {
+      setMessage({ type: 'error', text: fr.cedSeances.publierScanRequisRaison });
+      return;
+    }
     const res = publierResultatsPV(pvId);
     if (res.success) {
       setMessage({ type: 'success', text: fr.cedSeances.notifSuccess });
@@ -565,22 +589,57 @@ export const CedSeances: React.FC = () => {
     return 'Directeur de thèse';
   };
 
+  const markPvOpenedAndLog = (pv: PV, candidatId?: string) => {
+    setOpenedPvIds((prev) => ({ ...prev, [pv.id]: true }));
+    const baseCode = (pv.code || 'CODE').slice(0, 4);
+    if (candidatId) {
+      const idx = (pv.resultats || []).findIndex((r) => r.candidatId === candidatId);
+      const num = idx >= 0 ? idx + 1 : 1;
+      const refCandidat = `PV-${pv.date}-${baseCode}-${num}`;
+      logPvConsulte(
+        { id: 'dir-ced', nom: 'Directeur de structure', role: 'directeur_ced' },
+        refCandidat,
+        getCandidatNomComplet(candidatId)
+      );
+      return;
+    }
+    const refSeance = `PV-${pv.date}-${baseCode}`;
+    const detail = pv.scanStructureFichier
+      ? 'Scan Structure'
+      : pv.scanFichier
+      ? 'Document déposé'
+      : 'PV généré';
+    logPvConsulte(
+      { id: 'dir-ced', nom: 'Directeur de structure', role: 'directeur_ced' },
+      refSeance,
+      detail
+    );
+  };
+
   const handleOpenScanModal = (pv: PV) => {
+    setScanModalCandidatId(null);
     setScanModalPv(pv);
-    setScanTab(pv.scanFichier ? 'directeur' : 'officiel');
+    setScanTab(pv.scanStructureFichier && !pv.scanFichier ? 'structure' : 'directeur');
+    markPvOpenedAndLog(pv);
+  };
+
+  const handleOpenCandidatePV = (pv: PV, candidatId: string) => {
+    setScanModalCandidatId(candidatId);
+    setScanModalPv(pv);
+    markPvOpenedAndLog(pv, candidatId);
+  };
+
+  const handleCloseScanModal = () => {
+    setScanModalPv(null);
+    setScanModalCandidatId(null);
   };
 
   const handleDownloadAllPvsForSession = (pv: PV) => {
     setActiveDocPv({ pv, autoPrint: true });
   };
 
-  const handleDownloadPvForStructure = (pv: PV) => {
-    if (pv.scanFichier) {
-      const ext = isPdfData(pv.scanFichier) ? 'pdf' : 'jpg';
-      downloadDataUrl(pv.scanFichier, pv.scanNomFichier || `pv-${pv.date}.${ext}`);
-      return;
-    }
-    setActiveDocPv({ pv, autoPrint: true });
+  const handleDownloadCandidatePV = (pv: PV, candidatId: string) => {
+    setActiveDocPv({ pv, candidatId, autoPrint: true });
   };
 
   const saveStructureScanToPv = (pvId: string, dataUrl: string, fileName: string) => {
@@ -761,6 +820,7 @@ export const CedSeances: React.FC = () => {
       <PVDocument
         pv={activeDocPv.pv}
         directeurNom={getDirecteurNomForPv(activeDocPv.pv)}
+        candidatId={activeDocPv.candidatId}
         onClose={() => setActiveDocPv(null)}
         autoPrint={activeDocPv.autoPrint}
       />
@@ -877,40 +937,30 @@ export const CedSeances: React.FC = () => {
                           <span>{fr.cedSeances.btnVoirScan}</span>
                         </button>
 
-                        {/* Télécharger tous les PV de la séance */}
+                        {/* Bouton groupé unique : Tout télécharger */}
                         <button
                           type="button"
                           onClick={() => handleDownloadAllPvsForSession(pv)}
                           className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-xl transition cursor-pointer min-h-[44px]"
                         >
-                          <Printer size={15} />
-                          <span>{fr.cedSeances.btnTelechargerTousPV}</span>
-                        </button>
-
-                        {/* Télécharger le PV pour le signer */}
-                        <button
-                          type="button"
-                          onClick={() => handleDownloadPvForStructure(pv)}
-                          className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl transition cursor-pointer min-h-[44px]"
-                        >
                           <Download size={15} />
-                          <span>{fr.cedSeances.btnTelechargerPV}</span>
+                          <span>{fr.cedSeances.btnToutTelecharger}</span>
                         </button>
 
-                        {/* Scanner avec signature de la Structure */}
+                        {/* Scanner */}
                         <button
                           type="button"
                           onClick={() => setScanCameraPvId(pv.id)}
                           className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-xl transition cursor-pointer min-h-[44px]"
                         >
                           <Camera size={15} />
-                          <span>{fr.cedSeances.btnScannerSignature}</span>
+                          <span>{fr.cedSeances.btnScanner}</span>
                         </button>
 
-                        {/* Importer le PV PDF signé par la Structure */}
+                        {/* Importer */}
                         <label className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl transition cursor-pointer min-h-[44px]">
                           <Upload size={15} />
-                          <span>{fr.cedSeances.btnImporterSignature}</span>
+                          <span>{fr.cedSeances.btnImporter}</span>
                           <input
                             type="file"
                             accept=".pdf,image/*"
@@ -944,7 +994,7 @@ export const CedSeances: React.FC = () => {
                         )}
                       </div>
 
-                      {/* Publier directement sans case à cocher */}
+                      {/* Publier les résultats (grisé tant que le PV n'a pas été ouvert) */}
                       {isPublished ? (
                         <div className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
                           <CheckCircle2 size={15} className="text-emerald-600 shrink-0" />
@@ -952,29 +1002,39 @@ export const CedSeances: React.FC = () => {
                             {fr.cedSeances.publishedOn} {formatDate(pv.publieLe)}
                           </span>
                         </div>
-                      ) : (
-                        <div className="flex flex-col items-start sm:items-end gap-1">
-                          <button
-                            type="button"
-                            disabled={isDirecteurOfPv}
-                            onClick={() => !isDirecteurOfPv && handlePublier(pv.id)}
-                            className={`min-h-[44px] px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors ${
-                              isDirecteurOfPv
-                                ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
-                                : 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer active:scale-98 shadow-xs'
-                            }`}
-                          >
-                            <Send size={15} />
-                            <span>{fr.cedSeances.btnPublier}</span>
-                          </button>
-                          {isDirecteurOfPv && (
-                            <p className="text-[11px] font-semibold text-amber-800 flex items-center gap-1 text-left sm:text-right max-w-xs">
-                              <AlertTriangle size={13} className="shrink-0 text-amber-600" />
-                              <span>{fr.cedSeances.conflitDirecteur}</span>
-                            </p>
-                          )}
-                        </div>
-                      )}
+                      ) : (() => {
+                        const hasOpenedDoc = Boolean(openedPvIds[pv.id]);
+                        const isPublishDisabled = isDirecteurOfPv || !hasOpenedDoc;
+                        const disabledReason = isDirecteurOfPv
+                          ? fr.cedSeances.conflitDirecteur
+                          : !hasOpenedDoc
+                          ? fr.cedSeances.publierScanRequisRaison
+                          : null;
+
+                        return (
+                          <div className="flex flex-col items-start sm:items-end gap-1">
+                            <button
+                              type="button"
+                              disabled={isPublishDisabled}
+                              onClick={() => !isPublishDisabled && handlePublier(pv.id)}
+                              className={`min-h-[44px] px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+                                isPublishDisabled
+                                  ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
+                                  : 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer active:scale-98 shadow-xs'
+                              }`}
+                            >
+                              <Send size={15} />
+                              <span>{fr.cedSeances.btnPublier}</span>
+                            </button>
+                            {disabledReason && (
+                              <p className="text-[11px] font-semibold text-amber-800 flex items-center gap-1 text-left sm:text-right max-w-xs">
+                                <AlertTriangle size={13} className="shrink-0 text-amber-600" />
+                                <span>{disabledReason}</span>
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
 
                     {/* Liste des candidats */}
@@ -999,11 +1059,38 @@ export const CedSeances: React.FC = () => {
                             className="p-3.5 flex flex-col gap-2.5 hover:bg-slate-50 transition-colors"
                           >
                             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                              <p className="text-xs font-bold text-slate-900">{candidatNom}</p>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenCandidatePV(pv, res.candidatId)}
+                                className="text-xs font-bold text-slate-900 hover:text-emerald-800 hover:underline text-left cursor-pointer"
+                              >
+                                {candidatNom}
+                              </button>
 
-                              <span className={`inline-flex items-center self-start sm:self-auto px-2.5 py-1 rounded-full text-xs font-bold border ${dec.className}`}>
-                                {dec.label}
-                              </span>
+                              <div className="flex items-center gap-2 self-start sm:self-auto">
+                                <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold border ${dec.className}`}>
+                                  {dec.label}
+                                </span>
+
+                                <button
+                                  type="button"
+                                  aria-label={fr.cedSeances.voirPvCandidatAria.replace('{nom}', candidatNom)}
+                                  onClick={() => handleOpenCandidatePV(pv, res.candidatId)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-sky-800 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-lg transition cursor-pointer"
+                                >
+                                  <Eye size={13} />
+                                  <span>{fr.cedSeances.btnVoirCandidatPV}</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  aria-label={fr.cedSeances.telechargerPvCandidatAria.replace('{nom}', candidatNom)}
+                                  onClick={() => handleDownloadCandidatePV(pv, res.candidatId)}
+                                  className="p-1.5 text-slate-600 hover:text-emerald-800 hover:bg-emerald-50 border border-slate-200 rounded-lg transition cursor-pointer"
+                                >
+                                  <Download size={15} />
+                                </button>
+                              </div>
                             </div>
 
                             {/* Actions réelles d'admission réservées uniquement aux candidats « Favorable » (ADMIS) */}
@@ -1061,79 +1148,98 @@ export const CedSeances: React.FC = () => {
         </div>
       )}
 
-      {/* Modal : Aperçu du PV PDF / scan du Directeur & scan signé de la Structure */}
-      {scanModalPv && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="bg-white rounded-2xl max-w-3xl w-full p-5 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto flex flex-col">
-            <div className="flex items-center justify-between border-b pb-3 border-slate-100">
-              <div>
-                <h3 className="font-bold text-sm text-slate-900 flex items-center gap-2">
-                  <FileText size={16} className="text-emerald-700" />
-                  <span>PV &amp; Scans — Séance du {formatDateJJMM(scanModalPv.date)}</span>
-                </h3>
-                <p className="text-[11px] text-slate-500 mt-0.5">
-                  Structure : {scanModalPv.structure || structureName}
-                </p>
+      {/* Modal : Affichage réel du document (PDF / scan image déposé, ou PV généré) */}
+      {scanModalPv && (() => {
+        const baseCode = (scanModalPv.code || 'CODE').slice(0, 4);
+        const candIdx = scanModalCandidatId
+          ? (scanModalPv.resultats || []).findIndex((r) => r.candidatId === scanModalCandidatId)
+          : -1;
+        const candRef = scanModalCandidatId
+          ? `PV-${scanModalPv.date}-${baseCode}-${(candIdx >= 0 ? candIdx : 0) + 1}`
+          : null;
+        const hasDirectorFile = Boolean(scanModalPv.scanFichier);
+        const hasStructureFile = Boolean(scanModalPv.scanStructureFichier);
+        const activeFile =
+          scanTab === 'structure' && scanModalPv.scanStructureFichier
+            ? scanModalPv.scanStructureFichier
+            : scanModalPv.scanFichier || scanModalPv.scanStructureFichier;
+        const activeFileName =
+          scanTab === 'structure' && scanModalPv.scanStructureFichier
+            ? scanModalPv.scanStructureNomFichier || `pv-structure-${scanModalPv.date}`
+            : scanModalPv.scanNomFichier ||
+              scanModalPv.scanStructureNomFichier ||
+              `PV-${scanModalPv.date}`;
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+            <div className="bg-white rounded-2xl max-w-4xl w-full p-5 shadow-2xl space-y-3 max-h-[90vh] flex flex-col">
+              <div className="flex items-center justify-between border-b pb-3 border-slate-100 shrink-0">
+                <div>
+                  <h3 className="font-bold text-sm text-slate-900 flex items-center gap-2">
+                    <FileText size={16} className="text-emerald-700" />
+                    <span>
+                      {scanModalCandidatId
+                        ? `${getCandidatNomComplet(scanModalCandidatId)} · ${candRef}`
+                        : `PV — Séance du ${formatDateJJMM(scanModalPv.date)}`}
+                    </span>
+                  </h3>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    {scanModalPv.structure || structureName}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCloseScanModal}
+                  className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition cursor-pointer"
+                >
+                  {fr.cedSeances.btnFermer}
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => setScanModalPv(null)}
-                className="text-slate-400 hover:text-slate-600 text-base font-bold p-1 cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
 
-            {/* Onglets de visualisation */}
-            <div className="flex items-center gap-2 flex-wrap">
-              <button
-                type="button"
-                onClick={() => setScanTab('directeur')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition cursor-pointer ${
-                  scanTab === 'directeur'
-                    ? 'bg-slate-900 text-white border-slate-900'
-                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                }`}
-              >
-                {fr.cedSeances.ongletScanDirecteur}
-              </button>
-              <button
-                type="button"
-                onClick={() => setScanTab('structure')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition cursor-pointer ${
-                  scanTab === 'structure'
-                    ? 'bg-slate-900 text-white border-slate-900'
-                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                }`}
-              >
-                {fr.cedSeances.ongletScanStructure}
-              </button>
-              <button
-                type="button"
-                onClick={() => setScanTab('officiel')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition cursor-pointer ${
-                  scanTab === 'officiel'
-                    ? 'bg-slate-900 text-white border-slate-900'
-                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                }`}
-              >
-                {fr.cedSeances.ongletDocumentOfficiel}
-              </button>
-            </div>
-
-            {scanTab === 'directeur' && (
-              <div className="space-y-3">
-                {scanModalPv.scanFichier ? (
+              <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+                {scanModalCandidatId ? (
+                  <PVDocument
+                    pv={scanModalPv}
+                    directeurNom={getDirecteurNomForPv(scanModalPv)}
+                    candidatId={scanModalCandidatId}
+                    onClose={handleCloseScanModal}
+                  />
+                ) : activeFile ? (
                   <>
-                    <div className="flex items-center justify-between gap-2 flex-wrap text-xs bg-slate-50 p-3 rounded-xl border border-slate-200">
-                      <span className="font-semibold text-slate-800">
-                        {scanModalPv.scanNomFichier || `PV-${scanModalPv.date}`}
-                      </span>
+                    {hasDirectorFile && hasStructureFile && (
                       <div className="flex items-center gap-2 flex-wrap">
-                        {isPdfData(scanModalPv.scanFichier) && (
+                        <button
+                          type="button"
+                          onClick={() => setScanTab('directeur')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition cursor-pointer ${
+                            scanTab === 'directeur'
+                              ? 'bg-slate-900 text-white border-slate-900'
+                              : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                          }`}
+                        >
+                          {fr.cedSeances.ongletScanDirecteur}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setScanTab('structure')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition cursor-pointer ${
+                            scanTab === 'structure'
+                              ? 'bg-slate-900 text-white border-slate-900'
+                              : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                          }`}
+                        >
+                          {fr.cedSeances.ongletScanStructure}
+                        </button>
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-between gap-2 flex-wrap text-xs bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                      <span className="font-semibold text-slate-800">{activeFileName}</span>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {isPdfData(activeFile) && (
                           <button
                             type="button"
-                            onClick={() => openPdfInNewTab(scanModalPv.scanFichier!)}
+                            onClick={() => openPdfInNewTab(activeFile)}
                             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-sky-800 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-lg cursor-pointer"
                           >
                             <ExternalLink size={13} />
@@ -1142,7 +1248,14 @@ export const CedSeances: React.FC = () => {
                         )}
                         <button
                           type="button"
-                          onClick={() => handleDownloadPvForStructure(scanModalPv)}
+                          onClick={() =>
+                            downloadDataUrl(
+                              activeFile,
+                              activeFileName.includes('.')
+                                ? activeFileName
+                                : `${activeFileName}.${isPdfData(activeFile) ? 'pdf' : 'jpg'}`
+                            )
+                          }
                           className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg cursor-pointer"
                         >
                           <Download size={13} />
@@ -1151,18 +1264,18 @@ export const CedSeances: React.FC = () => {
                       </div>
                     </div>
 
-                    <div className="min-h-[320px] bg-slate-100 rounded-xl overflow-hidden flex items-center justify-center border border-slate-200">
-                      {isPdfData(scanModalPv.scanFichier) ? (
+                    <div className="bg-slate-100 rounded-xl overflow-y-auto max-h-[65vh] border border-slate-200 flex justify-center">
+                      {isPdfData(activeFile) ? (
                         <iframe
-                          src={scanModalPv.scanFichier}
-                          title={scanModalPv.scanNomFichier || 'PV PDF'}
-                          className="w-full h-[55vh] border-0"
+                          src={activeFile}
+                          title={activeFileName}
+                          className="w-full h-[65vh] border-0"
                         />
-                      ) : isImageData(scanModalPv.scanFichier) ? (
+                      ) : isImageData(activeFile) ? (
                         <img
-                          src={scanModalPv.scanFichier}
-                          alt={scanModalPv.scanNomFichier || 'Scan PV'}
-                          className="max-w-full max-h-[55vh] object-contain"
+                          src={activeFile}
+                          alt={activeFileName}
+                          className="max-w-full h-auto object-contain mx-auto"
                         />
                       ) : (
                         <p className="text-xs text-slate-500 p-6">Aperçu indisponible pour ce fichier.</p>
@@ -1170,170 +1283,32 @@ export const CedSeances: React.FC = () => {
                     </div>
                   </>
                 ) : (
-                  <div className="p-4 bg-amber-50/70 border border-amber-200 rounded-xl space-y-3">
-                    <p className="text-xs text-amber-900 font-medium">
-                      {fr.cedSeances.aucunFichierJointNotice}
+                  <div className="space-y-3">
+                    <p className="text-xs font-semibold text-amber-900 bg-amber-50 border border-amber-200 rounded-xl px-3.5 py-2.5">
+                      {fr.cedSeances.aucunDocumentDepose}
                     </p>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const target = scanModalPv;
-                        setScanModalPv(null);
-                        setActiveDocPv({ pv: target, autoPrint: false });
-                      }}
-                      className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl cursor-pointer"
-                    >
-                      <Printer size={14} />
-                      <span>{fr.cedSeances.btnTelechargerTousPV}</span>
-                    </button>
+                    <PVDocument
+                      pv={scanModalPv}
+                      directeurNom={getDirecteurNomForPv(scanModalPv)}
+                      onClose={handleCloseScanModal}
+                    />
                   </div>
                 )}
               </div>
-            )}
 
-            {scanTab === 'structure' && (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between gap-2 flex-wrap bg-slate-50 p-3 rounded-xl border border-slate-200">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <button
-                      type="button"
-                      onClick={() => setScanCameraPvId(scanModalPv.id)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-lg cursor-pointer"
-                    >
-                      <Camera size={14} />
-                      <span>{fr.cedSeances.btnScannerSignature}</span>
-                    </button>
-                    <label className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg cursor-pointer">
-                      <Upload size={14} />
-                      <span>{fr.cedSeances.btnImporterSignature}</span>
-                      <input
-                        type="file"
-                        accept=".pdf,image/*"
-                        className="hidden"
-                        onChange={(e) => handleStructureFileChange(scanModalPv.id, e)}
-                      />
-                    </label>
-                  </div>
-
-                  {scanModalPv.scanStructureFichier && (
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {isPdfData(scanModalPv.scanStructureFichier) && (
-                        <button
-                          type="button"
-                          onClick={() => openPdfInNewTab(scanModalPv.scanStructureFichier!)}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-sky-800 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-lg cursor-pointer"
-                        >
-                          <ExternalLink size={13} />
-                          <span>{fr.cedSeances.ouvrirPdfNouvelOnglet}</span>
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() =>
-                          downloadDataUrl(
-                            scanModalPv.scanStructureFichier!,
-                            scanModalPv.scanStructureNomFichier ||
-                              `pv-structure-${scanModalPv.date}.${isPdfData(scanModalPv.scanStructureFichier) ? 'pdf' : 'jpg'}`
-                          )
-                        }
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg cursor-pointer"
-                      >
-                        <Download size={13} />
-                        <span>{fr.cedSeances.btnTelechargerFichier}</span>
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                {scanModalPv.scanStructureFichier ? (
-                  <div className="min-h-[320px] bg-slate-100 rounded-xl overflow-hidden flex items-center justify-center border border-slate-200">
-                    {isPdfData(scanModalPv.scanStructureFichier) ? (
-                      <iframe
-                        src={scanModalPv.scanStructureFichier}
-                        title={scanModalPv.scanStructureNomFichier || 'PV Structure PDF'}
-                        className="w-full h-[55vh] border-0"
-                      />
-                    ) : isImageData(scanModalPv.scanStructureFichier) ? (
-                      <img
-                        src={scanModalPv.scanStructureFichier}
-                        alt={scanModalPv.scanStructureNomFichier || 'Scan Structure PV'}
-                        className="max-w-full max-h-[55vh] object-contain"
-                      />
-                    ) : (
-                      <p className="text-xs text-slate-500 p-6">Aperçu indisponible pour ce fichier.</p>
-                    )}
-                  </div>
-                ) : (
-                  <div className="p-4 bg-slate-50 border border-dashed border-slate-300 rounded-xl text-xs text-slate-600">
-                    {fr.cedSeances.aucunScanStructureNotice}
-                  </div>
-                )}
+              <div className="flex justify-end pt-1 border-t border-slate-100 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleCloseScanModal}
+                  className="px-4 py-2 text-xs font-semibold rounded-xl bg-slate-900 hover:bg-slate-800 text-white transition cursor-pointer"
+                >
+                  {fr.cedSeances.btnFermer}
+                </button>
               </div>
-            )}
-
-            {scanTab === 'officiel' && (
-              <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
-                <div className="flex items-center justify-between gap-2 flex-wrap text-xs">
-                  <span className="font-semibold text-slate-700">Séance du : {scanModalPv.date}</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const target = scanModalPv;
-                      setScanModalPv(null);
-                      handleDownloadAllPvsForSession(target);
-                    }}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg cursor-pointer"
-                  >
-                    <Printer size={13} />
-                    <span>{fr.cedSeances.btnTelechargerTousPV}</span>
-                  </button>
-                </div>
-
-                <div className="border border-slate-200 rounded-lg overflow-hidden bg-white">
-                  <table className="w-full text-left text-xs">
-                    <thead className="bg-slate-100 text-[10px] uppercase font-bold text-slate-600">
-                      <tr>
-                        <th className="p-2">Candidat</th>
-                        <th className="p-2 text-center">Note</th>
-                        <th className="p-2 text-center">Résultat</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {scanModalPv.resultats.map((r, i) => (
-                        <tr key={i}>
-                          <td className="p-2 font-medium text-slate-800">{getCandidatNomComplet(r.candidatId)}</td>
-                          <td className="p-2 text-center font-bold text-emerald-800">{r.note} / 20</td>
-                          <td className="p-2 text-center font-bold text-slate-700">{r.resultat}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                <div className="p-3 bg-white border border-dashed border-slate-300 rounded-xl flex items-center gap-3">
-                  <FileCheck size={20} className="text-emerald-600 shrink-0" />
-                  <div className="text-xs">
-                    <p className="font-bold text-slate-800">Paraphes et signatures de la commission validés</p>
-                    <p className="text-[11px] text-slate-500">
-                      Déposé par le directeur le {scanModalPv.scanDeposeLe ? formatDate(scanModalPv.scanDeposeLe) : scanModalPv.date}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            <div className="flex justify-end pt-1">
-              <button
-                type="button"
-                onClick={() => setScanModalPv(null)}
-                className="px-4 py-2 text-xs font-semibold rounded-xl bg-slate-900 hover:bg-slate-800 text-white transition cursor-pointer"
-              >
-                Fermer
-              </button>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Modal : Refus du scan avec motif obligatoire */}
       {refusModalPvId && (
