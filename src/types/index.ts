@@ -402,6 +402,11 @@ export interface PV {
   scanDeposeLe?: string;
   scanStatut?: 'en_attente' | 'valide' | 'refuse';
   scanMotifRefus?: string;
+  scanFichier?: string; /* Data URL (PDF ou image) du scan déposé par le directeur */
+  scanNomFichier?: string;
+  scanStructureFichier?: string; /* Data URL (PDF ou image) du PV contresigné par la Structure */
+  scanStructureNomFichier?: string;
+  scanStructureDeposeLe?: string;
   membres?: [string, string]; /* noms des 2 membres, optionnels */
   coordonnateur?: string;
   signaturesCount?: number;

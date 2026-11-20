@@ -18,6 +18,10 @@ import {
   Send,
   AlertTriangle,
   FileCheck,
+  Camera,
+  Download,
+  ExternalLink,
+  FileText,
 } from 'lucide-react';
 import { Creneau, Resultat, ResultatType, PV, Candidat, calculerNoteResultat, StatutSeance, SeanceStatutRecord } from '../types';
 import {
@@ -32,6 +36,7 @@ import {
   aujourdhui,
 } from '../data/mockData';
 import { PVDocument } from './PVDocument';
+import { CameraCapture } from './CameraCapture';
 import { fr } from '../i18n/fr';
 import { logEvent, logPresenceConstatee, logAbsenceConstatee } from '../utils/journal';
 import { ajouterNotification, messageAbsenceConstatee, trouverCandidat } from '../utils/messages';
@@ -94,6 +99,51 @@ function broadcastPvsUpdated(): void {
       ch.postMessage({ type: 'usmba_pvs_updated', at: Date.now() });
       ch.close();
     }
+  } catch {}
+}
+
+const MAX_PV_SCAN_BYTES = 1.5 * 1024 * 1024;
+
+function isPdfData(data?: string): boolean {
+  if (!data || typeof data !== 'string') return false;
+  return data.startsWith('data:application/pdf') || data.toLowerCase().endsWith('.pdf');
+}
+
+function isImageData(data?: string): boolean {
+  if (!data || typeof data !== 'string') return false;
+  return (
+    data.startsWith('data:image/') ||
+    data.startsWith('/assets/') ||
+    data.startsWith('blob:') ||
+    /\.(png|jpe?g|webp|gif|bmp)(\?.*)?$/i.test(data)
+  );
+}
+
+function openPdfInNewTab(dataUrl: string): void {
+  try {
+    const arr = dataUrl.split(',');
+    const mimeMatch = arr[0].match(/:(.*?);/);
+    const mime = mimeMatch ? mimeMatch[1] : 'application/pdf';
+    const bstr = atob(arr[1]);
+    let n = bstr.length;
+    const u8arr = new Uint8Array(n);
+    while (n--) {
+      u8arr[n] = bstr.charCodeAt(n);
+    }
+    const blob = new Blob([u8arr], { type: mime });
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank');
+  } catch {}
+}
+
+function downloadDataUrl(dataUrl: string, filename: string): void {
+  try {
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   } catch {}
 }
 
@@ -202,6 +252,11 @@ export const Commission: React.FC<CommissionProps> = ({
   const [absentTargetCreneauId, setAbsentTargetCreneauId] = useState<string | null>(null);
   const [absentMotif, setAbsentMotif] = useState('');
   const [absentError, setAbsentError] = useState<string | null>(null);
+
+  // Scan / dépôt PDF du PV par le Directeur
+  const [scanCameraPvId, setScanCameraPvId] = useState<string | null>(null);
+  const [scanUploadError, setScanUploadError] = useState<{ pvId: string; text: string } | null>(null);
+  const [previewScanPv, setPreviewScanPv] = useState<PV | null>(null);
 
   // Chargement des données avec persistance localStorage et try/catch
   useEffect(() => {
@@ -736,32 +791,70 @@ export const Commission: React.FC<CommissionProps> = ({
     setActivePV({ pv, autoPrint: true });
   };
 
-  const handleDeposerScanCommission = (pvId: string) => {
+  const saveScanFileToPv = (pvId: string, dataUrl?: string, fileName?: string) => {
+    setScanUploadError(null);
     try {
       const raw = localStorage.getItem('usmba_doctorat_pvs');
       const curPvs: PV[] = raw ? JSON.parse(raw) : [];
       const idx = curPvs.findIndex((p) => p.id === pvId);
       if (idx !== -1) {
         const nowIso = new Date().toISOString();
-        curPvs[idx].statut = 'signe';
+        const existingStatut = curPvs[idx].statut;
+        curPvs[idx].statut = existingStatut === 'envoye' || existingStatut === 'publie' ? existingStatut : 'signe';
         curPvs[idx].scanDeposeLe = nowIso;
         curPvs[idx].scanStatut = 'valide';
         curPvs[idx].signaturesCount = 3;
+        if (dataUrl) curPvs[idx].scanFichier = dataUrl;
+        if (fileName) curPvs[idx].scanNomFichier = fileName;
         delete curPvs[idx].scanMotifRefus;
         localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(curPvs));
+        setPvDownloaded((prev) => {
+          const next = { ...prev, [curPvs[idx].date]: true, [pvId]: true };
+          try {
+            localStorage.setItem('usmba_commission_pv_downloaded', JSON.stringify(next));
+          } catch {}
+          return next;
+        });
         setPvs(curPvs.map(enrichirPVLecture));
         broadcastPvsUpdated();
         logEvent(
           { id: enseignantId, nom: enseignantNom, role: 'enseignant' },
           fr.journalActions.scanPvDepose,
           `PV-${curPvs[idx].date}-${(curPvs[idx].code || '').slice(0, 4)}`,
-          'Scan signé déposé par le directeur'
+          fileName ? `Scan PV déposé (${fileName})` : 'Scan signé déposé par le directeur'
         );
         setFeedback({ id: pvId, text: fr.commission.scanDeposeToast });
-        setTimeout(() => setFeedback(null), 3000);
+        setTimeout(() => setFeedback(null), 3500);
         void syncPvBestEffort();
       }
-    } catch {}
+    } catch {
+      setScanUploadError({ pvId, text: 'Stockage plein, impossible d’enregistrer ce fichier.' });
+    }
+  };
+
+  const handleFileScanChange = (pvId: string, e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setScanUploadError(null);
+    const lowerName = file.name.toLowerCase();
+    const isPdf = file.type === 'application/pdf' || lowerName.endsWith('.pdf');
+    const isImg = file.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp)$/.test(lowerName);
+    if (!isPdf && !isImg) {
+      setScanUploadError({ pvId, text: fr.commission.scanFichierTypeInvalide });
+      return;
+    }
+    if (file.size > MAX_PV_SCAN_BYTES) {
+      setScanUploadError({ pvId, text: fr.commission.scanFichierTropGrand });
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        saveScanFileToPv(pvId, reader.result, file.name);
+      }
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleEnvoyerStructure = (pvId: string) => {
@@ -1801,43 +1894,89 @@ export const Commission: React.FC<CommissionProps> = ({
                       </>
                     )
                   ) : !isEnvoye ? (
-                    /* Étape 3 : Envoi direct à la Structure (sans case à cocher ni blocage de scan) */
-                    <>
-                      <div className="text-xs text-slate-700 font-semibold flex items-center gap-2">
-                        <FileCheck size={14} className="text-emerald-600 shrink-0" />
-                        <span>PV prêt · Envoi direct à la Structure</span>
+                    /* Étape 3 : Télécharger tous les PV -> Scanner le PV ou Importer PDF/scan -> Envoyer à la Structure */
+                    <div className="w-full space-y-2.5">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="space-y-0.5">
+                          <div className="text-xs text-slate-700 font-semibold flex items-center gap-2">
+                            <FileCheck size={14} className="text-emerald-600 shrink-0" />
+                            <span>
+                              {existingPV.scanFichier
+                                ? fr.commission.scanJointLabel.replace(
+                                    '{nom}',
+                                    existingPV.scanNomFichier || 'PV scanné'
+                                  )
+                                : pvDownloaded[existingPV.id] || pvDownloaded[date]
+                                ? fr.commission.pvTelechargePretScan
+                                : 'PV prêt · Téléchargez, scannez puis envoyez à la Structure'}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={() => handleDownloadPV(existingPV)}
+                            className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-xl transition cursor-pointer"
+                          >
+                            <Printer size={14} />
+                            <span>{fr.commission.btnTelechargerTousPV}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setScanUploadError(null);
+                              setScanCameraPvId(existingPV.id);
+                            }}
+                            className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-xl transition cursor-pointer"
+                          >
+                            <Camera size={14} />
+                            <span>{fr.commission.btnScannerPV}</span>
+                          </button>
+
+                          <label className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl transition cursor-pointer">
+                            <Upload size={14} />
+                            <span>{fr.commission.btnImporterPdfScan}</span>
+                            <input
+                              type="file"
+                              accept=".pdf,image/*"
+                              className="hidden"
+                              onChange={(e) => handleFileScanChange(existingPV.id, e)}
+                            />
+                          </label>
+
+                          {existingPV.scanFichier && (
+                            <button
+                              type="button"
+                              onClick={() => setPreviewScanPv(existingPV)}
+                              className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-sky-800 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-xl transition cursor-pointer"
+                            >
+                              <Eye size={14} />
+                              <span>{fr.commission.btnVoirScanJoint}</span>
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => handleEnvoyerStructure(existingPV.id)}
+                            className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl shadow-xs transition cursor-pointer"
+                          >
+                            <Send size={14} />
+                            <span>Envoyer à la Structure</span>
+                          </button>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <button
-                          type="button"
-                          onClick={() => handleDownloadPV(existingPV)}
-                          className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-xl transition cursor-pointer"
-                        >
-                          <Printer size={14} />
-                          <span>{fr.commission.btnTelechargerSeance}</span>
-                        </button>
-                        <label className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl transition cursor-pointer">
-                          <Upload size={14} />
-                          <span>Déposer le scan (optionnel)</span>
-                          <input
-                            type="file"
-                            accept=".pdf,image/*"
-                            className="hidden"
-                            onChange={() => handleDeposerScanCommission(existingPV.id)}
-                          />
-                        </label>
-                        <button
-                          type="button"
-                          onClick={() => handleEnvoyerStructure(existingPV.id)}
-                          className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl shadow-xs transition cursor-pointer"
-                        >
-                          <Send size={14} />
-                          <span>Envoyer à la Structure</span>
-                        </button>
-                      </div>
-                    </>
+
+                      {scanUploadError?.pvId === existingPV.id && (
+                        <div className="p-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold flex items-center gap-1.5">
+                          <AlertCircle size={14} className="shrink-0" />
+                          <span>{scanUploadError.text}</span>
+                        </div>
+                      )}
+                    </div>
                   ) : (
-                    /* Déjà envoyé (grisé avec confirmation) */
+                    /* Déjà envoyé (grisé avec confirmation + accès téléchargement & scan joint) */
                     <>
                       <div className="text-xs text-sky-900 font-semibold flex items-center gap-1.5">
                         <Send size={14} className="text-sky-600 shrink-0" />
@@ -1854,8 +1993,18 @@ export const Commission: React.FC<CommissionProps> = ({
                           className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-xl transition cursor-pointer"
                         >
                           <Printer size={14} />
-                          <span>{fr.commission.btnTelechargerSeance}</span>
+                          <span>{fr.commission.btnTelechargerTousPV}</span>
                         </button>
+                        {existingPV.scanFichier && (
+                          <button
+                            type="button"
+                            onClick={() => setPreviewScanPv(existingPV)}
+                            className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-sky-800 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-xl transition cursor-pointer"
+                          >
+                            <Eye size={14} />
+                            <span>{fr.commission.btnVoirScanJoint}</span>
+                          </button>
+                        )}
                         <button
                           type="button"
                           disabled
@@ -2045,6 +2194,92 @@ export const Commission: React.FC<CommissionProps> = ({
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Caméra pour scanner le PV signé */}
+      {scanCameraPvId && (
+        <CameraCapture
+          title={fr.commission.scanCameraTitre}
+          onCapture={(dataUrl) => {
+            const targetPv = pvs.find((p) => p.id === scanCameraPvId);
+            const fileName = `pv-scan-${targetPv?.date || 'seance'}.jpg`;
+            saveScanFileToPv(scanCameraPvId, dataUrl, fileName);
+            setScanCameraPvId(null);
+          }}
+          onClose={() => setScanCameraPvId(null)}
+        />
+      )}
+
+      {/* Aperçu du PV joint (PDF ou image scannée) */}
+      {previewScanPv && previewScanPv.scanFichier && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="bg-white rounded-2xl max-w-3xl w-full p-5 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between border-b pb-3 border-slate-100">
+              <div>
+                <h3 className="font-bold text-sm text-slate-900 flex items-center gap-2">
+                  <FileText size={16} className="text-emerald-700" />
+                  <span>{previewScanPv.scanNomFichier || `PV du ${formatJJMM(previewScanPv.date)}`}</span>
+                </h3>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Séance du {formatJJMMAAAA(previewScanPv.date)}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {isPdfData(previewScanPv.scanFichier) && (
+                  <button
+                    type="button"
+                    onClick={() => openPdfInNewTab(previewScanPv.scanFichier!)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-sky-800 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-lg cursor-pointer"
+                  >
+                    <ExternalLink size={13} />
+                    <span>{fr.cedSeances.ouvrirPdfNouvelOnglet}</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() =>
+                    downloadDataUrl(
+                      previewScanPv.scanFichier!,
+                      previewScanPv.scanNomFichier ||
+                        (isPdfData(previewScanPv.scanFichier)
+                          ? `pv-${previewScanPv.date}.pdf`
+                          : `pv-${previewScanPv.date}.jpg`)
+                    )
+                  }
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-lg cursor-pointer"
+                >
+                  <Download size={13} />
+                  <span>{fr.commission.btnTelecharger}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewScanPv(null)}
+                  className="text-slate-400 hover:text-slate-600 text-base font-bold p-1 cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 min-h-[340px] bg-slate-100 rounded-xl overflow-hidden flex items-center justify-center border border-slate-200">
+              {isPdfData(previewScanPv.scanFichier) ? (
+                <iframe
+                  src={previewScanPv.scanFichier}
+                  title={previewScanPv.scanNomFichier || 'PV PDF'}
+                  className="w-full h-[65vh] border-0"
+                />
+              ) : isImageData(previewScanPv.scanFichier) ? (
+                <img
+                  src={previewScanPv.scanFichier}
+                  alt={previewScanPv.scanNomFichier || 'Scan PV'}
+                  className="max-w-full max-h-[65vh] object-contain"
+                />
+              ) : (
+                <p className="text-xs text-slate-500 p-6">Aperçu indisponible pour ce format.</p>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>

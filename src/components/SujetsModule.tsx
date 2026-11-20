@@ -207,9 +207,8 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectedSujetForDetail]);
 
-  // Alerte 4e sujet refusé & confirmation d'envoi direct depuis le catalogue
+  // Alerte 4e sujet refusé
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [sendFeedback, setSendFeedback] = useState<string | null>(null);
 
   // Formulaire d'inscription avec mot de passe
   const [form, setForm] = useState({
@@ -633,58 +632,12 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
       panier: newPanier,
       panierInteret: newPanier,
     };
-    onUpdateCandidat(updated);
-    storageService.setCandidat(updated);
-  };
-
-  // Envoi direct d'un sujet depuis le catalogue (lorsque le candidat est connecté)
-  const handleDirectSendFromCatalog = (sujetId: string) => {
-    setErrorMsg(null);
-    setSendFeedback(null);
-    if (!isConnected) {
-      setAuthModalMode('login');
-      setIsAuthModalOpen(true);
-      return;
-    }
-    if (candidat.verificationStatut === 'non_verifie') {
-      setView('verify_code');
-      return;
-    }
-    const targetSujet = sujets.find((s) => s && s.id === sujetId);
-    if (!targetSujet || targetSujet.statut === 'archive' || (targetSujet.statutValidation || 'publie') !== 'publie') {
-      return;
-    }
-    const currentCandidatures = Array.isArray(candidat.candidatures) ? candidat.candidatures : [];
-    if (currentCandidatures.includes(sujetId)) return;
-    if (currentCandidatures.length >= 3) {
-      setErrorMsg(fr.sujetsModule.fourthRefusedAlert);
-      return;
-    }
-
-    const nextCandidatures = [...currentCandidatures, sujetId];
-    const statuts: Record<string, any> = {
-      ...(candidat.candidaturesStatuts || {}),
-    };
-    if (!statuts[sujetId]) {
-      statuts[sujetId] = 'brouillon';
-    }
-
-    const updated: Candidat = {
-      ...candidat,
-      candidatures: nextCandidatures,
-      interets: nextCandidatures,
-      candidaturesStatuts: statuts,
-      attesteLe: candidat.attesteLe || new Date().toISOString(),
-    };
-    const synced = persistUnifiedCandidate(updated, true);
-    onUpdateCandidat(synced);
-
-    if (nextCandidatures.length >= 3) {
-      setSendFeedback(fr.sujetsModule.catalogThreeSentFeedback);
+    if (updated.compteCree) {
+      const synced = persistUnifiedCandidate(updated, true);
+      onUpdateCandidat(synced);
     } else {
-      setSendFeedback(
-        fr.sujetsModule.catalogSentFeedback.replace('{count}', String(nextCandidatures.length))
-      );
+      storageService.setCandidat(updated);
+      onUpdateCandidat(updated);
     }
   };
 
@@ -1234,20 +1187,12 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
             </div>
           </div>
 
-          {(errorMsg || sendFeedback) && (
+          {errorMsg && (
             <div className="px-5 sm:px-6 pb-2">
-              {errorMsg && (
-                <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2">
-                  <AlertTriangle size={14} className="text-rose-600 shrink-0" />
-                  <span>{errorMsg}</span>
-                </div>
-              )}
-              {!errorMsg && sendFeedback && (
-                <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold flex items-center gap-2">
-                  <CheckCircle2 size={14} className="text-emerald-600 shrink-0" />
-                  <span>{sendFeedback}</span>
-                </div>
-              )}
+              <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2">
+                <AlertTriangle size={14} className="text-rose-600 shrink-0" />
+                <span>{errorMsg}</span>
+              </div>
             </div>
           )}
 
@@ -1269,15 +1214,6 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
                 >
                   <FileCheck2 size={16} className="text-emerald-600 shrink-0" />
                   <span>{fr.sujetsModule.candidatureDeposeeBadge}</span>
-                </button>
-              ) : isConnected ? (
-                <button
-                  type="button"
-                  onClick={() => handleDirectSendFromCatalog(selectedSujetForDetail.id)}
-                  className="w-full sm:w-auto px-4 py-2.5 rounded-xl border bg-emerald-700 border-emerald-700 text-white hover:bg-emerald-800 text-sm font-bold transition flex items-center justify-center gap-2 active:scale-95 cursor-pointer"
-                >
-                  <Send size={15} className="text-white shrink-0" />
-                  <span>{fr.sujetsModule.btnEnvoyer}</span>
                 </button>
               ) : (
                 <button
@@ -3235,6 +3171,22 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
         </div>
       )}
 
+      {isCandidateOrVisitor && isConnected && cartAvailableItems.length >= 3 && candidat.candidatures.length < 3 && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2.5 flex items-center justify-between gap-3 flex-wrap shadow-xs">
+          <span className="text-xs font-semibold text-emerald-950">
+            {fr.sujetsModule.panierCount.replace('{count}', String(cartAvailableItems.length))}
+          </span>
+          <button
+            type="button"
+            onClick={() => (onNavigateTab ? onNavigateTab('panier') : setView('panier'))}
+            className="min-h-[40px] px-4 py-2 rounded-xl text-xs font-bold bg-emerald-700 hover:bg-emerald-800 text-white transition flex items-center gap-1.5 shadow-xs cursor-pointer active:scale-98"
+          >
+            <Send size={14} />
+            <span>{fr.sujetsModule.panierTitle} · {fr.sujetsModule.btnEnvoyer}</span>
+          </button>
+        </div>
+      )}
+
       {isCandidateOrVisitor && isConnected && errorMsg && (
         <div className="p-3 rounded-xl bg-rose-50 border border-rose-300 text-rose-800 text-xs flex items-center justify-between gap-2 shadow-xs">
           <div className="flex items-center gap-2">
@@ -3252,15 +3204,14 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
         </div>
       )}
 
-      {isCandidateOrVisitor && isConnected && (sendFeedback || (candidat.candidatures.length > 0 && !candidat.dossier?.dateEnvoi)) && (
+      {isCandidateOrVisitor && isConnected && candidat.candidatures.length > 0 && !candidat.dossier?.dateEnvoi && (
         <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2.5 flex items-center justify-between gap-3 flex-wrap shadow-xs">
           <div className="flex items-center gap-2 text-xs font-semibold text-emerald-950">
             <CheckCircle2 size={15} className="text-emerald-700 shrink-0" />
             <span>
-              {sendFeedback ||
-                (candidat.candidatures.length >= 3
-                  ? fr.sujetsModule.catalogThreeSentFeedback
-                  : fr.sujetsModule.catalogSentFeedback.replace('{count}', String(candidat.candidatures.length)))}
+              {candidat.candidatures.length >= 3
+                ? fr.sujetsModule.catalogThreeSentFeedback
+                : fr.sujetsModule.catalogSentFeedback.replace('{count}', String(candidat.candidatures.length))}
             </span>
           </div>
           {candidat.candidatures.length >= 3 && !candidat.dossier?.dateEnvoi && (
@@ -3454,7 +3405,7 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
                     </button>
                   </div>
 
-                  {/* Bouton Envoyer (si connecté) ou Ajouter aux vœux (si visiteur) */}
+                  {/* Bouton Ajouter aux vœux / Dans mes vœux (catalogue) */}
                   <div className="shrink-0 w-full sm:w-auto">
                     {isApplied ? (
                       <button
@@ -3464,15 +3415,6 @@ export const SujetsModule: React.FC<SujetsModuleProps> = ({
                       >
                         <FileCheck2 size={16} className="text-emerald-600 shrink-0" />
                         <span>{fr.sujetsModule.candidatureDeposeeBadge}</span>
-                      </button>
-                    ) : isConnected ? (
-                      <button
-                        type="button"
-                        onClick={() => handleDirectSendFromCatalog(sujet.id)}
-                        className="w-full sm:w-auto min-h-[44px] text-sm font-bold py-2.5 px-4 rounded-xl border bg-emerald-700 border-emerald-700 text-white hover:bg-emerald-800 transition flex items-center justify-center gap-2 active:scale-95 cursor-pointer"
-                      >
-                        <Send size={15} className="text-white shrink-0" />
-                        <span>{fr.sujetsModule.btnEnvoyer}</span>
                       </button>
                     ) : (
                       <button
