@@ -26,13 +26,11 @@ import {
   Users,
   Eye,
   ExternalLink,
-  XCircle,
 } from 'lucide-react';
 import { UserRole, Role, Compte, Candidat, Enseignant, Sujet, Piece, Creneau, Notification, type Dossier as DossierData, Rapport, Vote, CandidatureStatut, normaliserRole, getCompteRoles, dossierComplet } from './types';
 import { storageService } from './services/storage';
-import { INITIAL_RAPPORTS, DEMO_DOCTORANT_NADIA, aujourdhui, getComptes, MOCK_CANDIDATS, getDirectorStructure, INITIAL_PIECES, INITIAL_DOSSIER } from './data/mockData';
+import { INITIAL_RAPPORTS, DEMO_DOCTORANT_NADIA, aujourdhui, getComptes, MOCK_CANDIDATS, getDirectorStructure } from './data/mockData';
 import { fr } from './i18n/fr';
-import { reconcileCandidateFromStorage, persistUnifiedCandidate } from './utils/messages';
 import { LoginModal } from './components/LoginModal';
 import { MobileNav, TabType } from './components/MobileNav';
 import { Notifications } from './components/Notifications';
@@ -42,7 +40,7 @@ import { Dossier } from './components/Dossier';
 import { DossierDirecteur } from './components/DossierDirecteur';
 import { Entretiens } from './components/Entretiens';
 import { MesCreneaux } from './components/MesCreneaux';
-import { Exceptions, compterExceptions } from './components/Exceptions';
+import { Exceptions } from './components/Exceptions';
 import { Commission } from './components/Commission';
 import { RapportComponent } from './components/Rapport';
 import { VoteComite } from './components/VoteComite';
@@ -59,7 +57,6 @@ import {
   syncGoogleUserProfile,
 } from './firebase';
 import { resolveGoogleSession } from './utils/googleAuthResolver';
-import { syncDepositedToFirestore } from './utils/firebaseSync';
 
 export type AppTabType =
   | TabType
@@ -71,7 +68,6 @@ export type AppTabType =
   | 'vote_comite'
   | 'guichet'
   | 'admin_comptes'
-  | 'admin_inscriptions'
   | 'admin_journal'
   | 'ced_sujets';
 
@@ -339,10 +335,6 @@ export default function App() {
     window.addEventListener('usmba_sujets_updated', handleSync);
     window.addEventListener('usmba_candidat_updated', handleSync);
     window.addEventListener('usmba_dossier_updated', handleSync);
-    window.addEventListener('usmba_creneaux_updated', handleSync);
-    window.addEventListener('usmba_pvs_updated', handleSync);
-    window.addEventListener('usmba_seances_updated', handleSync);
-    window.addEventListener('usmba_demo_date_updated', handleSync);
     window.addEventListener('usmba_account_updated', handleAccountUpdated);
     window.addEventListener('storage', handleSync);
     return () => {
@@ -351,10 +343,6 @@ export default function App() {
       window.removeEventListener('usmba_sujets_updated', handleSync);
       window.removeEventListener('usmba_candidat_updated', handleSync);
       window.removeEventListener('usmba_dossier_updated', handleSync);
-      window.removeEventListener('usmba_creneaux_updated', handleSync);
-      window.removeEventListener('usmba_pvs_updated', handleSync);
-      window.removeEventListener('usmba_seances_updated', handleSync);
-      window.removeEventListener('usmba_demo_date_updated', handleSync);
       window.removeEventListener('usmba_account_updated', handleAccountUpdated);
       window.removeEventListener('storage', handleSync);
     };
@@ -368,11 +356,6 @@ export default function App() {
         return;
       }
       setGoogleUserPhoto(firebaseUser.photoURL || null);
-      if (firebaseUser.emailVerified) {
-        void syncDepositedToFirestore({ promptGoogleLoginIfNeeded: false }).catch((err) => {
-          console.warn('Firestore candidature sync error:', err);
-        });
-      }
       if (isLoggedInRef.current) return;
       try {
         const profile = await syncGoogleUserProfile(firebaseUser);
@@ -395,24 +378,12 @@ export default function App() {
   }, []);
 
   const refreshState = () => {
-    const rawCand = storageService.getCandidat();
-    setCandidat(rawCand?.compteCree ? reconcileCandidateFromStorage(rawCand) : rawCand);
+    setCandidat(storageService.getCandidat());
     setSujets(storageService.getSujets());
     setEnseignants(storageService.getEnseignants());
     setPieces(storageService.getPieces());
     setDossier(storageService.getDossier());
     setCreneaux(storageService.getCreneaux());
-    try {
-      const rawSim = localStorage.getItem('usmba_simulated_statuts');
-      if (rawSim) {
-        const parsedSim = JSON.parse(rawSim);
-        if (parsedSim && typeof parsedSim === 'object') {
-          setSimulatedStatuts(parsedSim);
-        }
-      }
-    } catch {
-      // safe fallback
-    }
     try {
       const raw = localStorage.getItem('usmba_doctorat_rapports') || localStorage.getItem('usmba_rapports');
       if (raw) setRapports(JSON.parse(raw));
@@ -423,17 +394,9 @@ export default function App() {
 
   const isTabAllowedForRoles = (targetTab: AppTabType, rolesList: UserRole[]): boolean => {
     if (rolesList.includes('admin') && !rolesList.some((r) => r !== 'admin')) {
-      return (
-        targetTab === 'admin_comptes' ||
-        targetTab === 'admin_inscriptions' ||
-        targetTab === 'admin_journal'
-      );
+      return targetTab === 'admin_comptes' || targetTab === 'admin_journal';
     }
-    if (
-      targetTab === 'admin_comptes' ||
-      targetTab === 'admin_inscriptions' ||
-      targetTab === 'admin_journal'
-    ) {
+    if (targetTab === 'admin_comptes' || targetTab === 'admin_journal') {
       return rolesList.includes('admin');
     }
     if (targetTab === 'sujets' || targetTab === 'panier' || targetTab === 'vote_comite') {
@@ -539,45 +502,30 @@ export default function App() {
           ...(Array.isArray(storedBefore?.panier) ? storedBefore.panier : []),
         ])
       );
-      const rawBaseCandidate = candidateData || storageService.loginAsDemo();
-      const baseCandidate = reconcileCandidateFromStorage({
-        ...rawBaseCandidate,
-        ...(userEmail && !rawBaseCandidate.email ? { email: userEmail.trim().toLowerCase() } : {}),
-      });
-      const existingCandidatures = Array.isArray(baseCandidate.candidatures)
-        ? baseCandidate.candidatures
-        : [];
-      const mergedPanier = Array.from(
-        new Set([...(baseCandidate.panier || []), ...visitorPanier])
-      );
-
-      const finalCandidate: Candidat = {
-        ...baseCandidate,
-        panier: mergedPanier,
-        panierInteret: mergedPanier,
-      };
-
-      const syncedCandidate = persistUnifiedCandidate(finalCandidate, true);
-      setCandidat(syncedCandidate);
-      storageService.setCandidat(syncedCandidate);
-      if (Array.isArray(syncedCandidate.pieces) && syncedCandidate.pieces.length > 0) {
-        setPieces(syncedCandidate.pieces);
-        storageService.setPieces(syncedCandidate.pieces);
+      if (candidateData) {
+        const mergedPanier = Array.from(
+          new Set([...(candidateData.panier || []), ...visitorPanier])
+        ).filter((id) => !(candidateData.candidatures || []).includes(id));
+        const mergedCandidate: Candidat = {
+          ...candidateData,
+          panier: mergedPanier,
+          panierInteret: mergedPanier,
+        };
+        setCandidat(mergedCandidate);
+        storageService.setCandidat(mergedCandidate);
       } else {
-        setPieces(INITIAL_PIECES);
-        storageService.setPieces(INITIAL_PIECES);
+        const demo = storageService.loginAsDemo();
+        const mergedPanier = Array.from(
+          new Set([...(demo.panier || []), ...visitorPanier])
+        ).filter((id) => !(demo.candidatures || []).includes(id));
+        const mergedDemo: Candidat = {
+          ...demo,
+          panier: mergedPanier,
+          panierInteret: mergedPanier,
+        };
+        setCandidat(mergedDemo);
+        storageService.setCandidat(mergedDemo);
       }
-      const nextDossier: DossierData = {
-        candidatId: syncedCandidate.id,
-        casParticulier: Boolean(syncedCandidate.dossier?.casParticulier),
-        motif: syncedCandidate.dossier?.motif,
-        motifAutre: syncedCandidate.dossier?.motifAutre,
-        consentementApogee: false,
-        statutGlobal: syncedCandidate.dossier?.dateEnvoi ? 'soumis' : 'en_cours',
-        dateEnvoi: syncedCandidate.dossier?.dateEnvoi,
-      };
-      setDossier(nextDossier);
-      storageService.setDossier(nextDossier);
     }
 
     const effectiveRolesAfterLogin = Array.from(
@@ -639,10 +587,6 @@ export default function App() {
     };
     setCandidat(visitor);
     storageService.setCandidat(visitor);
-    setPieces(INITIAL_PIECES);
-    storageService.setPieces(INITIAL_PIECES);
-    setDossier(INITIAL_DOSSIER);
-    storageService.setDossier(INITIAL_DOSSIER);
     setTab('sujets');
   };
 
@@ -651,7 +595,7 @@ export default function App() {
       const raw = localStorage.getItem('usmba_doctorat_candidat');
       if (raw) {
         const parsed: Candidat = JSON.parse(raw);
-        setCandidat(parsed?.compteCree ? reconcileCandidateFromStorage(parsed) : parsed);
+        setCandidat(parsed);
       }
     } catch {
       // safe fallback
@@ -660,13 +604,9 @@ export default function App() {
     const currentLoggedIn = isLoggedInRef.current;
     const currentRoles = getEffectiveNormalizedRoles();
 
-    // Protection stricte Admin : navigation exclusive entre ses onglets, aucun accès aux autres écrans
+    // Protection stricte Admin : navigation exclusive entre ses 2 onglets, aucun accès aux autres écrans
     if (currentLoggedIn && currentRoles.includes('admin') && !currentRoles.some((r) => r !== 'admin')) {
-      if (
-        targetTab === 'admin_comptes' ||
-        targetTab === 'admin_inscriptions' ||
-        targetTab === 'admin_journal'
-      ) {
+      if (targetTab === 'admin_comptes' || targetTab === 'admin_journal') {
         setTab(targetTab);
       }
       return;
@@ -724,33 +664,14 @@ export default function App() {
     setTimeout(() => setShowToast(false), 3000);
   };
 
-  // Enseignant actif (lié au directeur connecté)
-  const activeEnseignant =
-    (activeCompte?.enseignantId &&
-      enseignants.find((e) => e.id === activeCompte.enseignantId)) ||
-    (activeCompte?.email &&
-      enseignants.find(
-        (e) =>
-          e.email &&
-          e.email.toLowerCase().trim() === activeCompte.email.toLowerCase().trim()
-      )) ||
-    (activeCompte && activeCompte.role === 'enseignant'
-      ? {
-          id: activeCompte.enseignantId || activeCompte.id,
-          nom: activeCompte.nom,
-          email: activeCompte.email,
-          etablissement: activeCompte.etablissement || '',
-          structure: activeCompte.structure || '',
-          role: 'enseignant' as const,
-        }
-      : null) ||
-    enseignants[0] || {
-      id: 'ens-1',
-      nom: 'Pr. Karim El Amrani',
-      email: 'directeurthese@gmail.com',
-      etablissement: 'Faculté des Sciences Dhar El Mehraz (FSDM)',
-      structure: 'LISAC - FSDM Fès',
-    };
+  // Enseignant actif pour la démo
+  const activeEnseignant = enseignants[0] || {
+    id: 'ens-1',
+    nom: 'Pr. Karim El Amrani',
+    email: 'k.elamrani@usmba.ac.ma',
+    etablissement: 'Faculté des Sciences Dhar El Mehraz (FSDM)',
+    structure: 'Laboratoire LISAC',
+  };
 
   // Sujets de l'enseignant actif
   const sujetsEnseignant = sujets.filter((s) => s.enseignantId === activeEnseignant.id);
@@ -760,8 +681,16 @@ export default function App() {
     (c) => c.enseignantId === activeEnseignant.id
   );
 
-  // Alertes CED (total des cas affichés dans le Tableau d'exceptions)
-  const alertesCreneauxCount = compterExceptions(creneaux);
+  // Alertes CED (> 48h en attente de confirmation - Tableau d'exceptions)
+  const now = Date.now();
+  const alertesCreneaux = creneaux.filter((c) => {
+    if (c.statut === 'reserve' && c.dateReservation) {
+      const reservationTime = new Date(c.dateReservation).getTime();
+      const diffHours = (now - reservationTime) / (1000 * 60 * 60);
+      return diffHours > 48;
+    }
+    return false;
+  });
 
   // Candidatures reçues pour l'enseignant actif
   const teacherSubjectIds = sujetsEnseignant.map((s) => s.id);
@@ -833,14 +762,7 @@ export default function App() {
       candidatesById.set(candidat.id, candidat);
     }
 
-    MOCK_CANDIDATS.forEach((mc) => {
-      if (mc && mc.id && mc.compteCree && !candidatesById.has(mc.id)) {
-        candidatesById.set(mc.id, mc);
-      }
-    });
-
-    candidatesById.forEach((rawCand) => {
-      const cand = reconcileCandidateFromStorage(rawCand);
+    candidatesById.forEach((cand) => {
       if (!cand.compteCree || !Array.isArray(cand.candidatures)) return;
       const activePiecesDeclarees = (cand.pieces || []).filter(
         (p) => p.statut === 'declaree' || p.statut === 'prouvee'
@@ -866,13 +788,9 @@ export default function App() {
         seenSubjects.add(id);
         const s = sujets.find((x) => x.id === id);
         if (s) {
-          const itemKey = `${cand.id}-${id}`;
-          const st: CandidatureStatut =
-            (simulatedStatuts[itemKey] as CandidatureStatut | undefined) ||
-            cand.candidaturesStatuts?.[id] ||
-            'brouillon';
+          const st = cand.candidaturesStatuts?.[id] || 'brouillon';
           list.push({
-            key: itemKey,
+            key: `${cand.id}-${id}`,
             candidatId: cand.id,
             sujetId: s.id,
             candidatNom: cand.nom?.trim() || fr.dossierDirecteur.nonRenseigne,
@@ -890,38 +808,60 @@ export default function App() {
       });
     });
 
+    // Candidatures d'autres étudiants simulés pour la démo
+    if (activeEnseignant.id === 'ens-1') {
+      if (!list.some((x) => x.candidatId === 'cand-salma')) {
+        list.push({
+          key: 'salma-suj-07',
+          candidatId: 'cand-salma',
+          sujetId: 'suj-07',
+          candidatNom: 'Salma Alami',
+          cne: 'N149021873',
+          sujetTitre: 'Cybersécurité des Véhicules Connectés et Protocoles V2X',
+          date: '25/10/2026',
+          statut: simulatedStatuts['salma-suj-07'] || 'deposee',
+          piecesDeclarees: 4,
+          piecesProuvees: 3,
+          isCurrentCandidat: false,
+        });
+      }
+      if (!list.some((x) => x.candidatId === 'cand-khadija')) {
+        list.push({
+          key: 'khadija-suj-01',
+          candidatId: 'cand-khadija',
+          sujetId: 'suj-01',
+          candidatNom: 'Khadija Tazi',
+          cne: 'M142078911',
+          sujetTitre: 'Optimisation des Réseaux Électriques Intelligents (Smart Grids)',
+          date: '26/10/2026',
+          statut: simulatedStatuts['khadija-suj-01'] || 'deposee',
+          piecesDeclarees: 4,
+          piecesProuvees: 4,
+          motifCasParticulier: fr.dossier.casParticulierMotifs.DIPLOME_ETRANGER,
+          isCurrentCandidat: false,
+        });
+      }
+    }
+
     return list;
   }, [candidat, teacherSubjectIds, sujets, activeEnseignant, simulatedStatuts, candidateSyncTick]);
 
-  // Actions en attente pour le directeur : dossiers envoyés non validés OU validés non encore convoqués
-  const candidaturesActionCount = useMemo(() => {
+  // Badge de Candidatures = nombre de dossiers envoyés complets non validés
+  const candidaturesCompletsNonValidesCount = useMemo(() => {
     return candidaturesEnseignant.filter((c) => {
+      if (c.statut === 'retenue') return false;
       const candObj = c.isCurrentCandidat ? candidat : findCandidateApp(c.candidatId);
       if (!candObj) return false;
-      const reconciled = reconcileCandidateFromStorage(candObj);
-      const isValide =
-        c.statut === 'retenue' ||
-        reconciled.candidaturesStatuts?.[c.sujetId] === 'retenue' ||
-        simulatedStatuts[c.key] === 'retenue' ||
-        Object.values(reconciled.candidaturesStatuts || {}).some((s) => s === 'retenue');
-      const hasACorr = Object.values(reconciled.candidaturesStatuts || {}).some((s) => s === 'a_corriger');
+      const hasACorr = Object.values(candObj.candidaturesStatuts || {}).some((s) => s === 'a_corriger');
       const sent = Boolean(
-        reconciled.dossier?.dateEnvoi ||
+        candObj.dossier?.dateEnvoi ||
         (!hasACorr &&
-          (reconciled.envoyeLe ||
-            (reconciled.candidaturesEnvoyeLe && Object.keys(reconciled.candidaturesEnvoyeLe).length > 0) ||
-            isValide))
+          (candObj.envoyeLe ||
+            (candObj.candidaturesEnvoyeLe && Object.keys(candObj.candidaturesEnvoyeLe).length > 0)))
       );
-      if (!sent) return false;
-      const isConvoque = creneaux.some(
-        (cr) =>
-          cr.candidatId === c.candidatId &&
-          cr.enseignantId === activeEnseignant.id &&
-          (cr.statut === 'reserve' || cr.statut === 'confirme')
-      );
-      return !isValide || !isConvoque;
+      return sent && dossierComplet(candObj).complet;
     }).length;
-  }, [candidaturesEnseignant, candidat, simulatedStatuts, creneaux, activeEnseignant.id, candidateSyncTick]);
+  }, [candidaturesEnseignant, candidat, candidateSyncTick]);
 
   const structureConnecteeNom = useMemo(() => {
     if (activeCompte) {
@@ -1227,17 +1167,14 @@ export default function App() {
                           }`}
                         >
                           <span>{fr.nav.candidatures}</span>
-                          {candidaturesActionCount > 0 ? (
-                            <span className="px-1.5 py-0.5 rounded-full bg-rose-600 text-white font-bold text-[10px] inline-flex items-center gap-1 shadow-xs">
-                              <AlertCircle size={11} className="shrink-0" />
-                              <span>{candidaturesActionCount}</span>
+                          {candidaturesCompletsNonValidesCount > 0 && (
+                            <span className="px-1.5 py-0.2 rounded-full bg-emerald-600 text-white font-bold text-[10px]">
+                              {candidaturesCompletsNonValidesCount}
                             </span>
-                          ) : candidaturesEnseignant.length > 0 ? (
-                            <CheckCircle2 size={13} className="text-emerald-400 shrink-0" />
-                          ) : null}
+                          )}
                         </button>
 
-                        {/* 2. Créneaux / Convocations */}
+                        {/* 2. Créneaux */}
                         <button
                           onClick={() => handleTabChange('entretiens')}
                           className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
@@ -1247,12 +1184,6 @@ export default function App() {
                           }`}
                         >
                           <span>{fr.nav.mesCreneaux}</span>
-                          {candidaturesActionCount > 0 && (
-                            <span className="px-1.5 py-0.5 rounded-full bg-rose-600 text-white font-bold text-[10px] inline-flex items-center gap-1 shadow-xs">
-                              <AlertCircle size={11} className="shrink-0" />
-                              <span>{candidaturesActionCount}</span>
-                            </span>
-                          )}
                         </button>
 
                         {/* 3. Commission */}
@@ -1400,9 +1331,9 @@ export default function App() {
                           }`}
                         >
                           <span>{fr.nav.exceptionsCed}</span>
-                          {alertesCreneauxCount > 0 && (
+                          {alertesCreneaux.length > 0 && (
                             <span className="px-1.5 py-0.2 rounded-full bg-rose-500 text-white font-bold text-[10px]">
-                              {alertesCreneauxCount}
+                              {alertesCreneaux.length}
                             </span>
                           )}
                         </button>
@@ -1414,7 +1345,7 @@ export default function App() {
                       <>
                         <button
                           onClick={() => handleTabChange('admin_comptes')}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0 ${
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
                             tab === 'admin_comptes'
                               ? 'bg-purple-800 text-purple-200'
                               : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
@@ -1424,19 +1355,8 @@ export default function App() {
                           <span>{fr.nav.adminComptes}</span>
                         </button>
                         <button
-                          onClick={() => handleTabChange('admin_inscriptions')}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0 ${
-                            tab === 'admin_inscriptions'
-                              ? 'bg-purple-800 text-purple-200'
-                              : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
-                          }`}
-                        >
-                          <Award size={14} />
-                          <span>{fr.nav.adminInscriptions}</span>
-                        </button>
-                        <button
                           onClick={() => handleTabChange('admin_journal')}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0 ${
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
                             tab === 'admin_journal'
                               ? 'bg-purple-800 text-purple-200'
                               : 'text-emerald-100 hover:text-white hover:bg-emerald-900/60'
@@ -1570,9 +1490,7 @@ export default function App() {
               {isLoggedIn && role === 'candidat' && (
                 <Notifications
                   candidatId={candidat.id}
-                  candidatEmail={candidat.email}
                   onNavigateToDossier={() => handleTabChange('dossier')}
-                  onNavigateToEntretiens={() => handleTabChange('entretiens')}
                 />
               )}
 
@@ -1678,9 +1596,9 @@ export default function App() {
               }`}
             >
               <span>{fr.nav.exceptionsCed}</span>
-              {alertesCreneauxCount > 0 && (
+              {alertesCreneaux.length > 0 && (
                 <span className="px-1.5 py-0.2 rounded-full bg-rose-500 text-white font-bold text-[10px]">
-                  {alertesCreneauxCount}
+                  {alertesCreneaux.length}
                 </span>
               )}
             </button>
@@ -1726,13 +1644,7 @@ export default function App() {
             />
           ) : role === 'admin' && isLoggedIn ? (
             <Admin
-              currentTab={
-                tab === 'admin_journal'
-                  ? 'admin_journal'
-                  : tab === 'admin_inscriptions'
-                  ? 'admin_inscriptions'
-                  : 'admin_comptes'
-              }
+              currentTab={tab === 'admin_journal' ? 'admin_journal' : 'admin_comptes'}
               onSelectTab={(newTab) => setTab(newTab)}
             />
           ) : (
@@ -1742,19 +1654,9 @@ export default function App() {
             <SujetsModule
               key="catalog"
               role={role}
-              isLoggedIn={isLoggedIn}
               sujets={sujets}
               enseignants={enseignants}
-              candidat={
-                isLoggedIn
-                  ? candidat
-                  : {
-                      ...candidat,
-                      compteCree: false,
-                      candidatures: [],
-                      candidaturesStatuts: {},
-                    }
-              }
+              candidat={candidat}
               onUpdateCandidat={(updated) => {
                 setCandidat(updated);
                 if (updated.compteCree && !isLoggedInRef.current) {
@@ -1780,19 +1682,9 @@ export default function App() {
             <SujetsModule
               key="panier"
               role={role}
-              isLoggedIn={isLoggedIn}
               sujets={sujets}
               enseignants={enseignants}
-              candidat={
-                isLoggedIn
-                  ? candidat
-                  : {
-                      ...candidat,
-                      compteCree: false,
-                      candidatures: [],
-                      candidaturesStatuts: {},
-                    }
-              }
+              candidat={candidat}
               onUpdateCandidat={(updated) => {
                 setCandidat(updated);
                 if (updated.compteCree && !isLoggedInRef.current) {
@@ -1825,7 +1717,7 @@ export default function App() {
             ) : (() => {
               const enrichedItems = candidaturesEnseignant.map((item) => {
                 const resolved = findCandidateApp(item.candidatId);
-                const rawCandidate = resolved || (item.isCurrentCandidat
+                const itemCandidate = resolved || (item.isCurrentCandidat
                   ? candidat
                   : {
                       id: item.candidatId,
@@ -1837,29 +1729,17 @@ export default function App() {
                         { type: 'DIPLOME', statut: item.piecesProuvees >= 3 ? 'prouvee' : 'absente', source: 'apogee' },
                       ],
                     });
-                const itemCandidate = reconcileCandidateFromStorage(rawCandidate as Candidat);
                 const check = dossierComplet(itemCandidate as any);
-                const statuts = itemCandidate?.candidaturesStatuts || {};
-                const isValide =
-                  item.statut === 'retenue' ||
-                  statuts[item.sujetId] === 'retenue' ||
-                  simulatedStatuts[item.key] === 'retenue' ||
-                  Object.values(statuts).some((s) => s === 'retenue');
-                const isConvoque = creneaux.some(
-                  (cr) =>
-                    cr.candidatId === item.candidatId &&
-                    cr.enseignantId === activeEnseignant.id &&
-                    (cr.statut === 'reserve' || cr.statut === 'confirme')
-                );
-                const hasACorr = Object.values(statuts).some((s) => s === 'a_corriger');
+                const candObj = itemCandidate as Candidat;
+                const hasACorr = Object.values(candObj?.candidaturesStatuts || {}).some((s) => s === 'a_corriger');
                 const hasLegacySent = Boolean(
                   !hasACorr &&
-                  (itemCandidate?.envoyeLe ||
-                    (itemCandidate?.candidaturesEnvoyeLe && Object.keys(itemCandidate.candidaturesEnvoyeLe).length > 0) ||
-                    isValide)
+                  (candObj?.envoyeLe ||
+                    (candObj?.candidaturesEnvoyeLe && Object.keys(candObj.candidaturesEnvoyeLe).length > 0) ||
+                    Object.values(candObj?.candidaturesStatuts || {}).some((s) => s === 'retenue'))
                 );
-                const isSent = Boolean(itemCandidate?.dossier?.dateEnvoi || hasLegacySent);
-                return { item, itemCandidate, check, isSent, isValide, isConvoque };
+                const isSent = Boolean(candObj?.dossier?.dateEnvoi || hasLegacySent);
+                return { item, itemCandidate, check, isSent };
               });
 
               const aTraiterList = enrichedItems.filter((x) => x.isSent);
@@ -1869,58 +1749,22 @@ export default function App() {
                 item,
                 check,
                 isSent,
-                isValide,
-                isConvoque,
               }: {
                 item: (typeof candidaturesEnseignant)[number];
                 check: ReturnType<typeof dossierComplet>;
                 isSent: boolean;
-                isValide: boolean;
-                isConvoque: boolean;
-              }) => {
-                const actionNeeded = isSent && (!isValide || !isConvoque);
-                const actionLabel = !isValide
-                  ? fr.dossierDirecteur.actionAValider
-                  : fr.dossierDirecteur.actionAConvoquer;
-
-                return (
+              }) => (
                 <div
                   key={item.key}
-                  className={`bg-white border rounded-2xl p-4 shadow-xs space-y-3 transition-colors ${
-                    actionNeeded
-                      ? 'border-rose-200 hover:border-rose-300'
-                      : 'border-slate-200/90 hover:border-slate-300'
-                  }`}
+                  className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-xs space-y-3 hover:border-slate-300 transition-colors"
                 >
-                  <div className="flex items-start justify-between gap-2 flex-wrap">
-                    <div className="flex items-center gap-2 min-w-0 flex-wrap">
-                      <h3 className="text-sm font-bold text-slate-900 truncate">
-                        {item.candidatNom || fr.dossierDirecteur.nonRenseigne}
-                      </h3>
-                      {actionNeeded ? (
-                        <span
-                          title={actionLabel}
-                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-600 text-white shadow-xs shrink-0"
-                        >
-                          <AlertCircle size={12} className="shrink-0" />
-                          <span>{actionLabel}</span>
-                        </span>
-                      ) : isSent && isValide && isConvoque ? (
-                        <span
-                          title={fr.dossierDirecteur.aucuneAction}
-                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-600 text-white shadow-xs shrink-0"
-                        >
-                          <CheckCircle2 size={12} className="shrink-0" />
-                          <span>{fr.dossierDirecteur.aucuneAction}</span>
-                        </span>
-                      ) : null}
-                    </div>
-                    {isSent && formatDateJJMM(item.date) && (
-                      <span className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md shrink-0">
-                        <Calendar size={12} className="text-slate-500 shrink-0" />
-                        <span>{fr.dossierDirecteur.envoyeLePrefix.replace('{date}', formatDateJJMM(item.date))}</span>
-                      </span>
-                    )}
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-sm font-bold text-slate-900 truncate">
+                      {item.candidatNom || fr.dossierDirecteur.nonRenseigne}
+                    </h3>
+                    <span className="text-xs font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md shrink-0">
+                      {formatDateJJMM(item.date)}
+                    </span>
                   </div>
 
                   <div className="flex items-center gap-2 flex-wrap">
@@ -1948,32 +1792,6 @@ export default function App() {
                         </span>
                       </span>
                     )}
-
-                    {/* Badge Validée / Non validée (vert / rouge) */}
-                    {isValide ? (
-                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
-                        <CheckCircle2 size={13} className="text-emerald-700 shrink-0" />
-                        <span>{fr.dossierDirecteur.badgeValidee}</span>
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-rose-100 text-rose-800 border border-rose-300">
-                        <XCircle size={13} className="text-rose-700 shrink-0" />
-                        <span>{fr.dossierDirecteur.badgeNonValidee}</span>
-                      </span>
-                    )}
-
-                    {/* Badge Convoquée / Non convoquée (vert / rouge) */}
-                    {isConvoque ? (
-                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
-                        <CalendarCheck2 size={13} className="text-emerald-700 shrink-0" />
-                        <span>{fr.dossierDirecteur.badgeConvoquee}</span>
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-rose-100 text-rose-800 border border-rose-300">
-                        <AlertCircle size={13} className="text-rose-700 shrink-0" />
-                        <span>{fr.dossierDirecteur.badgeNonConvoquee}</span>
-                      </span>
-                    )}
                   </div>
 
                   <div className="pt-2 border-t border-slate-100 flex items-center justify-end">
@@ -1987,8 +1805,7 @@ export default function App() {
                     </button>
                   </div>
                 </div>
-                );
-              };
+              );
 
               return (
                 <div className="space-y-4">
@@ -2082,13 +1899,7 @@ export default function App() {
 
           {/* Onglet Mes créneaux (Enseignant) */}
           {tab === 'entretiens' && role === 'enseignant' && (
-            <MesCreneaux
-              enseignantId={activeEnseignant.id}
-              onOpenDossier={(id, nom) => {
-                setSelectedCandidatForDossier({ id, nom });
-                setTab('candidatures_recues');
-              }}
-            />
+            <MesCreneaux enseignantId={activeEnseignant.id} />
           )}
 
           {/* Onglet Commission (Directeur de thèse) */}
@@ -2272,11 +2083,9 @@ export default function App() {
     </main>
 
         {/* Pied de page sobre et discret */}
-        {fr.footer.copyright && (
-          <footer className="mt-auto px-4 py-5 border-t border-slate-100 text-center text-xs text-slate-500 flex flex-col sm:flex-row items-center justify-between gap-3">
-            <span>{fr.footer.copyright}</span>
-          </footer>
-        )}
+        <footer className="mt-auto px-4 py-5 border-t border-slate-100 text-center text-xs text-slate-500 flex flex-col sm:flex-row items-center justify-between gap-3">
+          <span>{fr.footer.copyright}</span>
+        </footer>
 
         {/* Barre de navigation mobile inférieure tactile (5 max + Plus) via MobileNav */}
         <MobileNav
@@ -2294,10 +2103,9 @@ export default function App() {
           onDemoDateChange={handleDemoDateChange}
           onResetDemoDate={handleResetDemoDate}
           badgeCounts={{
-            candidaturesCount: candidaturesActionCount,
-            creneauxCount: candidaturesActionCount,
+            candidaturesCount: candidaturesCompletsNonValidesCount,
             piecesPretes: piecesAProverCount,
-            alertesCed: alertesCreneauxCount,
+            alertesCed: alertesCreneaux.length,
             reinscriptionsCount: rapportsAValider.length,
           }}
         />

@@ -4,7 +4,6 @@ import { fr } from '../i18n/fr';
 import { Candidat, Creneau, PV, ProgressionEtapeInfo, dossierComplet } from '../types';
 import { storageService } from '../services/storage';
 import { ECHEANCES, aujourdhui } from '../data/mockData';
-import { reconcileCandidateFromStorage } from '../utils/messages';
 
 function formatJJMM(dateStr?: string): string {
   if (!dateStr) return '';
@@ -100,11 +99,11 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
     try {
       const rawCand = localStorage.getItem('usmba_doctorat_candidat');
       if (rawCand) {
-        setCandidat(reconcileCandidateFromStorage(JSON.parse(rawCand)));
+        setCandidat(JSON.parse(rawCand));
       } else if (propsCandidat) {
-        setCandidat(reconcileCandidateFromStorage(propsCandidat));
+        setCandidat(propsCandidat);
       } else {
-        setCandidat(reconcileCandidateFromStorage(storageService.getCandidat()));
+        setCandidat(storageService.getCandidat());
       }
     } catch {
       setCandidat(propsCandidat || null);
@@ -149,7 +148,6 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
     window.addEventListener('usmba_dossier_updated', handleSync);
     window.addEventListener('usmba_pieces_updated', handleSync);
     window.addEventListener('usmba_candidat_updated', handleSync);
-    window.addEventListener('usmba_inscriptions_updated', handleSync);
     return () => {
       window.removeEventListener('storage', handleSync);
       window.removeEventListener('usmba_demo_date_updated', handleSync);
@@ -158,7 +156,6 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
       window.removeEventListener('usmba_dossier_updated', handleSync);
       window.removeEventListener('usmba_pieces_updated', handleSync);
       window.removeEventListener('usmba_candidat_updated', handleSync);
-      window.removeEventListener('usmba_inscriptions_updated', handleSync);
     };
   }, [candidatId]);
 
@@ -213,24 +210,9 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
   const step2Done = Object.values(candidaturesStatuts).some((st) => st === 'retenue');
 
   // Étape 3 : Entretien (terminée uniquement quand le directeur a marqué le candidat Présent)
-  const presentCreneau = currentCandidatId
-    ? creneaux.find((c) => c.candidatId === currentCandidatId && c.presence === 'present')
-    : undefined;
-  const step3Done = Boolean(presentCreneau);
-  const activeConvocation = currentCandidatId
-    ? creneaux.find(
-        (c) =>
-          c.candidatId === currentCandidatId &&
-          (c.statut === 'reserve' || c.statut === 'confirme') &&
-          c.presence !== 'absent'
-      )
-    : undefined;
-  const entretienConvoqueText = activeConvocation
-    ? fr.progression.steps.entretien.convoqueFormat
-        .replace('{date}', formatJJMMAAAA(activeConvocation.date))
-        .replace('{heure}', activeConvocation.heure)
-        .replace('{lieu}', activeConvocation.lieu)
-    : '';
+  const step3Done = Boolean(currentCandidatId) && creneaux.some(
+    (c) => c.candidatId === currentCandidatId && c.presence === 'present'
+  );
 
   // Étape 4 : Résultat (un PV publié contenant son résultat)
   const publishedPv = pvs.find(
@@ -260,21 +242,8 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
     (hasThreeSubjects && hasCompleteDossier && hasSavedCinInfos && isCandidatureEnvoyee) ||
     isLegacySubmitted;
 
-  // Étape 5 : Inscription (validée par l'Admin Scolarité)
-  let step5Done = candidat?.inscriptionStatut === 'validee';
-  if (!step5Done && currentCandidatId) {
-    try {
-      const rawInscr = localStorage.getItem('usmba_inscriptions_validees');
-      if (rawInscr) {
-        const inscrMap = JSON.parse(rawInscr);
-        if (inscrMap && inscrMap[currentCandidatId]?.statut === 'validee') {
-          step5Done = true;
-        }
-      }
-    } catch {
-      // fallback
-    }
-  }
+  // Étape 5 : Inscription (toujours grisée, 'future')
+  const step5Done = false;
 
   const rawDones = [step1Done, step2Done, step3Done, step4Done, step5Done];
 
@@ -301,12 +270,8 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
       cle: 'entretien',
       nom: fr.progression.steps.entretien.nom,
       statut: 'future',
-      infobulle: activeConvocation
-        ? entretienConvoqueText
-        : fr.progression.steps.entretien.attenteConvocation,
-      actionTexte: activeConvocation
-        ? fr.progression.steps.entretien.actionConvoque
-        : undefined,
+      infobulle: fr.progression.steps.entretien.future,
+      actionTexte: fr.progression.steps.entretien.action,
     },
     {
       numero: 4,
@@ -353,10 +318,6 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
         etapes[i].infobulle =
           etapes[i].cle === 'candidature'
             ? fr.progression.stepCandidatureUnifiedEnCours
-            : etapes[i].cle === 'entretien'
-            ? activeConvocation
-              ? entretienConvoqueText
-              : fr.progression.steps.entretien.attenteConvocation
             : fr.progression.steps[etapes[i].cle].enCours;
         if (echeance) {
           const { enRetard, jours } = getRetardInfo(echeance, dateActuelle);
@@ -371,10 +332,6 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
         etapes[i].infobulle =
           etapes[i].cle === 'candidature'
             ? fr.progression.stepCandidatureUnifiedFuture
-            : etapes[i].cle === 'entretien'
-            ? activeConvocation
-              ? entretienConvoqueText
-              : fr.progression.steps.entretien.attenteConvocation
             : fr.progression.steps[etapes[i].cle].future;
         etapes[i].enRetard = false;
         etapes[i].joursRetard = 0;
@@ -408,7 +365,14 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
         onNavigate?.('sujets');
         break;
       case 2: // Étape 3 : Entretien
-        onNavigate?.('entretiens');
+        {
+          const el = document.getElementById('creneaux-section');
+          if (el) {
+            el.scrollIntoView({ behavior: 'smooth' });
+          } else {
+            onNavigate?.('entretiens');
+          }
+        }
         break;
       case 3: // Étape 4 : Résultat
         {
@@ -430,6 +394,9 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
   };
 
   const isValidationPending = isCandidatureEnvoyee && !step2Done && !isRefuse;
+  const presentCreneau = currentCandidatId
+    ? creneaux.find((c) => c.candidatId === currentCandidatId && c.presence === 'present')
+    : undefined;
 
   const getSegmentMeta = (etape: ProgressionEtapeInfo) => {
     const isStepValidationPending =
@@ -448,37 +415,10 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
         kind: 'faite' as const,
         stroke: '#059669',
         badgeClass: 'bg-emerald-100 text-emerald-800 border-emerald-200',
-        etatLabel:
-          etape.cle === 'entretien' && step3Done
-            ? fr.entretiens.statutPresent
-            : fr.progression.statuts.faite,
+        etatLabel: fr.progression.statuts.faite,
         dateLabel: doneDate
           ? fr.progression.infobulleTermineLe.replace('{date}', formatJJMMAAAA(doneDate))
           : fr.progression.nonRenseigne,
-      };
-    }
-
-    if (etape.cle === 'entretien') {
-      if (activeConvocation) {
-        const isConfirmed = activeConvocation.statut === 'confirme';
-        return {
-          kind: 'convoque' as const,
-          stroke: '#d97706',
-          badgeClass: isConfirmed
-            ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
-            : 'bg-amber-100 text-amber-900 border-amber-300',
-          etatLabel: isConfirmed
-            ? fr.entretiens.statutConfirme
-            : fr.entretiens.statutConvoque,
-          dateLabel: entretienConvoqueText,
-        };
-      }
-      return {
-        kind: 'attente_convocation' as const,
-        stroke: '#cbd5e1',
-        badgeClass: 'bg-slate-100 text-slate-700 border-slate-200',
-        etatLabel: fr.progression.steps.entretien.badgeAttente,
-        dateLabel: fr.progression.steps.entretien.attenteConvocation,
       };
     }
 
@@ -692,9 +632,7 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
                 >
                   {displayedTooltipMeta.kind === 'faite' ? (
                     <Check size={10} strokeWidth={2.5} />
-                  ) : displayedTooltipMeta.kind === 'validation' ||
-                    displayedTooltipMeta.kind === 'convoque' ||
-                    displayedTooltipMeta.kind === 'attente_convocation' ? (
+                  ) : displayedTooltipMeta.kind === 'validation' ? (
                     <Clock size={10} strokeWidth={2.5} />
                   ) : displayedTooltipMeta.kind === 'retard' ? (
                     <AlertTriangle size={10} strokeWidth={2.5} />
@@ -825,38 +763,8 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
                     ) : isFaite ? (
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 flex items-center gap-1">
                         <Check size={10} strokeWidth={2.5} />
-                        <span>
-                          {etape.cle === 'entretien' && step3Done
-                            ? fr.entretiens.statutPresent
-                            : fr.progression.statuts.faite}
-                        </span>
+                        <span>{fr.progression.statuts.faite}</span>
                       </span>
-                    ) : etape.cle === 'entretien' ? (
-                      activeConvocation ? (
-                        <span
-                          className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${
-                            activeConvocation.statut === 'confirme'
-                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                              : 'bg-amber-100 text-amber-900 border border-amber-200'
-                          }`}
-                        >
-                          {activeConvocation.statut === 'confirme' ? (
-                            <Check size={10} strokeWidth={2.5} />
-                          ) : (
-                            <Clock size={10} strokeWidth={2.5} />
-                          )}
-                          <span>
-                            {activeConvocation.statut === 'confirme'
-                              ? fr.entretiens.statutConfirme
-                              : fr.entretiens.statutConvoque}
-                          </span>
-                        </span>
-                      ) : (
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 flex items-center gap-1">
-                          <Clock size={10} strokeWidth={2.5} />
-                          <span>{fr.progression.steps.entretien.badgeAttente}</span>
-                        </span>
-                      )
                     ) : isEnCours && etape.enRetard ? (
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200 flex items-center gap-1">
                         <AlertTriangle size={11} strokeWidth={2.5} className="text-rose-600" />
@@ -884,9 +792,7 @@ export const ProgressionCandidat: React.FC<ProgressionCandidatProps> = ({
                 </div>
 
                 {/* Bouton d'action pour l'étape en cours ou étape faite */}
-                {!isFaite &&
-                  etape.actionTexte &&
-                  (isEnCours || (etape.cle === 'entretien' && Boolean(activeConvocation))) && (
+                {isEnCours && etape.actionTexte && (
                   <div className={`mt-3 pt-2.5 border-t flex items-center justify-end ${
                     etape.enRetard ? 'border-rose-200/70' : 'border-amber-200/60'
                   }`}>

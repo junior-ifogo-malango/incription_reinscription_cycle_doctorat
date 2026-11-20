@@ -129,7 +129,6 @@ export type CandidatureStatut = 'brouillon' | 'deposee' | 'retenue' | 'a_corrige
 
 export interface AnomalieCandidature {
   piece: 'CIN' | 'DIPLOME' | 'RELEVES' | 'CV' | 'CURSUS';
-  pieces?: ('CIN' | 'DIPLOME' | 'RELEVES' | 'CV' | 'CURSUS')[];
   nature: 'illisible' | 'absente' | 'incoherente';
   motif: string;
   le: string;
@@ -191,9 +190,6 @@ export interface Candidat {
   verificationEssaisRestants?: number;
   verificationBloqueJusqua?: number; // timestamp en millisecondes
   attesteLe?: string;
-  inscriptionStatut?: 'en_attente' | 'validee';
-  inscriptionValideeLe?: string;
-  inscriptionValideePar?: string;
   cursus?: {
     diplome?: string;
     etablissement?: string;
@@ -208,7 +204,6 @@ export type NotificationType = 'info' | 'action';
 export interface Notification {
   id: string;
   destinataireId: string;
-  destinataireEmail?: string;
   texte: string;
   date: string; /* ISO */
   lue: boolean;
@@ -402,14 +397,8 @@ export interface PV {
   scanDeposeLe?: string;
   scanStatut?: 'en_attente' | 'valide' | 'refuse';
   scanMotifRefus?: string;
-  scanFichier?: string; /* Data URL (PDF ou image) du scan déposé par le directeur */
-  scanNomFichier?: string;
-  scanStructureFichier?: string; /* Data URL (PDF ou image) du PV contresigné par la Structure */
-  scanStructureNomFichier?: string;
-  scanStructureDeposeLe?: string;
   membres?: [string, string]; /* noms des 2 membres, optionnels */
   coordonnateur?: string;
-  signaturesCount?: number;
 }
 
 /* Module R : Réinscription */

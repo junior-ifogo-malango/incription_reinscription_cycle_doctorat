@@ -6,6 +6,7 @@ import {
   Circle,
   XCircle,
   FileSignature,
+  FileCheck2,
   AlertCircle,
   Calendar,
   Lock,
@@ -18,10 +19,6 @@ import {
   Send,
   AlertTriangle,
   FileCheck,
-  Camera,
-  Download,
-  ExternalLink,
-  FileText,
 } from 'lucide-react';
 import { Creneau, Resultat, ResultatType, PV, Candidat, calculerNoteResultat, StatutSeance, SeanceStatutRecord } from '../types';
 import {
@@ -36,11 +33,9 @@ import {
   aujourdhui,
 } from '../data/mockData';
 import { PVDocument } from './PVDocument';
-import { CameraCapture } from './CameraCapture';
 import { fr } from '../i18n/fr';
 import { logEvent, logPresenceConstatee, logAbsenceConstatee } from '../utils/journal';
 import { ajouterNotification, messageAbsenceConstatee, trouverCandidat } from '../utils/messages';
-import { syncPvBestEffort } from '../utils/firebaseSync';
 
 interface CommissionProps {
   enseignantId: string;
@@ -89,93 +84,6 @@ function generatePVCode(): string {
   const buffer = new Uint8Array(12);
   window.crypto.getRandomValues(buffer);
   return Array.from(buffer, (b) => chars[b % chars.length]).join('');
-}
-
-function broadcastPvsUpdated(): void {
-  window.dispatchEvent(new CustomEvent('usmba_pvs_updated'));
-  try {
-    if (typeof BroadcastChannel !== 'undefined') {
-      const ch = new BroadcastChannel('usmba_pvs_channel');
-      ch.postMessage({ type: 'usmba_pvs_updated', at: Date.now() });
-      ch.close();
-    }
-  } catch {}
-}
-
-const MAX_PV_SCAN_BYTES = 1.5 * 1024 * 1024;
-
-function isPdfData(data?: string): boolean {
-  if (!data || typeof data !== 'string') return false;
-  return data.startsWith('data:application/pdf') || data.toLowerCase().endsWith('.pdf');
-}
-
-function isImageData(data?: string): boolean {
-  if (!data || typeof data !== 'string') return false;
-  return (
-    data.startsWith('data:image/') ||
-    data.startsWith('/assets/') ||
-    data.startsWith('blob:') ||
-    /\.(png|jpe?g|webp|gif|bmp)(\?.*)?$/i.test(data)
-  );
-}
-
-function openPdfInNewTab(dataUrl: string): void {
-  try {
-    const arr = dataUrl.split(',');
-    const mimeMatch = arr[0].match(/:(.*?);/);
-    const mime = mimeMatch ? mimeMatch[1] : 'application/pdf';
-    const bstr = atob(arr[1]);
-    let n = bstr.length;
-    const u8arr = new Uint8Array(n);
-    while (n--) {
-      u8arr[n] = bstr.charCodeAt(n);
-    }
-    const blob = new Blob([u8arr], { type: mime });
-    const url = URL.createObjectURL(blob);
-    window.open(url, '_blank');
-  } catch {}
-}
-
-function downloadDataUrl(dataUrl: string, filename: string): void {
-  try {
-    const a = document.createElement('a');
-    a.href = dataUrl;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  } catch {}
-}
-
-function resolveDirectorStructure(enseignantId: string): string {
-  try {
-    const rawAcc = localStorage.getItem('usmba_active_account');
-    if (rawAcc) {
-      const acc = JSON.parse(rawAcc);
-      if (
-        acc?.structure &&
-        typeof acc.structure === 'string' &&
-        acc.structure.trim() &&
-        acc.structure.trim() !== 'CED USMBA' &&
-        acc.structure.trim() !== 'USMBA Fès'
-      ) {
-        return acc.structure.trim();
-      }
-    }
-  } catch {}
-  const fromMock = getDirectorStructure(enseignantId);
-  if (fromMock && fromMock.trim()) return fromMock.trim();
-  try {
-    const rawEns = localStorage.getItem('usmba_doctorat_enseignants');
-    if (rawEns) {
-      const list = JSON.parse(rawEns);
-      if (Array.isArray(list)) {
-        const match = list.find((e: { id?: string; structure?: string }) => e?.id === enseignantId && e?.structure);
-        if (match?.structure) return String(match.structure).trim();
-      }
-    }
-  } catch {}
-  return 'LISAC - FSDM Fès';
 }
 
 export const Commission: React.FC<CommissionProps> = ({
@@ -252,11 +160,6 @@ export const Commission: React.FC<CommissionProps> = ({
   const [absentTargetCreneauId, setAbsentTargetCreneauId] = useState<string | null>(null);
   const [absentMotif, setAbsentMotif] = useState('');
   const [absentError, setAbsentError] = useState<string | null>(null);
-
-  // Scan / dépôt PDF du PV par le Directeur
-  const [scanCameraPvId, setScanCameraPvId] = useState<string | null>(null);
-  const [scanUploadError, setScanUploadError] = useState<{ pvId: string; text: string } | null>(null);
-  const [previewScanPv, setPreviewScanPv] = useState<PV | null>(null);
 
   // Chargement des données avec persistance localStorage et try/catch
   useEffect(() => {
@@ -695,7 +598,7 @@ export const Commission: React.FC<CommissionProps> = ({
       const raw = localStorage.getItem('usmba_doctorat_pvs');
       let curPvs: PV[] = raw ? JSON.parse(raw) : [];
 
-      const dirStructure = resolveDirectorStructure(enseignantId);
+      const dirStructure = getDirectorStructure(enseignantId);
 
       const dateMembres = seanceMembres[date] || existing?.membres || ['', ''];
       const membresTuple: [string, string] = [dateMembres[0] || '', dateMembres[1] || ''];
@@ -753,7 +656,7 @@ export const Commission: React.FC<CommissionProps> = ({
         curPvs.push(newPV);
         localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(curPvs));
         setPvs(curPvs.map(enrichirPVLecture));
-        broadcastPvsUpdated();
+        window.dispatchEvent(new CustomEvent('usmba_pvs_updated'));
         setActivePV({ pv: newPV });
       } else {
         // Première version
@@ -773,7 +676,7 @@ export const Commission: React.FC<CommissionProps> = ({
         curPvs.push(newPV);
         localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(curPvs));
         setPvs(curPvs.map(enrichirPVLecture));
-        broadcastPvsUpdated();
+        window.dispatchEvent(new CustomEvent('usmba_pvs_updated'));
         setActivePV({ pv: newPV });
       }
       logEvent({ id: enseignantId, nom: enseignantNom, role: 'enseignant' }, fr.journalActions.pvGenere, `PV séance du ${date} (Code ${newCode})`);
@@ -791,107 +694,56 @@ export const Commission: React.FC<CommissionProps> = ({
     setActivePV({ pv, autoPrint: true });
   };
 
-  const saveScanFileToPv = (pvId: string, dataUrl?: string, fileName?: string) => {
-    setScanUploadError(null);
+  const handleDeposerScanCommission = (pvId: string) => {
     try {
       const raw = localStorage.getItem('usmba_doctorat_pvs');
-      const curPvs: PV[] = raw ? JSON.parse(raw) : [];
+      let curPvs: PV[] = raw ? JSON.parse(raw) : [];
       const idx = curPvs.findIndex((p) => p.id === pvId);
       if (idx !== -1) {
         const nowIso = new Date().toISOString();
-        const existingStatut = curPvs[idx].statut;
-        curPvs[idx].statut = existingStatut === 'envoye' || existingStatut === 'publie' ? existingStatut : 'signe';
+        curPvs[idx].statut = 'signe';
         curPvs[idx].scanDeposeLe = nowIso;
         curPvs[idx].scanStatut = 'valide';
-        curPvs[idx].signaturesCount = 3;
-        if (dataUrl) curPvs[idx].scanFichier = dataUrl;
-        if (fileName) curPvs[idx].scanNomFichier = fileName;
         delete curPvs[idx].scanMotifRefus;
         localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(curPvs));
-        setPvDownloaded((prev) => {
-          const next = { ...prev, [curPvs[idx].date]: true, [pvId]: true };
-          try {
-            localStorage.setItem('usmba_commission_pv_downloaded', JSON.stringify(next));
-          } catch {}
-          return next;
-        });
         setPvs(curPvs.map(enrichirPVLecture));
-        broadcastPvsUpdated();
+        window.dispatchEvent(new CustomEvent('usmba_pvs_updated'));
         logEvent(
           { id: enseignantId, nom: enseignantNom, role: 'enseignant' },
           fr.journalActions.scanPvDepose,
           `PV-${curPvs[idx].date}-${(curPvs[idx].code || '').slice(0, 4)}`,
-          fileName ? `Scan PV déposé (${fileName})` : 'Scan signé déposé par le directeur'
+          'Scan signé déposé par le directeur'
         );
         setFeedback({ id: pvId, text: fr.commission.scanDeposeToast });
-        setTimeout(() => setFeedback(null), 3500);
-        void syncPvBestEffort();
+        setTimeout(() => setFeedback(null), 3000);
       }
-    } catch {
-      setScanUploadError({ pvId, text: 'Stockage plein, impossible d’enregistrer ce fichier.' });
-    }
-  };
-
-  const handleFileScanChange = (pvId: string, e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
-    setScanUploadError(null);
-    const lowerName = file.name.toLowerCase();
-    const isPdf = file.type === 'application/pdf' || lowerName.endsWith('.pdf');
-    const isImg = file.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp)$/.test(lowerName);
-    if (!isPdf && !isImg) {
-      setScanUploadError({ pvId, text: fr.commission.scanFichierTypeInvalide });
-      return;
-    }
-    if (file.size > MAX_PV_SCAN_BYTES) {
-      setScanUploadError({ pvId, text: fr.commission.scanFichierTropGrand });
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        saveScanFileToPv(pvId, reader.result, file.name);
-      }
-    };
-    reader.readAsDataURL(file);
+    } catch {}
   };
 
   const handleEnvoyerStructure = (pvId: string) => {
+    const confirmed = window.confirm(fr.commission.confirmEnvoyerStructure);
+    if (!confirmed) return;
+
     try {
       const raw = localStorage.getItem('usmba_doctorat_pvs');
-      const curPvs: PV[] = raw ? JSON.parse(raw) : [];
+      let curPvs: PV[] = raw ? JSON.parse(raw) : [];
       const idx = curPvs.findIndex((p) => p.id === pvId);
       if (idx !== -1) {
         const nowIso = new Date().toISOString();
-        const pv = curPvs[idx];
-        pv.structure = pv.structure?.trim() || resolveDirectorStructure(pv.directeurId || enseignantId);
-        pv.statut = 'envoye';
-        pv.envoyeLe = nowIso;
-        pv.envoyePar = enseignantNom;
-        pv.scanDeposeLe = pv.scanDeposeLe || nowIso;
-        pv.scanStatut = 'valide';
-        pv.signaturesCount = 3;
-        delete pv.scanMotifRefus;
+        curPvs[idx].statut = 'envoye';
+        curPvs[idx].envoyeLe = nowIso;
+        curPvs[idx].envoyePar = enseignantNom;
         localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(curPvs));
-        setPvDownloaded((prev) => {
-          const next = { ...prev, [pv.date]: true, [pv.id]: true };
-          try {
-            localStorage.setItem('usmba_commission_pv_downloaded', JSON.stringify(next));
-          } catch {}
-          return next;
-        });
         setPvs(curPvs.map(enrichirPVLecture));
-        broadcastPvsUpdated();
+        window.dispatchEvent(new CustomEvent('usmba_pvs_updated'));
         logEvent(
           { id: enseignantId, nom: enseignantNom, role: 'enseignant' },
           fr.journalActions.pvEnvoye,
-          `PV-${pv.date}-${(pv.code || '').slice(0, 4)}`,
-          `Transmis à la structure (${pv.structure || ''})`
+          `PV-${curPvs[idx].date}-${(curPvs[idx].code || '').slice(0, 4)}`,
+          `Transmis à la structure (${curPvs[idx].structure || ''})`
         );
         setFeedback({ id: pvId, text: fr.commission.pvEnvoyeToast });
-        setTimeout(() => setFeedback(null), 3500);
-        void syncPvBestEffort();
+        setTimeout(() => setFeedback(null), 3000);
       }
     } catch {}
   };
@@ -925,7 +777,7 @@ export const Commission: React.FC<CommissionProps> = ({
       }
       localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(curPvs));
       setPvs(curPvs);
-      broadcastPvsUpdated();
+      window.dispatchEvent(new CustomEvent('usmba_pvs_updated'));
       setReopenModalDate(null);
       setReopenMotif('');
       setReopenError(null);
@@ -1111,6 +963,7 @@ export const Commission: React.FC<CommissionProps> = ({
             const presentCount = presentCreneauxDate.length;
             const evaluatedCount = presentCreneauxDate.filter((c) => Boolean(getResultatForCreneau(c.id))).length;
             const allEvaluated = presentCount > 0 && evaluatedCount === presentCount;
+            const isDownloaded = Boolean(existingPV && (pvDownloaded[existingPV.id] || pvDownloaded[date] || existingPV.scanDeposeLe));
             const isScanDepose = Boolean(
               existingPV &&
                 (existingPV.statut === 'signe' ||
@@ -1124,7 +977,7 @@ export const Commission: React.FC<CommissionProps> = ({
             );
             const lieu = creneauxDate[0]?.lieu || 'CED';
 
-            // Suivi en 3 étapes directes : Notes -> PV généré -> Envoyé à la Structure
+            // Suivi en 4 étapes
             const step1Done = allEvaluated;
             const step1Current = !allEvaluated;
 
@@ -1132,9 +985,13 @@ export const Commission: React.FC<CommissionProps> = ({
             const step2Current = !step2Done && step1Done;
             const step2Upcoming = !step2Done && !step1Done;
 
-            const step3Done = isEnvoye;
+            const step3Done = isScanDepose;
             const step3Current = !step3Done && step2Done;
             const step3Upcoming = !step3Done && !step2Done;
+
+            const step4Done = isEnvoye;
+            const step4Current = !step4Done && step3Done;
+            const step4Upcoming = !step4Done && !step3Done;
 
             const steps = [
               {
@@ -1153,10 +1010,17 @@ export const Commission: React.FC<CommissionProps> = ({
               },
               {
                 id: 3,
-                label: 'Envoyé à la Structure',
+                label: 'Scan déposé',
                 done: step3Done,
                 current: step3Current,
                 upcoming: step3Upcoming,
+              },
+              {
+                id: 4,
+                label: 'Envoyé à la Structure',
+                done: step4Done,
+                current: step4Current,
+                upcoming: step4Upcoming,
               },
             ];
 
@@ -1248,8 +1112,8 @@ export const Commission: React.FC<CommissionProps> = ({
                   </div>
                 </div>
 
-                {/* 2. Suivi en 3 étapes (icône + texte) */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 py-1">
+                {/* 2. Suivi en 4 étapes (icône + texte) */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 py-1">
                   {steps.map((st) => {
                     if (st.done) {
                       return (
@@ -1893,90 +1757,70 @@ export const Commission: React.FC<CommissionProps> = ({
                         </div>
                       </>
                     )
-                  ) : !isEnvoye ? (
-                    /* Étape 3 : Télécharger tous les PV -> Scanner le PV ou Importer PDF/scan -> Envoyer à la Structure */
-                    <div className="w-full space-y-2.5">
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                        <div className="space-y-0.5">
-                          <div className="text-xs text-slate-700 font-semibold flex items-center gap-2">
-                            <FileCheck size={14} className="text-emerald-600 shrink-0" />
-                            <span>
-                              {existingPV.scanFichier
-                                ? fr.commission.scanJointLabel.replace(
-                                    '{nom}',
-                                    existingPV.scanNomFichier || 'PV scanné'
-                                  )
-                                : pvDownloaded[existingPV.id] || pvDownloaded[date]
-                                ? fr.commission.pvTelechargePretScan
-                                : 'PV prêt · Téléchargez, scannez puis envoyez à la Structure'}
-                            </span>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <button
-                            type="button"
-                            onClick={() => handleDownloadPV(existingPV)}
-                            className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-xl transition cursor-pointer"
-                          >
-                            <Printer size={14} />
-                            <span>{fr.commission.btnTelechargerTousPV}</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setScanUploadError(null);
-                              setScanCameraPvId(existingPV.id);
-                            }}
-                            className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-xl transition cursor-pointer"
-                          >
-                            <Camera size={14} />
-                            <span>{fr.commission.btnScannerPV}</span>
-                          </button>
-
-                          <label className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl transition cursor-pointer">
-                            <Upload size={14} />
-                            <span>{fr.commission.btnImporterPdfScan}</span>
-                            <input
-                              type="file"
-                              accept=".pdf,image/*"
-                              className="hidden"
-                              onChange={(e) => handleFileScanChange(existingPV.id, e)}
-                            />
-                          </label>
-
-                          {existingPV.scanFichier && (
-                            <button
-                              type="button"
-                              onClick={() => setPreviewScanPv(existingPV)}
-                              className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-sky-800 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-xl transition cursor-pointer"
-                            >
-                              <Eye size={14} />
-                              <span>{fr.commission.btnVoirScanJoint}</span>
-                            </button>
-                          )}
-
-                          <button
-                            type="button"
-                            onClick={() => handleEnvoyerStructure(existingPV.id)}
-                            className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl shadow-xs transition cursor-pointer"
-                          >
-                            <Send size={14} />
-                            <span>Envoyer à la Structure</span>
-                          </button>
-                        </div>
+                  ) : !isDownloaded ? (
+                    /* Étape 2 : Télécharger le PV */
+                    <>
+                      <div className="text-xs text-slate-600 flex items-center gap-2">
+                        <span className="font-semibold text-slate-800">PV prêt à signer</span>
+                        <span className="text-slate-400">•</span>
+                        <span className="text-[11px] font-mono text-slate-500">Ref {(existingPV.code || '').slice(0, 4)}</span>
                       </div>
-
-                      {scanUploadError?.pvId === existingPV.id && (
-                        <div className="p-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold flex items-center gap-1.5">
-                          <AlertCircle size={14} className="shrink-0" />
-                          <span>{scanUploadError.text}</span>
-                        </div>
-                      )}
-                    </div>
+                      <div className="flex flex-col items-start sm:items-end gap-1">
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadPV(existingPV)}
+                          className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl shadow-xs transition cursor-pointer"
+                        >
+                          <Printer size={14} />
+                          <span>{fr.commission.btnTelechargerSeance}</span>
+                        </button>
+                        <p className="text-[11px] text-slate-500 font-medium">
+                          {fr.commission.indicationPdf}
+                        </p>
+                      </div>
+                    </>
+                  ) : !isScanDepose ? (
+                    /* Étape 3 : Déposer le scan */
+                    <>
+                      <div className="text-xs text-slate-600 flex items-center gap-2">
+                        <span className="font-semibold text-slate-800">PV téléchargé</span>
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadPV(existingPV)}
+                          className="text-[11px] text-emerald-700 underline hover:text-emerald-800 cursor-pointer"
+                        >
+                          (Réimprimer la séance)
+                        </button>
+                      </div>
+                      <label className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl shadow-xs transition cursor-pointer">
+                        <Upload size={14} />
+                        <span>Déposer le scan</span>
+                        <input
+                          type="file"
+                          accept=".pdf,image/*"
+                          className="hidden"
+                          onChange={() => handleDeposerScanCommission(existingPV.id)}
+                        />
+                      </label>
+                    </>
+                  ) : existingPV.statut === 'signe' ? (
+                    /* Étape 4 : Envoyer à la Structure (actif) */
+                    <>
+                      <div className="text-xs text-indigo-900 font-semibold flex items-center gap-1.5">
+                        <FileCheck size={14} className="text-indigo-600 shrink-0" />
+                        <span>Scan signé déposé · Prêt pour transmission</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleEnvoyerStructure(existingPV.id)}
+                        className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl shadow-xs transition cursor-pointer"
+                      >
+                        <Send size={14} />
+                        <span>Envoyer à la Structure</span>
+                      </button>
+                    </>
                   ) : (
-                    /* Déjà envoyé (grisé avec confirmation + accès téléchargement & scan joint) */
+                    /* Étape 4 : Déjà envoyé (grisé avec raison écrite) */
                     <>
                       <div className="text-xs text-sky-900 font-semibold flex items-center gap-1.5">
                         <Send size={14} className="text-sky-600 shrink-0" />
@@ -1986,34 +1830,14 @@ export const Commission: React.FC<CommissionProps> = ({
                             : `Transmis à la Structure${existingPV.envoyeLe ? ` le ${formatJJMM(existingPV.envoyeLe.split('T')[0])}` : ''}`}
                         </span>
                       </div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <button
-                          type="button"
-                          onClick={() => handleDownloadPV(existingPV)}
-                          className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-xl transition cursor-pointer"
-                        >
-                          <Printer size={14} />
-                          <span>{fr.commission.btnTelechargerTousPV}</span>
-                        </button>
-                        {existingPV.scanFichier && (
-                          <button
-                            type="button"
-                            onClick={() => setPreviewScanPv(existingPV)}
-                            className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-sky-800 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-xl transition cursor-pointer"
-                          >
-                            <Eye size={14} />
-                            <span>{fr.commission.btnVoirScanJoint}</span>
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          disabled
-                          className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-xl bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed"
-                        >
-                          <Send size={14} />
-                          <span>Envoyé à la Structure</span>
-                        </button>
-                      </div>
+                      <button
+                        type="button"
+                        disabled
+                        className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-xl bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed"
+                      >
+                        <Send size={14} />
+                        <span>Envoyé à la Structure</span>
+                      </button>
                     </>
                   )}
                 </div>
@@ -2194,92 +2018,6 @@ export const Commission: React.FC<CommissionProps> = ({
               </div>
             );
           })}
-        </div>
-      )}
-
-      {/* Caméra pour scanner le PV signé */}
-      {scanCameraPvId && (
-        <CameraCapture
-          title={fr.commission.scanCameraTitre}
-          onCapture={(dataUrl) => {
-            const targetPv = pvs.find((p) => p.id === scanCameraPvId);
-            const fileName = `pv-scan-${targetPv?.date || 'seance'}.jpg`;
-            saveScanFileToPv(scanCameraPvId, dataUrl, fileName);
-            setScanCameraPvId(null);
-          }}
-          onClose={() => setScanCameraPvId(null)}
-        />
-      )}
-
-      {/* Aperçu du PV joint (PDF ou image scannée) */}
-      {previewScanPv && previewScanPv.scanFichier && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="bg-white rounded-2xl max-w-3xl w-full p-5 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
-            <div className="flex items-center justify-between border-b pb-3 border-slate-100">
-              <div>
-                <h3 className="font-bold text-sm text-slate-900 flex items-center gap-2">
-                  <FileText size={16} className="text-emerald-700" />
-                  <span>{previewScanPv.scanNomFichier || `PV du ${formatJJMM(previewScanPv.date)}`}</span>
-                </h3>
-                <p className="text-[11px] text-slate-500 mt-0.5">
-                  Séance du {formatJJMMAAAA(previewScanPv.date)}
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                {isPdfData(previewScanPv.scanFichier) && (
-                  <button
-                    type="button"
-                    onClick={() => openPdfInNewTab(previewScanPv.scanFichier!)}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-sky-800 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-lg cursor-pointer"
-                  >
-                    <ExternalLink size={13} />
-                    <span>{fr.cedSeances.ouvrirPdfNouvelOnglet}</span>
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() =>
-                    downloadDataUrl(
-                      previewScanPv.scanFichier!,
-                      previewScanPv.scanNomFichier ||
-                        (isPdfData(previewScanPv.scanFichier)
-                          ? `pv-${previewScanPv.date}.pdf`
-                          : `pv-${previewScanPv.date}.jpg`)
-                    )
-                  }
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-lg cursor-pointer"
-                >
-                  <Download size={13} />
-                  <span>{fr.commission.btnTelecharger}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPreviewScanPv(null)}
-                  className="text-slate-400 hover:text-slate-600 text-base font-bold p-1 cursor-pointer"
-                >
-                  ✕
-                </button>
-              </div>
-            </div>
-
-            <div className="flex-1 min-h-[340px] bg-slate-100 rounded-xl overflow-hidden flex items-center justify-center border border-slate-200">
-              {isPdfData(previewScanPv.scanFichier) ? (
-                <iframe
-                  src={previewScanPv.scanFichier}
-                  title={previewScanPv.scanNomFichier || 'PV PDF'}
-                  className="w-full h-[65vh] border-0"
-                />
-              ) : isImageData(previewScanPv.scanFichier) ? (
-                <img
-                  src={previewScanPv.scanFichier}
-                  alt={previewScanPv.scanNomFichier || 'Scan PV'}
-                  className="max-w-full max-h-[65vh] object-contain"
-                />
-              ) : (
-                <p className="text-xs text-slate-500 p-6">Aperçu indisponible pour ce format.</p>
-              )}
-            </div>
-          </div>
         </div>
       )}
     </div>

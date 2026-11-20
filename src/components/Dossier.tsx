@@ -6,13 +6,8 @@ import { storageService } from '../services/storage';
 import { CameraCapture } from './CameraCapture';
 import { fr } from '../i18n/fr';
 import { logCandidatureEnvoyee } from '../utils/journal';
-import {
-  normaliserTel,
-  notifierDirecteurCandidatureEnvoyee,
-  reconcileCandidateFromStorage,
-  persistUnifiedCandidate,
-} from '../utils/messages';
-import { lireCinDeuxFaces, prechargerOcrCin, CinOcrOptions, CinOcrFields } from '../utils/ocrCin';
+import { normaliserTel, notifierDirecteurCandidatureEnvoyee } from '../utils/messages';
+import { lireCinDeuxFaces } from '../utils/ocrCin';
 import { ProgressionCandidat } from './ProgressionCandidat';
 
 function formatDateJJMMAAAA(iso?: string): string {
@@ -31,14 +26,14 @@ function findCandidateById(id?: string): Candidat | null {
     const rawOverrides = localStorage.getItem('usmba_candidats_overrides');
     if (rawOverrides) {
       const overrides: Record<string, Candidat> = JSON.parse(rawOverrides);
-      if (overrides[id]) return reconcileCandidateFromStorage(overrides[id]);
+      if (overrides[id]) return overrides[id];
     }
   } catch {}
   try {
     const rawCur = localStorage.getItem('usmba_doctorat_candidat');
     if (rawCur) {
       const cur: Candidat = JSON.parse(rawCur);
-      if (cur.id === id) return reconcileCandidateFromStorage(cur);
+      if (cur.id === id) return cur;
     }
   } catch {}
   try {
@@ -46,16 +41,39 @@ function findCandidateById(id?: string): Candidat | null {
     if (rawAccounts) {
       const accounts: Candidat[] = JSON.parse(rawAccounts);
       const found = accounts.find((a) => a.id === id);
-      if (found) return reconcileCandidateFromStorage(found);
+      if (found) return found;
     }
   } catch {}
   const mock = MOCK_CANDIDATS.find((c) => c.id === id);
-  if (mock) return reconcileCandidateFromStorage(mock);
+  if (mock) return mock;
   return null;
 }
 
 function persistCandidate(cand: Candidat): void {
-  persistUnifiedCandidate(cand, true);
+  try {
+    const rawOverrides = localStorage.getItem('usmba_candidats_overrides');
+    const overrides: Record<string, Candidat> = rawOverrides ? JSON.parse(rawOverrides) : {};
+    overrides[cand.id] = cand;
+    localStorage.setItem('usmba_candidats_overrides', JSON.stringify(overrides));
+
+    const rawCur = localStorage.getItem('usmba_doctorat_candidat');
+    if (rawCur) {
+      const cur: Candidat = JSON.parse(rawCur);
+      if (cur.id === cand.id) {
+        localStorage.setItem('usmba_doctorat_candidat', JSON.stringify(cand));
+      }
+    }
+
+    const rawAccounts = localStorage.getItem('usmba_registered_accounts');
+    if (rawAccounts) {
+      const accounts: Candidat[] = JSON.parse(rawAccounts);
+      const idx = accounts.findIndex((a) => a.id === cand.id);
+      if (idx !== -1) {
+        accounts[idx] = cand;
+        localStorage.setItem('usmba_registered_accounts', JSON.stringify(accounts));
+      }
+    }
+  } catch {}
 }
 
 function resolveCandidate(candidatId?: string, fallback?: Candidat | null): Candidat {
@@ -65,9 +83,9 @@ function resolveCandidate(candidatId?: string, fallback?: Candidat | null): Cand
   }
   try {
     const raw = localStorage.getItem('usmba_doctorat_candidat');
-    if (raw) return reconcileCandidateFromStorage(JSON.parse(raw));
+    if (raw) return JSON.parse(raw);
   } catch {}
-  return fallback ? reconcileCandidateFromStorage(fallback) : {
+  return fallback || {
     id: 'visiteur-001',
     nom: '',
     cne: '',
@@ -161,7 +179,6 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
   }>({});
   const [cinVerifySaved, setCinVerifySaved] = useState<boolean>(false);
   const [cinOcrStatus, setCinOcrStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
-  const [autoOcrCamera, setAutoOcrCamera] = useState<boolean>(true);
   const [massarInput, setMassarInput] = useState<string>('');
   const [whatsappInput, setWhatsappInput] = useState<string>('');
   const [massarError, setMassarError] = useState<string | null>(null);
@@ -172,7 +189,6 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
   const [pvs, setPvs] = useState<PV[]>([]);
   const [viewingPiece, setViewingPiece] = useState<{ piece: Piece; side?: 'recto' | 'verso' } | null>(null);
   const [isCinEditing, setIsCinEditing] = useState<boolean>(false);
-  const [cinVerifyModalOpen, setCinVerifyModalOpen] = useState<boolean>(false);
   const [confirmEnvoiOpen, setConfirmEnvoiOpen] = useState<boolean>(false);
 
   // Cas particulier state
@@ -183,27 +199,20 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
 
   const fileInputRefs = useRef<{ [key: string]: HTMLInputElement | null }>({});
   const ocrRunIdRef = useRef<number>(0);
-  const ocrFilledFieldsRef = useRef<{
-    nom?: boolean;
-    prenom?: boolean;
-    cin?: boolean;
-    dateNaissance?: boolean;
-  }>({});
   const loadedCandidatIdRef = useRef<string | null>(null);
 
-  // Fermeture de l'aperçu de pièce, modale CIN ou confirmation d'envoi par la touche Échap
+  // Fermeture de l'aperçu de pièce ou confirmation d'envoi par la touche Échap
   useEffect(() => {
-    if (!viewingPiece && !confirmEnvoiOpen && !cinVerifyModalOpen) return;
+    if (!viewingPiece && !confirmEnvoiOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (viewingPiece) setViewingPiece(null);
         if (confirmEnvoiOpen) setConfirmEnvoiOpen(false);
-        if (cinVerifyModalOpen) setCinVerifyModalOpen(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [viewingPiece, confirmEnvoiOpen, cinVerifyModalOpen]);
+  }, [viewingPiece, confirmEnvoiOpen]);
 
   // Charger le candidat et ses données depuis le localStorage ou via candidatId
   useEffect(() => {
@@ -219,19 +228,12 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
             parsed = JSON.parse(raw);
           }
         }
-        if (parsed) {
-          parsed = reconcileCandidateFromStorage(parsed);
-          if (!candidatId && parsed.compteCree) {
-            localStorage.setItem('usmba_doctorat_candidat', JSON.stringify(parsed));
-          }
-        }
 
         if (parsed) {
           setCandidat(parsed);
           const isNewCandidate = loadedCandidatIdRef.current !== parsed.id;
           loadedCandidatIdRef.current = parsed.id;
           if (isNewCandidate) {
-            ocrFilledFieldsRef.current = {};
             setCinFormNom(parsed.nomFamille || '');
             setCinFormPrenom(parsed.prenom || '');
             setCinFormNumero(parsed.cin || '');
@@ -264,29 +266,6 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
             setPieces(normalized);
           } else if (candidatId) {
             setPieces(DEFAULT_PIECES);
-          } else {
-            let restoredPieces: Piece[] | null = null;
-            try {
-              const rawDossier = localStorage.getItem('usmba_doctorat_dossier');
-              const rawPieces = localStorage.getItem('usmba_doctorat_pieces');
-              if (rawDossier && rawPieces) {
-                const storedDossier = JSON.parse(rawDossier);
-                const storedPieces: Piece[] = JSON.parse(rawPieces);
-                if (
-                  storedDossier?.candidatId === parsed.id &&
-                  Array.isArray(storedPieces) &&
-                  storedPieces.length > 0
-                ) {
-                  restoredPieces = ORDERED_TYPES.map((t) => {
-                    const found = storedPieces.find(
-                      (p) => p.type.toUpperCase() === t.toUpperCase()
-                    );
-                    return found ? { ...found, type: t } : { type: t, statut: 'absente' as const };
-                  });
-                }
-              }
-            } catch {}
-            setPieces(restoredPieces || DEFAULT_PIECES);
           }
         } else {
           // Fallback depuis usmba_doctorat_pieces
@@ -379,10 +358,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
 
   const handleConfirmEnvoyerDossier = () => {
     const cur = resolveCandidate(candidatId, candidat);
-    const curHasACorriger = (cur.candidatures || []).some(
-      (id) => cur.candidaturesStatuts?.[id] === 'a_corriger'
-    );
-    if (cur.dossier?.dateEnvoi && !curHasACorriger) return;
+    if (cur.dossier?.dateEnvoi) return;
     const check = dossierComplet(cur);
     const hasThreeSubjectsCur = Array.isArray(cur.candidatures) && cur.candidatures.length >= 3;
     const cinOk = Boolean(
@@ -416,7 +392,6 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
     cur.candidaturesEnvoyeLe = updatedEnvoyeLe;
     cur.envoyeLe = cur.envoyeLe || nowIso;
     cur.anomalie = undefined;
-    cur.candidaturesAnomalies = undefined;
     cur.dossier = {
       casParticulier: Boolean(cur.dossier?.casParticulier),
       motif: cur.dossier?.motif,
@@ -434,24 +409,6 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
     setCandidat({ ...cur });
     setIsCinEditing(false);
     setConfirmEnvoiOpen(false);
-
-    try {
-      const rawSim = localStorage.getItem('usmba_simulated_statuts');
-      if (rawSim) {
-        const simParsed = JSON.parse(rawSim);
-        let simChanged = false;
-        (cur.candidatures || []).forEach((sId) => {
-          const k = `${cur.id}-${sId}`;
-          if (simParsed[k] === 'a_corriger') {
-            simParsed[k] = 'deposee';
-            simChanged = true;
-          }
-        });
-        if (simChanged) {
-          localStorage.setItem('usmba_simulated_statuts', JSON.stringify(simParsed));
-        }
-      }
-    } catch {}
 
     try {
       const rawDossier = localStorage.getItem('usmba_doctorat_dossier');
@@ -488,9 +445,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
     window.dispatchEvent(new CustomEvent('usmba_pieces_updated'));
     window.dispatchEvent(new CustomEvent('usmba_dossier_updated'));
 
-    setTransmissionSuccess(
-      curHasACorriger ? fr.dossier.candidatureRenvoyeeSucces : fr.dossier.candidatureEnvoyeeSucces
-    );
+    setTransmissionSuccess(fr.dossier.candidatureEnvoyeeSucces);
     setTimeout(() => setTransmissionSuccess(null), 5000);
   };
 
@@ -539,14 +494,12 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
             return found || { type: t, statut: 'absente' as const };
           });
 
-    const nowIso = new Date().toISOString();
     const updated = currentList.map((p) => {
       if (p.type.toUpperCase() === type.toUpperCase()) {
         return {
           ...p,
           ...updates,
           type,
-          dateMaj: updates.dateMaj || nowIso,
         };
       }
       return p;
@@ -567,7 +520,6 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
             return found || { type: t, statut: 'absente' as const };
           });
 
-    const nowIso = new Date().toISOString();
     const updated = currentList.map((p) => {
       if (p.type.toUpperCase() === 'CIN') {
         const nextRecto = side === 'recto' ? fichier : p.fichier;
@@ -587,7 +539,6 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
           ...p,
           type: 'CIN' as const,
           statut: nextStatut,
-          dateMaj: nowIso,
           fichier: nextRecto,
           source: nextSourceRecto,
           fichierVerso: nextVerso,
@@ -644,10 +595,6 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
     !cinFormErrors.prenom &&
     !cinFormErrors.cin &&
     !cinFormErrors.dateNaissance;
-  const hasCinVersoUploaded = Boolean(
-    pieces.find((p) => p && p.type && p.type.toUpperCase() === 'CIN')?.fichierVerso
-  );
-  const canSaveCinForm = isCinFormValid && hasCinVersoUploaded;
 
   const openCinVerifyForm = () => {
     const curCandidat = resolveCandidate(candidatId, candidat);
@@ -659,14 +606,10 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
     setCinVerifySaved(false);
   };
 
-  const runCinOcr = async (
-    rectoSource?: string,
-    versoSource?: string,
-    options?: CinOcrOptions
-  ) => {
+  const runCinOcr = async (rectoSource?: string, versoSource?: string) => {
     const runId = ++ocrRunIdRef.current;
     setCinOcrStatus('loading');
-    const ocrResult = await lireCinDeuxFaces(rectoSource, versoSource, options);
+    const ocrResult = await lireCinDeuxFaces(rectoSource, versoSource);
     if (runId !== ocrRunIdRef.current) return;
 
     if (!ocrResult.success) {
@@ -675,32 +618,29 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
     }
 
     const { nom, prenom, cin, dateNaissance } = ocrResult.fields;
+    const curCandidat = resolveCandidate(candidatId, candidat);
 
     if (nom) {
       setCinFormNom((prev) => {
-        if (prev.trim() && !ocrFilledFieldsRef.current.nom) return prev;
-        ocrFilledFieldsRef.current.nom = true;
+        if (prev.trim() || curCandidat.nomFamille?.trim()) return prev;
         return nom;
       });
     }
     if (prenom) {
       setCinFormPrenom((prev) => {
-        if (prev.trim() && !ocrFilledFieldsRef.current.prenom) return prev;
-        ocrFilledFieldsRef.current.prenom = true;
+        if (prev.trim() || curCandidat.prenom?.trim()) return prev;
         return prenom;
       });
     }
     if (cin) {
       setCinFormNumero((prev) => {
-        if (prev.trim() && !ocrFilledFieldsRef.current.cin) return prev;
-        ocrFilledFieldsRef.current.cin = true;
+        if (prev.trim() || curCandidat.cin?.trim()) return prev;
         return cin;
       });
     }
     if (dateNaissance) {
       setCinFormDateNaissance((prev) => {
-        if (prev.trim() && !ocrFilledFieldsRef.current.dateNaissance) return prev;
-        ocrFilledFieldsRef.current.dateNaissance = true;
+        if (prev.trim() || curCandidat.dateNaissance?.trim()) return prev;
         return dateNaissance;
       });
     }
@@ -716,7 +656,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
       cin: true,
       dateNaissance: true,
     });
-    if (!canSaveCinForm) return;
+    if (!isCinFormValid) return;
 
     const cleanNom = cinFormNom.trim();
     const cleanPrenom = cinFormPrenom.trim();
@@ -750,7 +690,6 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
 
       setCinVerifySaved(true);
       setIsCinEditing(false);
-      setCinVerifyModalOpen(false);
       window.dispatchEvent(new CustomEvent('usmba_pieces_updated'));
       setTimeout(() => {
         setCinVerifySaved(false);
@@ -877,7 +816,6 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
         }
         if (nextRecto && nextVerso) {
           setCinUploadSplitOpen(false);
-          setCinVerifyModalOpen(true);
         }
         openCinVerifyForm();
         void runCinOcr(nextRecto, nextVerso);
@@ -917,21 +855,15 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
       try {
         if (type.toUpperCase() === 'CIN') {
           const targetSide = cinSide || 'recto';
-          const currentCin = pieces.find((p) => p && p.type && p.type.toUpperCase() === 'CIN');
-          const nextRecto = targetSide === 'recto' ? result : currentCin?.fichier;
-          const nextVerso = targetSide === 'verso' ? result : currentCin?.fichierVerso;
-
           handleUpdateCinSide(targetSide, result, 'televersement');
           if (targetSide === 'recto') {
             setProvenCinRectoImgError(false);
+            openCinVerifyForm();
+            void runCinOcr(result);
           } else {
             setProvenCinVersoImgError(false);
+            openCinVerifyForm();
           }
-          openCinVerifyForm();
-          if (nextRecto && nextVerso) {
-            setCinVerifyModalOpen(true);
-          }
-          void runCinOcr(nextRecto, nextVerso);
         } else {
           handleUpdatePiece(type, {
             statut: 'prouvee',
@@ -951,43 +883,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
     e.target.value = '';
   };
 
-  const applyOcrFieldsToForm = (fields: CinOcrFields) => {
-    const { nom, prenom, cin, dateNaissance } = fields;
-    if (nom) {
-      setCinFormNom((prev) => {
-        if (prev.trim() && !ocrFilledFieldsRef.current.nom) return prev;
-        ocrFilledFieldsRef.current.nom = true;
-        return nom;
-      });
-    }
-    if (prenom) {
-      setCinFormPrenom((prev) => {
-        if (prev.trim() && !ocrFilledFieldsRef.current.prenom) return prev;
-        ocrFilledFieldsRef.current.prenom = true;
-        return prenom;
-      });
-    }
-    if (cin) {
-      setCinFormNumero((prev) => {
-        if (prev.trim() && !ocrFilledFieldsRef.current.cin) return prev;
-        ocrFilledFieldsRef.current.cin = true;
-        return cin;
-      });
-    }
-    if (dateNaissance) {
-      setCinFormDateNaissance((prev) => {
-        if (prev.trim() && !ocrFilledFieldsRef.current.dateNaissance) return prev;
-        ocrFilledFieldsRef.current.dateNaissance = true;
-        return dateNaissance;
-      });
-    }
-  };
-
-  const handleDualCinCaptureSuccess = (
-    rectoDataUrl: string,
-    versoDataUrl: string,
-    extractedFields?: CinOcrFields
-  ) => {
+  const handleDualCinCaptureSuccess = (rectoDataUrl: string, versoDataUrl: string) => {
     setActiveCameraTarget(null);
     setCinUploadSplitOpen(false);
     handleUpdatePiece('CIN', {
@@ -1001,31 +897,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
     setProvenCinRectoImgError(false);
     setProvenCinVersoImgError(false);
     openCinVerifyForm();
-    setCinVerifyModalOpen(true);
-
-    const hasPreExtracted = Boolean(
-      extractedFields &&
-        (extractedFields.nom ||
-          extractedFields.prenom ||
-          extractedFields.cin ||
-          extractedFields.dateNaissance)
-    );
-    if (hasPreExtracted && extractedFields) {
-      applyOcrFieldsToForm(extractedFields);
-      const missingField =
-        !extractedFields.nom ||
-        !extractedFields.prenom ||
-        !extractedFields.cin ||
-        !extractedFields.dateNaissance;
-      if (!missingField) {
-        setCinOcrStatus('success');
-        return;
-      }
-    }
-
-    if (autoOcrCamera || hasPreExtracted) {
-      void runCinOcr(rectoDataUrl, versoDataUrl, { autoOcrOnCameraCapture: true });
-    }
+    void runCinOcr(rectoDataUrl, versoDataUrl);
   };
 
   const handleCaptureSuccess = (dataUrl: string) => {
@@ -1044,15 +916,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
           setProvenCinVersoImgError(false);
         }
         openCinVerifyForm();
-        if (nextRecto && nextVerso) {
-          setCinVerifyModalOpen(true);
-        }
-        if (autoOcrCamera) {
-          void runCinOcr(nextRecto, nextVerso, {
-            autoOcrOnCameraCapture: true,
-            cameraSide: targetSide,
-          });
-        }
+        void runCinOcr(nextRecto, nextVerso);
       } else {
         handleUpdatePiece(targetPiece, {
           statut: 'prouvee',
@@ -1198,63 +1062,20 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
   const hasThreeSubjects = candidaturesCount >= 3;
   const missingSubjectsCount = Math.max(0, 3 - candidaturesCount);
   const hasLegacyRetenue = Object.values(statuts).some((s) => s === 'retenue');
-  const dateEnvoi = !hasACorriger
-    ? candidat?.dossier?.dateEnvoi ||
-      candidat?.envoyeLe ||
-      Object.values(candidat?.candidaturesEnvoyeLe || {})[0]
-    : undefined;
+  const dateEnvoi =
+    candidat?.dossier?.dateEnvoi ||
+    (!hasACorriger
+      ? candidat?.envoyeLe || Object.values(candidat?.candidaturesEnvoyeLe || {})[0]
+      : undefined);
   const isDossierEnvoye = Boolean(dateEnvoi || (hasLegacyRetenue && !hasACorriger));
-
-  useEffect(() => {
-    if (autoOcrCamera && !isDirecteur && !isDossierEnvoye) {
-      void prechargerOcrCin();
-    }
-  }, [autoOcrCamera, isDirecteur, isDossierEnvoye]);
   const hasSavedMassar = Boolean(
     candidat?.cne?.trim() && /^[A-Za-z][0-9]{9}$/.test(candidat.cne.trim())
   );
   const hasSavedWhatsapp = Boolean(
     candidat?.tel?.trim() && normaliserTel(candidat.tel.trim())
   );
-
-  const activeAnomaliePieces = activeAnomalie
-    ? activeAnomalie.pieces && activeAnomalie.pieces.length > 0
-      ? activeAnomalie.pieces
-      : [activeAnomalie.piece]
-    : [];
-
-  const isPieceFlaggedUnreplaced = (type: PieceType, pieceObj?: Piece): boolean => {
-    if (isDirecteur || (!hasACorriger && pieceObj?.statut !== 'illisible')) return false;
-    const upper = type.toUpperCase();
-    const matches =
-      pieceObj?.statut === 'illisible' ||
-      activeAnomaliePieces.some(
-        (ap) =>
-          (ap === 'CIN' && upper === 'CIN') ||
-          (ap === 'DIPLOME' && upper === 'DIPLOME') ||
-          (ap === 'RELEVES' && upper === 'RELEVES') ||
-          (ap === 'CURSUS' && upper === 'DIPLOME')
-      );
-    if (!matches) return false;
-    if (!pieceObj || pieceObj.statut !== 'prouvee') return true;
-    const pieceTime = pieceObj.dateMaj ? Date.parse(pieceObj.dateMaj) : 0;
-    const anomalieTime = activeAnomalie?.le ? Date.parse(activeAnomalie.le) : 0;
-    return !pieceTime || Number.isNaN(pieceTime) || (anomalieTime > 0 && pieceTime < anomalieTime);
-  };
-
-  const unreplacedAnomalieLabels = ORDERED_TYPES.filter((t) => {
-    const found = safePieces.find((p) => p && p.type?.toUpperCase() === t.toUpperCase());
-    return isPieceFlaggedUnreplaced(t, found);
-  }).map((t) => (t === 'CIN' ? 'CIN' : t === 'DIPLOME' ? 'Diplôme' : 'Relevés'));
-
-  const hasUnreplacedAnomaliePiece = unreplacedAnomalieLabels.length > 0;
   const canSendDossier =
-    hasThreeSubjects &&
-    checkDossier.complet &&
-    !hasUnreplacedAnomaliePiece &&
-    hasSavedCinInfos &&
-    hasSavedMassar &&
-    hasSavedWhatsapp;
+    hasThreeSubjects && checkDossier.complet && hasSavedCinInfos && hasSavedMassar && hasSavedWhatsapp;
 
   const missingItems: string[] = [];
   if (!hasThreeSubjects) {
@@ -1264,9 +1085,8 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
         : fr.dossier.raisonSujetsPluriel.replace('{count}', String(missingSubjectsCount))
     );
   }
-  const mergedMissingPieces = Array.from(new Set([...checkDossier.manques, ...unreplacedAnomalieLabels]));
-  if (mergedMissingPieces.length > 0) {
-    missingItems.push(...mergedMissingPieces);
+  if (!checkDossier.complet) {
+    missingItems.push(...checkDossier.manques);
   }
   if (!hasSavedMassar) {
     missingItems.push(fr.dossier.codeMassarManque);
@@ -1328,18 +1148,12 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
         </div>
       )}
 
-      {/* Candidat à corriger : bandeau "À corriger : [élément(s)], [motif]" */}
+      {/* Candidat à corriger : bandeau "À corriger : [élément], [motif]" */}
       {!isDirecteur && hasACorriger && activeAnomalie && (
         <div className="bg-rose-50 border border-rose-300 text-rose-950 rounded-2xl p-4 text-xs space-y-1.5 shadow-xs">
           <div className="flex items-center gap-2 font-bold text-rose-900 text-sm">
             <AlertTriangle size={18} className="text-rose-600 shrink-0" />
-            <span>
-              À corriger :{' '}
-              {activeAnomalie.pieces && activeAnomalie.pieces.length > 0
-                ? activeAnomalie.pieces.join(', ')
-                : activeAnomalie.piece}
-              , {activeAnomalie.motif}
-            </span>
+            <span>À corriger : {activeAnomalie.piece}, {activeAnomalie.motif}</span>
           </div>
           <p className="text-[11px] text-rose-800">
             Nature : <span className="font-semibold uppercase">{activeAnomalie.nature}</span>. Veuillez fournir à nouveau la pièce pour pouvoir renvoyer votre candidature.
@@ -1522,16 +1336,13 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
               );
 
           const pieceMatchesAnomalie = Boolean(
-            activeAnomaliePieces.some(
-              (ap) =>
-                (ap === 'CIN' && isCin) ||
-                (ap === 'DIPLOME' && isDiplome) ||
-                (ap === 'RELEVES' && type === 'RELEVES') ||
-                (ap === 'CURSUS' && isDiplome)
-            ) || piece.statut === 'illisible'
+            (activeAnomalie && (
+              (activeAnomalie.piece === 'CIN' && isCin) ||
+              (activeAnomalie.piece === 'DIPLOME' && isDiplome) ||
+              (activeAnomalie.piece === 'RELEVES' && type === 'RELEVES') ||
+              (activeAnomalie.piece === 'CURSUS' && isDiplome)
+            )) || piece.statut === 'illisible'
           );
-          const isFlaggedForCorrection = isPieceFlaggedUnreplaced(type, piece);
-          const effectiveIsProven = isProven && !isFlaggedForCorrection;
 
           const cardId = isDiplome
             ? 'carte-piece-diplome'
@@ -1539,13 +1350,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
             ? 'carte-piece-cin'
             : 'carte-piece-releves';
 
-          const isCinCollapsed =
-            isCin &&
-            hasSavedCinInfos &&
-            !isCinEditing &&
-            !cinVerifyModalOpen &&
-            !isFlaggedForCorrection &&
-            (effectiveIsProven || isDossierEnvoye);
+          const isCinCollapsed = isCin && hasSavedCinInfos && !isCinEditing && (isProven || isDossierEnvoye);
 
           if (isCinCollapsed) {
             const nomMaj = (candidat?.nomFamille || '').trim().toUpperCase();
@@ -1612,11 +1417,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
             <React.Fragment key={type}>
               <div
                 id={cardId}
-                className={`rounded-2xl p-4 shadow-xs space-y-3 border ${
-                  isFlaggedForCorrection
-                    ? 'bg-rose-50/30 border-rose-300 ring-1 ring-rose-200'
-                    : 'bg-white border-slate-200'
-                }`}
+                className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3"
               >
               {/* Ligne 1 : Nom de la pièce + Badge */}
               <div className="flex items-start justify-between gap-3">
@@ -1624,19 +1425,14 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                   <h3 className="text-xs font-bold text-slate-900 leading-snug">
                     {isCin ? fr.dossier.cinCardTitle : getPieceName(type)}
                   </h3>
-                  {!isCin && piece.source && effectiveIsProven && (
+                  {!isCin && piece.source && isProven && (
                     <p className="text-[10px] text-slate-400">
                       {fr.dossier.sources[piece.source] || piece.source}
                     </p>
                   )}
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap justify-end">
-                  {isFlaggedForCorrection ? (
-                    <span className="inline-flex items-center gap-1.5 font-bold rounded-full bg-rose-50 text-rose-800 border border-rose-300 text-xs px-2.5 py-0.5">
-                      <AlertTriangle size={13} className="text-rose-600 shrink-0" />
-                      <span>{fr.dossier.aCorriger}</span>
-                    </span>
-                  ) : effectiveIsProven ? (
+                  {isProven ? (
                     <span className="inline-flex items-center gap-1.5 font-medium rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs px-2.5 py-0.5">
                       <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />
                       <span>{fr.dossier.fournieBadge}</span>
@@ -1659,19 +1455,6 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                   )}
                 </div>
               </div>
-
-              {/* Alerte explicite sur la pièce signalée à corriger / remplacer */}
-              {isFlaggedForCorrection && (
-                <div className="bg-rose-50 border border-rose-200 text-rose-900 rounded-xl p-2.5 text-xs flex items-start gap-2">
-                  <AlertTriangle size={14} className="text-rose-600 shrink-0 mt-0.5" />
-                  <span className="font-medium">
-                    {fr.dossier.pieceACorrigerHint.replace(
-                      '{motif}',
-                      activeAnomalie?.motif || fr.dossier.aCorriger
-                    )}
-                  </span>
-                </div>
-              )}
 
               {/* Cas particulier attestation sur la carte Diplôme */}
               {isDiplome && casParticulier && (
@@ -1827,12 +1610,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                               {!isDirecteur && !isDossierEnvoye && (
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    handleUpdateCinSide('verso', undefined, undefined);
-                                    ocrRunIdRef.current += 1;
-                                    setCinOcrStatus('idle');
-                                    setCinVerifySaved(false);
-                                  }}
+                                  onClick={() => handleUpdateCinSide('verso', undefined, undefined)}
                                   className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-white border border-rose-200 text-rose-700 hover:bg-rose-50 transition-colors cursor-pointer flex items-center gap-1 active:scale-98"
                                 >
                                   <RotateCcw size={13} className="text-rose-600" />
@@ -1847,54 +1625,34 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                   )}
 
                   {/* Boutons Scanner / Téléverser OU panneau divisé Recto / Verso avec Retour */}
-                  {!isDirecteur && !isDossierEnvoye && !effectiveIsProven && (
+                  {!isDirecteur && !isDossierEnvoye && !isProven && (
                     <div className="space-y-2">
                       {!cinUploadSplitOpen ? (
-                        <div className="space-y-2">
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setCinUploadSplitOpen(false);
-                                if (autoOcrCamera) {
-                                  void prechargerOcrCin();
-                                }
-                                setActiveCameraTarget({ type, dual: true });
-                              }}
-                              className="flex-1 min-h-[40px] px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer active:scale-98"
-                            >
-                              <Camera size={15} />
-                              <span>{fr.dossier.scannerCin}</span>
-                            </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCinUploadSplitOpen(false);
+                              setActiveCameraTarget({ type, dual: true });
+                            }}
+                            className="flex-1 min-h-[40px] px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer active:scale-98"
+                          >
+                            <Camera size={15} />
+                            <span>{fr.dossier.scannerCin}</span>
+                          </button>
 
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setCinRectoUploadError(null);
-                                setCinVersoUploadError(null);
-                                setCinUploadSplitOpen(true);
-                              }}
-                              className="flex-1 min-h-[40px] px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer active:scale-98"
-                            >
-                              <Upload size={15} />
-                              <span>{fr.dossier.upload}</span>
-                            </button>
-                          </div>
-                          <label className="inline-flex items-center gap-2 text-xs text-slate-600 cursor-pointer select-none">
-                            <input
-                              type="checkbox"
-                              checked={autoOcrCamera}
-                              onChange={(e) => {
-                                const checked = e.target.checked;
-                                setAutoOcrCamera(checked);
-                                if (checked) {
-                                  void prechargerOcrCin();
-                                }
-                              }}
-                              className="h-3.5 w-3.5 rounded border-slate-300 text-emerald-700 focus:ring-emerald-600 cursor-pointer"
-                            />
-                            <span>{fr.dossier.ocrAutoCameraOption}</span>
-                          </label>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCinRectoUploadError(null);
+                              setCinVersoUploadError(null);
+                              setCinUploadSplitOpen(true);
+                            }}
+                            className="flex-1 min-h-[40px] px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer active:scale-98"
+                          >
+                            <Upload size={15} />
+                            <span>{fr.dossier.upload}</span>
+                          </button>
                         </div>
                       ) : (
                         <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
@@ -2002,9 +1760,6 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                                       type="button"
                                       onClick={() => {
                                         handleUpdateCinSide('verso', undefined, undefined);
-                                        ocrRunIdRef.current += 1;
-                                        setCinOcrStatus('idle');
-                                        setCinVerifySaved(false);
                                         setCinVersoUploadError(null);
                                       }}
                                       className="px-2 py-1 rounded-lg text-xs font-semibold bg-white border border-rose-200 text-rose-700 hover:bg-rose-50 cursor-pointer flex items-center gap-1"
@@ -2081,7 +1836,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
               )}
 
               {/* Autres pièces (Diplôme, Relevés) 'prouvee' : aperçu + boutons Voir et Remplacer */}
-              {!isCin && effectiveIsProven && (
+              {!isCin && isProven && (
                 <div className="pt-2 border-t border-slate-100 space-y-2">
                   <div className="flex items-center gap-2 flex-wrap justify-between">
                     {/* Miniature ou résumé */}
@@ -2142,8 +1897,8 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                 </div>
               )}
 
-              {/* Formulaire Vos informations (sous la CIN, masqué tant que le pop-up de vérification est ouvert) */}
-              {isCin && hasAnyCinSide && !cinVerifyModalOpen && !isDirecteur && !isDossierEnvoye && (
+              {/* Formulaire Vos informations (sous la CIN, ouvert tant que non enregistré ou en édition, hors lecture seule après envoi) */}
+              {isCin && hasAnyCinSide && !isDirecteur && !isDossierEnvoye && (
                 <form
                   id="vos-informations-cin"
                   onSubmit={handleSaveVosInfos}
@@ -2225,7 +1980,6 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                             type="text"
                             value={cinFormNom}
                             onChange={(e) => {
-                              ocrFilledFieldsRef.current.nom = false;
                               setCinFormNom(e.target.value);
                               setCinFormTouched((prev) => ({ ...prev, nom: true }));
                               setCinVerifySaved(false);
@@ -2250,7 +2004,6 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                             type="text"
                             value={cinFormPrenom}
                             onChange={(e) => {
-                              ocrFilledFieldsRef.current.prenom = false;
                               setCinFormPrenom(e.target.value);
                               setCinFormTouched((prev) => ({ ...prev, prenom: true }));
                               setCinVerifySaved(false);
@@ -2275,7 +2028,6 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                             type="text"
                             value={cinFormNumero}
                             onChange={(e) => {
-                              ocrFilledFieldsRef.current.cin = false;
                               setCinFormNumero(e.target.value);
                               setCinFormTouched((prev) => ({ ...prev, cin: true }));
                               setCinVerifySaved(false);
@@ -2303,7 +2055,6 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                             type="text"
                             value={cinFormDateNaissance}
                             onChange={(e) => {
-                              ocrFilledFieldsRef.current.dateNaissance = false;
                               setCinFormDateNaissance(e.target.value);
                               setCinFormTouched((prev) => ({ ...prev, dateNaissance: true }));
                               setCinVerifySaved(false);
@@ -2330,9 +2081,9 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                         <div className="flex items-center gap-3">
                           <button
                             type="submit"
-                            disabled={!canSaveCinForm}
+                            disabled={!isCinFormValid}
                             className={`min-h-[36px] px-4 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
-                              canSaveCinForm
+                              isCinFormValid
                                 ? 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer'
                                 : 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
                             }`}
@@ -2346,11 +2097,9 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                             </span>
                           )}
                         </div>
-                        {!canSaveCinForm && (
+                        {!isCinFormValid && (
                           <p className="text-[11px] text-slate-500">
-                            {!hasCinVersoUploaded
-                              ? fr.dossier.vosInfosVersoRequiredReason
-                              : fr.dossier.vosInfosDisabledReason}
+                            {fr.dossier.vosInfosDisabledReason}
                           </p>
                         )}
                         {cinOcrStatus === 'success' && (
@@ -2370,7 +2119,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
               )}
 
               {/* Boutons Prendre en photo et Téléverser pour les autres pièces (Diplôme, Relevés, CV) */}
-              {!isCin && !isDirecteur && !isDossierEnvoye && !effectiveIsProven && (
+              {!isCin && !isDirecteur && !isDossierEnvoye && !isProven && (
                 <div className="space-y-1.5 pt-2 border-t border-slate-100">
                   <div className="flex items-center gap-2">
                     <button
@@ -2554,9 +2303,7 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                 }`}
               >
                 <Send size={15} />
-                <span>
-                  {hasACorriger ? fr.dossier.btnRenvoyerCandidature : fr.dossier.btnEnvoyerCandidature}
-                </span>
+                <span>{fr.dossier.btnEnvoyerCandidature}</span>
               </button>
               {!canSendDossier && sendDisabledReason && (
                 <p className="text-xs font-medium text-rose-700 flex items-center gap-1.5">
@@ -2637,19 +2384,6 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
           dualStepLabels={
             activeCameraTarget.dual
               ? [fr.dossier.cinScanRectoStep, fr.dossier.cinScanVersoStep]
-              : undefined
-          }
-          autoOcrOnCapture={activeCameraTarget.type.toUpperCase() === 'CIN' ? autoOcrCamera : false}
-          onCaptureAutoOcr={
-            activeCameraTarget.type.toUpperCase() === 'CIN' && autoOcrCamera
-              ? (dataUrl, side) => {
-                  if (activeCameraTarget.dual && side === 'recto') {
-                    void runCinOcr(dataUrl, undefined, {
-                      autoOcrOnCameraCapture: true,
-                      cameraSide: 'recto',
-                    });
-                  }
-                }
               : undefined
           }
           onClose={() => setActiveCameraTarget(null)}
@@ -2765,231 +2499,6 @@ export const Dossier: React.FC<DossierProps> = ({ candidatId, onNavigate }) => {
                 </button>
               </div>
             </div>
-          </div>
-        );
-      })()}
-      {/* Pop-up Formulaire de vérification CIN après import Recto + Verso */}
-      {cinVerifyModalOpen && !isDirecteur && !isDossierEnvoye && (() => {
-        const cinPiece = safePieces.find(
-          (p) => p && (p.type === 'CIN' || p.type?.toUpperCase() === 'CIN')
-        );
-        const modalHasRecto = Boolean(cinPiece?.fichier && cinPiece.source !== 'apogee');
-        const modalHasVerso = Boolean(cinPiece?.fichierVerso && cinPiece.sourceVerso !== 'apogee');
-        return (
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="cin-verify-modal-title"
-            onClick={(e) => {
-              if (e.target === e.currentTarget) setCinVerifyModalOpen(false);
-            }}
-            className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4"
-          >
-            <form
-              onSubmit={handleSaveVosInfos}
-              noValidate
-              onClick={(e) => e.stopPropagation()}
-              className="bg-white rounded-2xl max-w-lg w-full overflow-hidden shadow-2xl border border-slate-200 flex flex-col max-h-[90vh]"
-            >
-              <div className="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between gap-2 bg-slate-50">
-                <div className="flex items-center gap-2 min-w-0">
-                  <h3 id="cin-verify-modal-title" className="text-sm font-bold text-slate-900 truncate">
-                    {fr.dossier.verifiezInfosTitle}
-                  </h3>
-                  {cinOcrStatus === 'loading' && (
-                    <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-700 shrink-0">
-                      <Loader2 size={13} className="animate-spin shrink-0" />
-                      <span>{fr.dossier.ocrEnCours}</span>
-                    </span>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setCinVerifyModalOpen(false)}
-                  aria-label={fr.dossier.close}
-                  className="p-1 rounded-lg text-slate-400 hover:text-slate-600 cursor-pointer"
-                >
-                  <X size={18} />
-                </button>
-              </div>
-
-              <div className="p-5 overflow-y-auto space-y-4">
-                {(modalHasRecto || modalHasVerso) && (
-                  <div className="grid grid-cols-2 gap-2.5">
-                    {modalHasRecto && cinPiece && (
-                      isImageFile(cinPiece.fichier) && !provenCinRectoImgError ? (
-                        <img
-                          src={cinPiece.fichier}
-                          alt={`${fr.dossier.cinCardTitle} — ${fr.dossier.cinRectoLabel}`}
-                          className="w-full h-24 object-contain bg-slate-50 rounded-lg border border-slate-200"
-                        />
-                      ) : (
-                        <div className="w-full h-24 rounded-lg border border-slate-200 bg-slate-50 flex flex-col items-center justify-center gap-1 text-xs text-slate-600">
-                          <FileText size={18} className="text-slate-400" />
-                          <span className="text-[11px] font-medium">{fr.dossier.cinRectoLabel}</span>
-                        </div>
-                      )
-                    )}
-                    {modalHasVerso && cinPiece && (
-                      isImageFile(cinPiece.fichierVerso) && !provenCinVersoImgError ? (
-                        <img
-                          src={cinPiece.fichierVerso}
-                          alt={`${fr.dossier.cinCardTitle} — ${fr.dossier.cinVersoLabel}`}
-                          className="w-full h-24 object-contain bg-slate-50 rounded-lg border border-slate-200"
-                        />
-                      ) : (
-                        <div className="w-full h-24 rounded-lg border border-slate-200 bg-slate-50 flex flex-col items-center justify-center gap-1 text-xs text-slate-600">
-                          <FileText size={18} className="text-slate-400" />
-                          <span className="text-[11px] font-medium">{fr.dossier.cinVersoLabel}</span>
-                        </div>
-                      )
-                    )}
-                  </div>
-                )}
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label htmlFor="cin-modal-nom" className="block text-[11px] font-bold text-slate-700 mb-1">
-                      {fr.dossier.nomLabel} *
-                    </label>
-                    <input
-                      id="cin-modal-nom"
-                      type="text"
-                      value={cinFormNom}
-                      onChange={(e) => {
-                        ocrFilledFieldsRef.current.nom = false;
-                        setCinFormNom(e.target.value);
-                        setCinFormTouched((prev) => ({ ...prev, nom: true }));
-                        setCinVerifySaved(false);
-                      }}
-                      onBlur={() => setCinFormTouched((prev) => ({ ...prev, nom: true }))}
-                      className={`w-full min-h-[38px] px-2.5 py-1.5 text-xs bg-white border rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-600 ${
-                        cinFormTouched.nom && cinFormErrors.nom ? 'border-rose-400' : 'border-slate-300'
-                      }`}
-                    />
-                    {cinFormTouched.nom && cinFormErrors.nom && (
-                      <p className="text-[11px] text-rose-600 font-medium mt-1">{cinFormErrors.nom}</p>
-                    )}
-                  </div>
-
-                  <div>
-                    <label htmlFor="cin-modal-prenom" className="block text-[11px] font-bold text-slate-700 mb-1">
-                      {fr.dossier.prenomLabel} *
-                    </label>
-                    <input
-                      id="cin-modal-prenom"
-                      type="text"
-                      value={cinFormPrenom}
-                      onChange={(e) => {
-                        ocrFilledFieldsRef.current.prenom = false;
-                        setCinFormPrenom(e.target.value);
-                        setCinFormTouched((prev) => ({ ...prev, prenom: true }));
-                        setCinVerifySaved(false);
-                      }}
-                      onBlur={() => setCinFormTouched((prev) => ({ ...prev, prenom: true }))}
-                      className={`w-full min-h-[38px] px-2.5 py-1.5 text-xs bg-white border rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-600 ${
-                        cinFormTouched.prenom && cinFormErrors.prenom ? 'border-rose-400' : 'border-slate-300'
-                      }`}
-                    />
-                    {cinFormTouched.prenom && cinFormErrors.prenom && (
-                      <p className="text-[11px] text-rose-600 font-medium mt-1">{cinFormErrors.prenom}</p>
-                    )}
-                  </div>
-
-                  <div>
-                    <label htmlFor="cin-modal-numero" className="block text-[11px] font-bold text-slate-700 mb-1">
-                      {fr.dossier.cinNumeroLabel} *
-                    </label>
-                    <input
-                      id="cin-modal-numero"
-                      type="text"
-                      value={cinFormNumero}
-                      onChange={(e) => {
-                        ocrFilledFieldsRef.current.cin = false;
-                        setCinFormNumero(e.target.value);
-                        setCinFormTouched((prev) => ({ ...prev, cin: true }));
-                        setCinVerifySaved(false);
-                      }}
-                      onBlur={() => setCinFormTouched((prev) => ({ ...prev, cin: true }))}
-                      placeholder={fr.dossier.cinNumeroPlaceholder}
-                      className={`w-full min-h-[38px] px-2.5 py-1.5 text-xs bg-white border rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-600 ${
-                        (cinFormTouched.cin || cinFormNumero.trim().length > 0) && cinFormErrors.cin
-                          ? 'border-rose-400'
-                          : 'border-slate-300'
-                      }`}
-                    />
-                    {(cinFormTouched.cin || cinFormNumero.trim().length > 0) && cinFormErrors.cin && (
-                      <p className="text-[11px] text-rose-600 font-medium mt-1">{cinFormErrors.cin}</p>
-                    )}
-                  </div>
-
-                  <div>
-                    <label htmlFor="cin-modal-date-naissance" className="block text-[11px] font-bold text-slate-700 mb-1">
-                      {fr.dossier.dateNaissanceLabel} *
-                    </label>
-                    <input
-                      id="cin-modal-date-naissance"
-                      type="text"
-                      value={cinFormDateNaissance}
-                      onChange={(e) => {
-                        ocrFilledFieldsRef.current.dateNaissance = false;
-                        setCinFormDateNaissance(e.target.value);
-                        setCinFormTouched((prev) => ({ ...prev, dateNaissance: true }));
-                        setCinVerifySaved(false);
-                      }}
-                      onBlur={() => setCinFormTouched((prev) => ({ ...prev, dateNaissance: true }))}
-                      placeholder={fr.dossier.dateNaissancePlaceholder}
-                      className={`w-full min-h-[38px] px-2.5 py-1.5 text-xs bg-white border rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-600 ${
-                        (cinFormTouched.dateNaissance || cinFormDateNaissance.trim().length > 0) &&
-                        cinFormErrors.dateNaissance
-                          ? 'border-rose-400'
-                          : 'border-slate-300'
-                      }`}
-                    />
-                    {(cinFormTouched.dateNaissance || cinFormDateNaissance.trim().length > 0) &&
-                      cinFormErrors.dateNaissance && (
-                        <p className="text-[11px] text-rose-600 font-medium mt-1">
-                          {cinFormErrors.dateNaissance}
-                        </p>
-                      )}
-                  </div>
-                </div>
-
-                {cinOcrStatus === 'success' && (
-                  <p className="text-[11px] text-slate-600">
-                    {fr.dossier.ocrAutoFilledNotice}
-                  </p>
-                )}
-                {cinOcrStatus === 'error' && (
-                  <p className="text-[11px] text-slate-600">
-                    {fr.dossier.ocrLectureImpossible}
-                  </p>
-                )}
-              </div>
-
-              <div className="px-5 py-3.5 border-t border-slate-200 bg-slate-50 space-y-1.5">
-                <div className="flex items-center justify-end">
-                  <button
-                    type="submit"
-                    disabled={!canSaveCinForm}
-                    className={`min-h-[38px] px-5 py-2 text-xs font-bold rounded-xl transition-colors ${
-                      canSaveCinForm
-                        ? 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer shadow-xs'
-                        : 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
-                    }`}
-                  >
-                    {fr.dossier.enregistrerInfos}
-                  </button>
-                </div>
-                {!canSaveCinForm && (
-                  <p className="text-[11px] text-slate-500 text-right">
-                    {!hasCinVersoUploaded
-                      ? fr.dossier.vosInfosVersoRequiredReason
-                      : fr.dossier.vosInfosDisabledReason}
-                  </p>
-                )}
-              </div>
-            </form>
           </div>
         );
       })()}

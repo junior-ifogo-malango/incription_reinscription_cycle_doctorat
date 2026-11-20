@@ -29,7 +29,6 @@ export type TabType =
   | 'reinscriptions'
   | 'commission'
   | 'admin_comptes'
-  | 'admin_inscriptions'
   | 'admin_journal'
   | 'rapport'
   | 'suivi'
@@ -54,7 +53,6 @@ interface MobileNavProps {
   badgeCounts?: {
     panierCount?: number;
     candidaturesCount?: number;
-    creneauxCount?: number;
     piecesPretes?: number;
     alertesCed?: number;
     reinscriptionsCount?: number;
@@ -119,7 +117,6 @@ export const MobileNav: React.FC<MobileNavProps> = ({
       badge: badgeCounts.candidaturesCount
         ? String(badgeCounts.candidaturesCount)
         : undefined,
-      badgeColor: 'bg-rose-600',
     },
     entretiens: {
       id: 'entretiens',
@@ -127,11 +124,6 @@ export const MobileNav: React.FC<MobileNavProps> = ({
         ? fr.nav.court.creneaux
         : fr.nav.court.entretiens,
       icon: <CalendarCheck2 size={18} />,
-      badge:
-        normalizedRoles.includes('enseignant') && badgeCounts.creneauxCount
-          ? String(badgeCounts.creneauxCount)
-          : undefined,
-      badgeColor: 'bg-rose-600',
     },
     commission: {
       id: 'commission',
@@ -159,11 +151,6 @@ export const MobileNav: React.FC<MobileNavProps> = ({
       id: 'admin_comptes',
       label: fr.nav.adminComptes,
       icon: <Users size={18} />,
-    },
-    admin_inscriptions: {
-      id: 'admin_inscriptions',
-      label: fr.nav.court.adminInscriptions,
-      icon: <Award size={18} />,
     },
     admin_journal: {
       id: 'admin_journal',
@@ -218,7 +205,6 @@ export const MobileNav: React.FC<MobileNavProps> = ({
     }
     if (normalizedRoles.includes('admin')) {
       addTab('admin_comptes');
-      addTab('admin_inscriptions');
       addTab('admin_journal');
     }
 

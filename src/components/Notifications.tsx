@@ -2,18 +2,15 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Bell } from 'lucide-react';
 import { Notification } from '../types';
 import { fr } from '../i18n/fr';
-import { getMatchingCandidateIdsForEmail } from '../utils/messages';
 
 interface NotificationsProps {
   candidatId?: string;
-  candidatEmail?: string;
   onNavigateToDossier: () => void;
   onNavigateToEntretiens?: () => void;
 }
 
 export const Notifications: React.FC<NotificationsProps> = ({
   candidatId,
-  candidatEmail,
   onNavigateToDossier,
   onNavigateToEntretiens,
 }) => {
@@ -21,23 +18,15 @@ export const Notifications: React.FC<NotificationsProps> = ({
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  const isForCurrentCandidate = (n: Notification): boolean => {
-    const cleanEmail = candidatEmail?.trim().toLowerCase();
-    const matchingIds = getMatchingCandidateIdsForEmail(candidatId, cleanEmail);
-    if (!candidatId && !cleanEmail) return true;
-    if (matchingIds.has(n.destinataireId)) return true;
-    if (candidatId && n.destinataireId === 'cand-001') return true;
-    if (cleanEmail && n.destinataireEmail?.trim().toLowerCase() === cleanEmail) return true;
-    return false;
-  };
-
   const loadNotifications = () => {
     try {
       const raw = localStorage.getItem('usmba_notifications');
       if (raw) {
         const parsed: Notification[] = JSON.parse(raw);
-        // Filtrer par candidat connecté (ID ou e-mail d'inscription)
-        const userNotifs = parsed.filter(isForCurrentCandidate);
+        // Filtrer par candidat connecté si id présent, sinon toutes les notifs candidat
+        const userNotifs = parsed.filter(
+          (n) => !candidatId || n.destinataireId === candidatId || n.destinataireId === 'cand-001'
+        );
         setNotifications(userNotifs);
         return;
       }
@@ -56,7 +45,7 @@ export const Notifications: React.FC<NotificationsProps> = ({
       window.removeEventListener('usmba_notifications_updated', handleSync);
       window.removeEventListener('storage', handleSync);
     };
-  }, [candidatId, candidatEmail]);
+  }, [candidatId]);
 
   // Fermer la liste déroulante au clic en dehors
   useEffect(() => {
@@ -86,13 +75,17 @@ export const Notifications: React.FC<NotificationsProps> = ({
         if (raw) {
           const parsed: Notification[] = JSON.parse(raw);
           const updated = parsed.map((n) => {
-            if (isForCurrentCandidate(n)) {
+            if (!candidatId || n.destinataireId === candidatId || n.destinataireId === 'cand-001') {
               return { ...n, lue: true };
             }
             return n;
           });
           localStorage.setItem('usmba_notifications', JSON.stringify(updated));
-          setNotifications(updated.filter(isForCurrentCandidate));
+          setNotifications(
+            updated.filter(
+              (n) => !candidatId || n.destinataireId === candidatId || n.destinataireId === 'cand-001'
+            )
+          );
           window.dispatchEvent(new CustomEvent('usmba_notifications_updated'));
         }
       } catch (err) {
@@ -173,7 +166,7 @@ export const Notifications: React.FC<NotificationsProps> = ({
                         type="button"
                         onClick={() => {
                           setIsOpen(false);
-                          if ((notif.actionTab === 'entretiens' || isEntretiensNotif) && onNavigateToEntretiens) {
+                          if (notif.actionTab === 'entretiens' && onNavigateToEntretiens) {
                             onNavigateToEntretiens();
                           } else {
                             onNavigateToDossier();

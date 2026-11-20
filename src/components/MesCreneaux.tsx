@@ -12,15 +12,13 @@ import {
   XCircle,
   RefreshCw,
   X,
-  Eye,
-  AlertTriangle,
 } from 'lucide-react';
-import { Candidat, Creneau, Sujet, dossierComplet } from '../types';
+import { Creneau } from '../types';
 import { fr } from '../i18n/fr';
 import { storageService } from '../services/storage';
-import { INITIAL_ENSEIGNANTS, INITIAL_SUJETS, MOCK_CANDIDATS, aujourdhui } from '../data/mockData';
+import { INITIAL_ENSEIGNANTS } from '../data/mockData';
 import { sendAdmissionEmail } from '../emailConfig';
-import { logConvocationEnvoyee, logEvent, ActeurJournal } from '../utils/journal';
+import { logConvocationEnvoyee, ActeurJournal } from '../utils/journal';
 import {
   normaliserTel,
   lienWhatsApp,
@@ -29,15 +27,12 @@ import {
   messageConvocationAnnulee,
   trouverCandidat,
   ajouterNotification,
-  reconcileCandidateFromStorage,
-  persistUnifiedCandidate,
 } from '../utils/messages';
 
 const STORAGE_KEY_CRENEAUX = 'usmba_doctorat_creneaux';
 
 interface MesCreneauxProps {
   enseignantId?: string;
-  onOpenDossier?: (candidatId: string, candidatNom: string) => void;
 }
 
 function formatDateJJMMAAAA(input?: string): string {
@@ -93,149 +88,15 @@ function readAllStoredCreneaux(): Creneau[] {
   return storageService.getCreneaux();
 }
 
-interface TeacherCandidateRow {
-  candidat: Candidat;
-  fullName: string;
-  sujet: Sujet;
-  isSent: boolean;
-  isValide: boolean;
-  isConvoque: boolean;
-  complet: boolean;
-  manques: string[];
-}
-
-function readTeacherCandidatesForConvocations(
-  enseignantId: string,
-  allCreneaux: Creneau[]
-): TeacherCandidateRow[] {
-  let allSujets: Sujet[] = INITIAL_SUJETS;
-  try {
-    const rawSujets = localStorage.getItem('usmba_doctorat_sujets');
-    if (rawSujets) {
-      const parsed = JSON.parse(rawSujets);
-      if (Array.isArray(parsed) && parsed.length > 0) allSujets = parsed;
-    }
-  } catch {}
-
-  const teacherSubjects = allSujets.filter((s) => s && s.enseignantId === enseignantId);
-  const teacherSubjectIds = new Set(teacherSubjects.map((s) => s.id));
-  if (teacherSubjectIds.size === 0) return [];
-
-  let simulatedStatuts: Record<string, string> = {};
-  try {
-    const rawSim = localStorage.getItem('usmba_simulated_statuts');
-    if (rawSim) simulatedStatuts = JSON.parse(rawSim) || {};
-  } catch {}
-
-  const candidatesById = new Map<string, Candidat>();
-  try {
-    const rawAccounts = localStorage.getItem('usmba_registered_accounts');
-    if (rawAccounts) {
-      const accounts: Candidat[] = JSON.parse(rawAccounts);
-      if (Array.isArray(accounts)) {
-        accounts.forEach((a) => {
-          if (a && a.id) candidatesById.set(a.id, a);
-        });
-      }
-    }
-    const rawOverrides = localStorage.getItem('usmba_candidats_overrides');
-    if (rawOverrides) {
-      const overrides: Record<string, Candidat> = JSON.parse(rawOverrides);
-      Object.values(overrides).forEach((c) => {
-        if (c && c.id) candidatesById.set(c.id, c);
-      });
-    }
-    const rawCur = localStorage.getItem('usmba_doctorat_candidat');
-    if (rawCur) {
-      const cur: Candidat = JSON.parse(rawCur);
-      if (cur && cur.compteCree && cur.id) {
-        candidatesById.set(cur.id, cur);
-      }
-    }
-  } catch {}
-
-  MOCK_CANDIDATS.forEach((mc) => {
-    if (mc && mc.id && !candidatesById.has(mc.id) && mc.compteCree) {
-      candidatesById.set(mc.id, mc);
-    }
-  });
-
-  const rows: TeacherCandidateRow[] = [];
-
-  candidatesById.forEach((rawCand) => {
-    const cand = reconcileCandidateFromStorage(rawCand);
-    if (!cand.compteCree || !Array.isArray(cand.candidatures)) return;
-
-    const matchingSujetId = cand.candidatures.find((id) => teacherSubjectIds.has(id));
-    if (!matchingSujetId) return;
-
-    const sujet = teacherSubjects.find((s) => s.id === matchingSujetId);
-    if (!sujet) return;
-
-    const statuts = cand.candidaturesStatuts || {};
-    const simStatut = simulatedStatuts[`${cand.id}-${sujet.id}`];
-    const isValide =
-      statuts[sujet.id] === 'retenue' ||
-      simStatut === 'retenue' ||
-      Object.values(statuts).some((s) => s === 'retenue');
-
-    const hasACorr = Object.values(statuts).some((s) => s === 'a_corriger');
-    const hasLegacySent = Boolean(
-      !hasACorr &&
-      (cand.envoyeLe ||
-        (cand.candidaturesEnvoyeLe && Object.keys(cand.candidaturesEnvoyeLe).length > 0) ||
-        isValide)
-    );
-    const isSent = Boolean(cand.dossier?.dateEnvoi || hasLegacySent);
-
-    const isConvoque = allCreneaux.some(
-      (c) =>
-        c.candidatId === cand.id &&
-        c.enseignantId === enseignantId &&
-        (c.statut === 'reserve' || c.statut === 'confirme')
-    );
-
-    const check = dossierComplet(cand);
-    const resolvedInfo = trouverCandidat(cand.id);
-    const fullName =
-      resolvedInfo.nom ||
-      (cand.nomFamille?.trim() && cand.prenom?.trim()
-        ? `${cand.prenom.trim()} ${cand.nomFamille.trim()}`
-        : cand.nom?.trim()) ||
-      fr.mesCreneaux.nonRenseigne;
-
-    rows.push({
-      candidat: cand,
-      fullName,
-      sujet,
-      isSent,
-      isValide,
-      isConvoque,
-      complet: check.complet,
-      manques: check.manques,
-    });
-  });
-
-  return rows;
-}
-
 export const MesCreneaux: React.FC<MesCreneauxProps> = ({
   enseignantId = 'ens-1',
-  onOpenDossier,
 }) => {
   const [creneaux, setCreneaux] = useState<Creneau[]>([]);
-  const [teacherRows, setTeacherRows] = useState<TeacherCandidateRow[]>([]);
 
   const [editingSlotId, setEditingSlotId] = useState<string | null>(null);
   const [editDate, setEditDate] = useState('');
   const [editHeure, setEditHeure] = useState('');
   const [editLieu, setEditLieu] = useState('');
-
-  const [convoquerTarget, setConvoquerTarget] = useState<TeacherCandidateRow | null>(null);
-  const [convoquerDate, setConvoquerDate] = useState('');
-  const [convoquerHeure, setConvoquerHeure] = useState('');
-  const [convoquerLieu, setConvoquerLieu] = useState('');
-  const [convoquerSubmitting, setConvoquerSubmitting] = useState(false);
 
   const [cancelModalSlot, setCancelModalSlot] = useState<Creneau | null>(null);
   const [cancelMotif, setCancelMotif] = useState('');
@@ -248,8 +109,7 @@ export const MesCreneaux: React.FC<MesCreneauxProps> = ({
   const loadData = useCallback(() => {
     const allCreneaux = readAllStoredCreneaux();
     setCreneaux(allCreneaux);
-    setTeacherRows(readTeacherCandidatesForConvocations(enseignantId, allCreneaux));
-  }, [enseignantId]);
+  }, []);
 
   useEffect(() => {
     loadData();
@@ -257,14 +117,10 @@ export const MesCreneaux: React.FC<MesCreneauxProps> = ({
     window.addEventListener('storage', handleSync);
     window.addEventListener('usmba_creneaux_updated', handleSync);
     window.addEventListener('usmba_candidat_updated', handleSync);
-    window.addEventListener('usmba_pieces_updated', handleSync);
-    window.addEventListener('usmba_dossier_updated', handleSync);
     return () => {
       window.removeEventListener('storage', handleSync);
       window.removeEventListener('usmba_creneaux_updated', handleSync);
       window.removeEventListener('usmba_candidat_updated', handleSync);
-      window.removeEventListener('usmba_pieces_updated', handleSync);
-      window.removeEventListener('usmba_dossier_updated', handleSync);
     };
   }, [loadData]);
 
@@ -486,138 +342,6 @@ export const MesCreneaux: React.FC<MesCreneauxProps> = ({
     );
   };
 
-  const handleValiderFromConvocations = (row: TeacherCandidateRow) => {
-    if (!row.complet || !row.isSent) return;
-    const updatedStatuts = {
-      ...(row.candidat.candidaturesStatuts || {}),
-      [row.sujet.id]: 'retenue' as const,
-    };
-    const updatedCand: Candidat = {
-      ...row.candidat,
-      candidaturesStatuts: updatedStatuts,
-    };
-    const merged = persistUnifiedCandidate(updatedCand, true);
-
-    try {
-      const rawSim = localStorage.getItem('usmba_simulated_statuts');
-      const parsed = rawSim ? JSON.parse(rawSim) : {};
-      parsed[`${row.candidat.id}-${row.sujet.id}`] = 'retenue';
-      localStorage.setItem('usmba_simulated_statuts', JSON.stringify(parsed));
-    } catch {}
-
-    const acteur = getDirectorActor(enseignantId);
-    logEvent(
-      acteur,
-      fr.journalActions.candidatureValidee,
-      `${row.fullName} (${row.sujet.titre})`
-    );
-
-    try {
-      window.dispatchEvent(new CustomEvent('usmba_candidat_updated', { detail: merged }));
-      window.dispatchEvent(new CustomEvent('storage'));
-    } catch {}
-
-    setFeedbackMsg({ type: 'success', text: fr.mesCreneaux.valideDepuisConvocationMsg });
-    loadData();
-  };
-
-  const handleOpenConvoquer = (row: TeacherCandidateRow) => {
-    const currentCreneaux = readAllStoredCreneaux();
-    const myWithLieu = currentCreneaux.filter(
-      (c) => c.enseignantId === enseignantId && Boolean(c.lieu && c.lieu.trim())
-    );
-    const lastLieu = myWithLieu.length > 0 ? myWithLieu[myWithLieu.length - 1].lieu.trim() : '';
-    setConvoquerTarget(row);
-    setConvoquerDate('');
-    setConvoquerHeure('');
-    setConvoquerLieu(lastLieu);
-    setFeedbackMsg(null);
-  };
-
-  const todayDateStr = aujourdhui();
-  const hasAllConvoquerFields = Boolean(
-    convoquerDate.trim() && convoquerHeure.trim() && convoquerLieu.trim()
-  );
-  const isConvoquerPastDate = Boolean(
-    convoquerDate.trim() && convoquerDate.trim() < todayDateStr
-  );
-  const canSubmitConvoquer =
-    hasAllConvoquerFields && !isConvoquerPastDate && !convoquerSubmitting;
-  const convoquerDisabledReason = !hasAllConvoquerFields
-    ? fr.dossierDirecteur.convoquerDisabledMissing
-    : isConvoquerPastDate
-    ? fr.dossierDirecteur.convoquerDisabledPastDate
-    : null;
-
-  const handleConfirmConvoquer = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!convoquerTarget || !canSubmitConvoquer) return;
-
-    const target = convoquerTarget;
-    const trimmedDate = convoquerDate.trim();
-    const trimmedHeure = convoquerHeure.trim();
-    const trimmedLieu = convoquerLieu.trim();
-    const freshCreneaux = readAllStoredCreneaux();
-
-    const alreadyConvoked = freshCreneaux.some(
-      (c) =>
-        c.candidatId === target.candidat.id &&
-        c.enseignantId === enseignantId &&
-        (c.statut === 'reserve' || c.statut === 'confirme')
-    );
-    if (alreadyConvoked) {
-      setConvoquerTarget(null);
-      loadData();
-      return;
-    }
-
-    setConvoquerSubmitting(true);
-    try {
-      const nowIso = new Date().toISOString();
-      const newSlot: Creneau = {
-        id: `cr-${Date.now()}`,
-        enseignantId,
-        date: trimmedDate,
-        heure: trimmedHeure,
-        lieu: trimmedLieu,
-        candidatId: target.candidat.id,
-        statut: 'reserve',
-        dateReservation: nowIso,
-      };
-      const nextList = [...freshCreneaux, newSlot];
-      if (!persistCreneaux(nextList)) return;
-
-      setConvoquerTarget(null);
-      loadData();
-
-      const candInfo = trouverCandidat(target.candidat.id);
-      const fullName = candInfo.nom || target.fullName;
-      const emailToUse = candInfo.email || target.candidat.email || '';
-      const msg = messageConvocation(trimmedDate, trimmedHeure, trimmedLieu);
-
-      ajouterNotification({
-        destinataireId: target.candidat.id,
-        destinataireEmail: emailToUse || undefined,
-        texte: msg,
-        type: 'action',
-        actionLabel: fr.notifications.btnAllerEntretiens,
-        actionTab: 'entretiens',
-      });
-
-      setFeedbackMsg({
-        type: 'success',
-        text: fr.dossierDirecteur.convocationSentFeedback
-          .replace('{date}', formatDateJJMMAAAA(trimmedDate))
-          .replace('{heure}', trimmedHeure),
-      });
-
-      await sendConvocationEmailAndTrack(newSlot, fullName, emailToUse, msg, 'E-mail');
-      loadData();
-    } finally {
-      setConvoquerSubmitting(false);
-    }
-  };
-
   const myConvocations = creneaux
     .filter(
       (c) =>
@@ -631,11 +355,8 @@ export const MesCreneaux: React.FC<MesCreneauxProps> = ({
       return a.heure.localeCompare(b.heure);
     });
 
-  const aConvoquerList = teacherRows.filter((r) => r.isValide && !r.isConvoque);
-  const aValiderList = teacherRows.filter((r) => r.isSent && !r.isValide);
-
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       {/* En-tête */}
       <div className="bg-slate-900 text-white rounded-xl p-4 flex items-center justify-between gap-3 shadow-xs flex-wrap">
         <div>
@@ -643,7 +364,7 @@ export const MesCreneaux: React.FC<MesCreneauxProps> = ({
             {fr.mesCreneaux.title}
           </h2>
           <p className="text-xs text-slate-300 mt-0.5">
-            {aValiderList.length} à valider · {aConvoquerList.length} à convoquer · {myConvocations.length}{' '}
+            {myConvocations.length}{' '}
             {myConvocations.length > 1 ? 'convocations' : 'convocation'}
           </p>
         </div>
@@ -679,161 +400,7 @@ export const MesCreneaux: React.FC<MesCreneauxProps> = ({
         </div>
       )}
 
-      {/* 1. Candidats à convoquer (validés et pas encore convoqués) */}
-      <div className="space-y-2">
-        <div className="flex items-center justify-between px-1">
-          <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
-            <AlertCircle size={14} className={aConvoquerList.length > 0 ? 'text-rose-600' : 'text-emerald-600'} />
-            <span>{fr.mesCreneaux.sectionAConvoquerTitle}</span>
-          </h3>
-          <span
-            className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${
-              aConvoquerList.length > 0
-                ? 'bg-rose-100 text-rose-800 border-rose-200'
-                : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-            }`}
-          >
-            {aConvoquerList.length}
-          </span>
-        </div>
-
-        {aConvoquerList.length === 0 ? (
-          <div className="bg-white border border-slate-200 rounded-xl p-4 text-center text-xs text-slate-500">
-            {fr.mesCreneaux.emptyAConvoquer}
-          </div>
-        ) : (
-          <div className="space-y-2.5">
-            {aConvoquerList.map((row) => (
-              <div
-                key={`convoq-${row.candidat.id}-${row.sujet.id}`}
-                className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-              >
-                <div className="space-y-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-xs font-bold text-slate-900">{row.fullName}</span>
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                      <CheckCircle2 size={11} className="text-emerald-600 shrink-0" />
-                      <span>{fr.dossierDirecteur.badgeValidee}</span>
-                    </span>
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-100 text-rose-800 border border-rose-200">
-                      <AlertCircle size={11} className="text-rose-600 shrink-0" />
-                      <span>{fr.mesCreneaux.badgeAConvoquer}</span>
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-slate-600 truncate">{row.sujet.titre}</p>
-                </div>
-
-                <div className="flex items-center gap-2 flex-wrap shrink-0">
-                  {onOpenDossier && (
-                    <button
-                      type="button"
-                      onClick={() => onOpenDossier(row.candidat.id, row.fullName)}
-                      className="min-h-[36px] px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition cursor-pointer inline-flex items-center gap-1.5"
-                    >
-                      <Eye size={13} />
-                      <span>{fr.mesCreneaux.btnOuvrirDossier}</span>
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => handleOpenConvoquer(row)}
-                    className="min-h-[36px] px-3.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-700 hover:bg-emerald-800 text-white transition cursor-pointer inline-flex items-center gap-1.5 shadow-xs"
-                  >
-                    <Calendar size={13} />
-                    <span>{fr.mesCreneaux.btnConvoquer}</span>
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* 2. Candidatures à valider (envoyées et non encore validées) */}
-      <div className="space-y-2">
-        <div className="flex items-center justify-between px-1">
-          <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
-            <AlertTriangle size={14} className={aValiderList.length > 0 ? 'text-rose-600' : 'text-emerald-600'} />
-            <span>{fr.mesCreneaux.sectionAValiderTitle}</span>
-          </h3>
-          <span
-            className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${
-              aValiderList.length > 0
-                ? 'bg-rose-100 text-rose-800 border-rose-200'
-                : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-            }`}
-          >
-            {aValiderList.length}
-          </span>
-        </div>
-
-        {aValiderList.length === 0 ? (
-          <div className="bg-white border border-slate-200 rounded-xl p-4 text-center text-xs text-slate-500">
-            {fr.mesCreneaux.emptyAValider}
-          </div>
-        ) : (
-          <div className="space-y-2.5">
-            {aValiderList.map((row) => (
-              <div
-                key={`valider-${row.candidat.id}-${row.sujet.id}`}
-                className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-              >
-                <div className="space-y-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-xs font-bold text-slate-900">{row.fullName}</span>
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-100 text-rose-800 border border-rose-200">
-                      <XCircle size={11} className="text-rose-600 shrink-0" />
-                      <span>{fr.mesCreneaux.badgeAValider}</span>
-                    </span>
-                    {row.complet ? (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                        <CheckCircle2 size={11} className="text-emerald-600 shrink-0" />
-                        <span>{fr.dossierDirecteur.verdictComplet}</span>
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-100 text-amber-900 border border-amber-200">
-                        <AlertCircle size={11} className="text-amber-700 shrink-0" />
-                        <span>
-                          {fr.dossierDirecteur.verdictIncomplet.replace('{manques}', row.manques.join(', '))}
-                        </span>
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-[11px] text-slate-600 truncate">{row.sujet.titre}</p>
-                </div>
-
-                <div className="flex items-center gap-2 flex-wrap shrink-0">
-                  {onOpenDossier && (
-                    <button
-                      type="button"
-                      onClick={() => onOpenDossier(row.candidat.id, row.fullName)}
-                      className="min-h-[36px] px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition cursor-pointer inline-flex items-center gap-1.5"
-                    >
-                      <Eye size={13} />
-                      <span>{fr.mesCreneaux.btnOuvrirDossier}</span>
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    disabled={!row.complet}
-                    onClick={() => handleValiderFromConvocations(row)}
-                    className={`min-h-[36px] px-3.5 py-1.5 rounded-lg text-xs font-bold transition inline-flex items-center gap-1.5 ${
-                      row.complet
-                        ? 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer shadow-xs'
-                        : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
-                    }`}
-                  >
-                    <CheckCircle2 size={13} />
-                    <span>{fr.mesCreneaux.btnValider}</span>
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* 3. Liste des convocations envoyées */}
+      {/* Liste des convocations */}
       <div className="space-y-2">
         <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wide px-1">
           {fr.mesCreneaux.listTitle}
@@ -1145,101 +712,6 @@ export const MesCreneaux: React.FC<MesCreneauxProps> = ({
                 </p>
               )}
             </div>
-          </div>
-        </div>
-      )}
-      {/* Modal Convoquer un candidat depuis Convocations */}
-      {convoquerTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <div>
-                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                  <Calendar size={16} className="text-emerald-700" />
-                  <span>{fr.dossierDirecteur.modalConvoquerTitle}</span>
-                </h3>
-                <p className="text-xs text-slate-600 mt-0.5 font-semibold">{convoquerTarget.fullName}</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setConvoquerTarget(null)}
-                className="text-slate-400 hover:text-slate-700 cursor-pointer"
-                aria-label={fr.dossierDirecteur.convoquerFermer}
-              >
-                <X size={16} />
-              </button>
-            </div>
-
-            <form onSubmit={handleConfirmConvoquer} className="space-y-3">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label htmlFor="convoc-date" className="block text-xs font-semibold text-slate-700 mb-1">
-                    {fr.dossierDirecteur.convoquerDateLabel} *
-                  </label>
-                  <input
-                    id="convoc-date"
-                    type="date"
-                    value={convoquerDate}
-                    onChange={(e) => setConvoquerDate(e.target.value)}
-                    className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-emerald-600"
-                    required
-                  />
-                </div>
-                <div>
-                  <label htmlFor="convoc-heure" className="block text-xs font-semibold text-slate-700 mb-1">
-                    {fr.dossierDirecteur.convoquerHeureLabel} *
-                  </label>
-                  <input
-                    id="convoc-heure"
-                    type="time"
-                    value={convoquerHeure}
-                    onChange={(e) => setConvoquerHeure(e.target.value)}
-                    className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-emerald-600"
-                    required
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label htmlFor="convoc-lieu" className="block text-xs font-semibold text-slate-700 mb-1">
-                  {fr.dossierDirecteur.convoquerLieuLabel} *
-                </label>
-                <input
-                  id="convoc-lieu"
-                  type="text"
-                  value={convoquerLieu}
-                  onChange={(e) => setConvoquerLieu(e.target.value)}
-                  placeholder={fr.dossierDirecteur.convoquerLieuPlaceholder}
-                  className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-emerald-600"
-                  required
-                />
-              </div>
-
-              {convoquerDisabledReason && (
-                <p className="text-[11px] text-amber-800 font-medium">{convoquerDisabledReason}</p>
-              )}
-
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setConvoquerTarget(null)}
-                  className="min-h-[38px] px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 cursor-pointer"
-                >
-                  {fr.dossierDirecteur.convoquerFermer}
-                </button>
-                <button
-                  type="submit"
-                  disabled={!canSubmitConvoquer}
-                  className={`min-h-[38px] px-4 py-1.5 rounded-lg text-xs font-bold transition-colors ${
-                    canSubmitConvoquer
-                      ? 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer'
-                      : 'bg-slate-200 text-slate-400 cursor-not-allowed'
-                  }`}
-                >
-                  {fr.mesCreneaux.btnConvoquer}
-                </button>
-              </div>
-            </form>
           </div>
         </div>
       )}

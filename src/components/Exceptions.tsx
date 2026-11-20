@@ -17,139 +17,13 @@ import {
   getSeancesStatutsMap,
   saveSeanceStatut,
   formatDateJJMM,
-  aujourdhui,
 } from '../data/mockData';
 import { fr } from '../i18n/fr';
-import {
-  logEvent,
-  logRelancePresenceDirecteur,
-  logRelanceConvocationNonRecue,
-} from '../utils/journal';
-import { ajouterNotification, trouverCandidat } from '../utils/messages';
+import { logEvent } from '../utils/journal';
+import { ajouterNotification } from '../utils/messages';
 
 // Constante unique du seuil d'inactivité (48 heures)
 export const SEUIL_HEURES = 48;
-
-type CreneauException = Creneau & {
-  relancePresenceLe?: string;
-};
-
-function normaliserDateIso(dateStr?: string): string {
-  const clean = (dateStr || '').trim();
-  if (!clean) return '';
-  if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) return clean;
-  if (clean.includes('/')) {
-    const parts = clean.split('/');
-    if (parts.length === 3) {
-      return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
-    }
-  }
-  return clean;
-}
-
-export function isEntretienPasse(
-  dateStr?: string,
-  heureStr?: string,
-  demoDateOverride?: string
-): boolean {
-  const targetDate = normaliserDateIso(dateStr);
-  if (!targetDate) return false;
-  const refDate = (demoDateOverride || aujourdhui()).trim();
-  if (refDate > targetDate) return true;
-  if (refDate < targetDate) return false;
-  const now = new Date();
-  const nowHHMM = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-  const targetHeure = (heureStr || '00:00').trim();
-  return nowHHMM >= targetHeure;
-}
-
-export function getEntretiensSansPresence(creneaux: Creneau[]): CreneauException[] {
-  return (creneaux as CreneauException[]).filter(
-    (c) =>
-      Boolean(c.candidatId) &&
-      (c.statut === 'reserve' || c.statut === 'confirme') &&
-      !c.presence &&
-      isEntretienPasse(c.date, c.heure)
-  );
-}
-
-export function getConvocationsNonRecues(creneaux: Creneau[], nowMs = Date.now()): CreneauException[] {
-  return (creneaux as CreneauException[]).filter((c) => {
-    if (c.statut === 'reserve' && c.dateReservation) {
-      const resTime = new Date(c.dateReservation).getTime();
-      const diffHours = (nowMs - resTime) / (1000 * 60 * 60);
-      return diffHours > SEUIL_HEURES;
-    }
-    return false;
-  });
-}
-
-function getSeancesSansPvKeys(
-  creneaux: Creneau[],
-  pvs: PV[],
-  seancesStatuts: Record<string, SeanceStatutRecord>
-) {
-  const seanceKeys = new Set<string>();
-  creneaux.forEach((c) => {
-    if (c.enseignantId && c.date) {
-      if (c.statut === 'confirme' || c.statut === 'reserve' || c.candidatId) {
-        seanceKeys.add(`${c.enseignantId}_${c.date}`);
-      }
-    }
-  });
-  pvs.forEach((p) => {
-    if (p.directeurId && p.date) {
-      seanceKeys.add(`${p.directeurId}_${p.date}`);
-    }
-  });
-  Object.keys(seancesStatuts).forEach((k) => {
-    seanceKeys.add(k);
-  });
-
-  return Array.from(seanceKeys)
-    .map((key) => {
-      const [ensId, ...dateParts] = key.split('_');
-      const date = dateParts.join('_');
-      const sessionCreneaux = creneaux.filter((c) => c.enseignantId === ensId && c.date === date);
-      const sessionPvs = pvs.filter((p) => p.directeurId === ensId && p.date === date);
-      const statutRecord = seancesStatuts[key];
-      const statutInfo = calculerStatutSeance(date, ensId, sessionPvs, statutRecord);
-      const lieu = sessionCreneaux[0]?.lieu || 'CED';
-      return {
-        key,
-        enseignantId: ensId,
-        date,
-        lieu,
-        statut: statutInfo.statut,
-        diffJours: statutInfo.diffJours,
-        motif: statutInfo.motif,
-        relanceLe: statutInfo.relanceLe || statutRecord?.relanceLe,
-        creneaux: sessionCreneaux,
-      };
-    })
-    .filter((s) => s.statut === 'pv_en_retard');
-}
-
-export function compterExceptions(
-  creneaux: Creneau[],
-  pvsArg?: PV[],
-  seancesStatutsArg?: Record<string, SeanceStatutRecord>
-): number {
-  let resolvedPvs = pvsArg;
-  if (!resolvedPvs) {
-    try {
-      const rawPvs = typeof localStorage !== 'undefined' ? localStorage.getItem('usmba_doctorat_pvs') : null;
-      resolvedPvs = rawPvs ? JSON.parse(rawPvs) : [];
-    } catch {
-      resolvedPvs = [];
-    }
-  }
-  const resolvedStatuts = seancesStatutsArg || getSeancesStatutsMap();
-  const sansPresence = getEntretiensSansPresence(creneaux);
-  const sansPv = getSeancesSansPvKeys(creneaux, resolvedPvs || [], resolvedStatuts);
-  const nonRecues = getConvocationsNonRecues(creneaux);
-  return sansPresence.length + sansPv.length + nonRecues.length;
-}
 
 export const Exceptions: React.FC = () => {
   const [creneaux, setCreneaux] = useState<Creneau[]>([]);
@@ -180,8 +54,6 @@ export const Exceptions: React.FC = () => {
       const rawPvs = localStorage.getItem('usmba_doctorat_pvs');
       if (rawPvs) {
         setPvs(JSON.parse(rawPvs));
-      } else {
-        setPvs([]);
       }
       setSeancesStatuts(getSeancesStatutsMap());
     } catch {
@@ -217,9 +89,8 @@ export const Exceptions: React.FC = () => {
 
   const getCandidatNom = (id?: string): string => {
     if (!id) return fr.exceptions.nonRenseigne;
-    const resolved = trouverCandidat(id);
-    if (resolved.nom && !resolved.nom.startsWith('cand-')) return resolved.nom;
-
+    if (id === 'cand-salma') return 'Salma Alami';
+    if (id === 'cand-khadija') return 'Khadija Tazi';
     if (id === 'cand-sara') return 'Sara Benjelloun';
     if (id === 'cand-omar') return 'Omar Idrissi';
     if (id === 'cand-001') return 'Yassine El Fassi';
@@ -248,31 +119,16 @@ export const Exceptions: React.FC = () => {
     return fr.exceptions.nonRenseigne;
   };
 
-  // Bloc 1 : Entretiens sans présence constatée
+  // 1. Filtrer les créneaux non confirmés (> 48h)
   const now = Date.now();
-  const entretiensSansPresence = getEntretiensSansPresence(creneaux);
-
-  // Bloc 3 : Convocations non reçues (> 48 h)
-  const convocationsNonRecues = getConvocationsNonRecues(creneaux, now);
-
-  // Durée en jours depuis l'entretien passé
-  const getDureeDepuisEntretien = (dateStr?: string, heureStr?: string): string => {
-    const isoDate = normaliserDateIso(dateStr);
-    if (!isoDate) return fr.exceptions.silenceDureeMoinsUnJour;
-    const refDate = aujourdhui();
-    const nowDate = new Date();
-    const nowHHMM = `${String(nowDate.getHours()).padStart(2, '0')}:${String(nowDate.getMinutes()).padStart(2, '0')}`;
-    const refMs = new Date(`${refDate}T${nowHHMM}:00`).getTime();
-    const interviewMs = new Date(`${isoDate}T${(heureStr || '00:00').trim()}:00`).getTime();
-    if (Number.isNaN(refMs) || Number.isNaN(interviewMs)) {
-      return fr.exceptions.silenceDureeMoinsUnJour;
+  const nonConfirmes = creneaux.filter((c) => {
+    if (c.statut === 'reserve' && c.dateReservation) {
+      const resTime = new Date(c.dateReservation).getTime();
+      const diffHours = (now - resTime) / (1000 * 60 * 60);
+      return diffHours > SEUIL_HEURES;
     }
-    const diffHours = Math.max(0, (refMs - interviewMs) / (1000 * 60 * 60));
-    const diffJours = Math.floor(diffHours / 24);
-    if (diffJours < 1) return fr.exceptions.silenceDureeMoinsUnJour;
-    if (diffJours === 1) return fr.exceptions.silenceDureeUnJour;
-    return fr.exceptions.silenceDureeJours.replace('{count}', String(diffJours));
-  };
+    return false;
+  });
 
   // Durée de silence en jours ("3 jours", "moins d'un jour")
   const getDureeSilence = (dateReservation?: string): string => {
@@ -289,33 +145,22 @@ export const Exceptions: React.FC = () => {
     return fr.exceptions.silenceDureeJours.replace('{count}', String(diffJours));
   };
 
-  // Date JJ/MM/AAAA
-  const formatDateJJMMAAAA = (dateStr?: string): string => {
+  // Date JJ/MM à HH:mm
+  const formatCreneauDate = (dateStr?: string, heureStr?: string): string => {
     if (!dateStr) return fr.exceptions.nonRenseigne;
-    const clean = dateStr.trim();
-    if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) {
-      const [yyyy, mm, dd] = clean.split('-');
-      return `${dd}/${mm}/${yyyy}`;
-    }
-    if (/^\d{2}\/\d{2}\/\d{4}$/.test(clean)) return clean;
-    try {
-      const dt = new Date(clean);
-      if (!Number.isNaN(dt.getTime())) {
-        return dt.toLocaleDateString('fr-FR', {
-          day: '2-digit',
-          month: '2-digit',
-          year: 'numeric',
-        });
+    let jjmm = dateStr;
+    if (dateStr.includes('-')) {
+      const parts = dateStr.split('-');
+      if (parts.length === 3) {
+        jjmm = `${parts[2].padStart(2, '0')}/${parts[1].padStart(2, '0')}`;
       }
-    } catch {}
-    return clean;
-  };
-
-  // Libellé "Entretien du JJ/MM/AAAA à HH:mm"
-  const formatEntretienDateHeure = (dateStr?: string, heureStr?: string): string => {
-    return fr.exceptions.entretienDuDateHeure
-      .replace('{date}', formatDateJJMMAAAA(dateStr))
-      .replace('{heure}', heureStr || '00:00');
+    } else if (dateStr.includes('/')) {
+      const parts = dateStr.split('/');
+      if (parts.length >= 2) {
+        jjmm = `${parts[0].padStart(2, '0')}/${parts[1].padStart(2, '0')}`;
+      }
+    }
+    return heureStr ? `${jjmm} à ${heureStr}` : jjmm;
   };
 
   // Date de relance au format JJ/MM
@@ -331,56 +176,7 @@ export const Exceptions: React.FC = () => {
     }
   };
 
-  // Bouton « Relancer le directeur » (Bloc 1 : Entretiens sans présence constatée)
-  const handleRelancerDirecteurPresence = (cTarget: CreneauException) => {
-    const nowIso = new Date().toISOString();
-    const updated = (creneaux as CreneauException[]).map((c) => {
-      if (c.id === cTarget.id) {
-        return {
-          ...c,
-          relancePresenceLe: nowIso,
-        };
-      }
-      return c;
-    });
-
-    try {
-      storageService.setCreneaux(updated);
-      setCreneaux(updated);
-
-      const candNom = getCandidatNom(cTarget.candidatId);
-      const ensNom = getEnseignantName(cTarget.enseignantId);
-      const dateFr = formatDateJJMMAAAA(cTarget.date);
-
-      // Notification 'action' envoyée au directeur
-      if (cTarget.enseignantId) {
-        ajouterNotification({
-          destinataireId: cTarget.enseignantId,
-          texte: fr.exceptions.notifRelancePresenceDirecteur
-            .replace('{candidat}', candNom)
-            .replace('{date}', dateFr)
-            .replace('{heure}', cTarget.heure || '00:00'),
-          type: 'action',
-        });
-      }
-
-      // Journal
-      logRelancePresenceDirecteur(
-        { id: 'dir-ced', nom: 'Structure CED', role: 'directeur_ced' },
-        ensNom,
-        `${candNom} • ${formatEntretienDateHeure(cTarget.date, cTarget.heure)}`
-      );
-
-      setToastMessage(fr.exceptions.toastRelancePresenceSuccess);
-      window.dispatchEvent(new CustomEvent('usmba_creneaux_updated'));
-      setTimeout(() => setToastMessage(null), 3000);
-    } catch {
-      setToastMessage(fr.exceptions.storageError);
-      setTimeout(() => setToastMessage(null), 3000);
-    }
-  };
-
-  // Bouton « Relancer » (Bloc 3 : Convocations non reçues > 48 h)
+  // Bouton « Relancer »
   const handleRelancer = (creneauId: string) => {
     const cTarget = creneaux.find((c) => c.id === creneauId);
     if (!cTarget) return;
@@ -416,10 +212,11 @@ export const Exceptions: React.FC = () => {
 
       // Écriture d'un logEvent dans le journal
       const candNom = getCandidatNom(cTarget.candidatId);
-      logRelanceConvocationNonRecue(
+      logEvent(
         { id: 'dir-ced', nom: 'Structure CED', role: 'directeur_ced' },
+        fr.journalActions.relanceEntretien,
         candNom,
-        formatEntretienDateHeure(cTarget.date, cTarget.heure)
+        `Entretien du ${formatCreneauDate(cTarget.date, cTarget.heure)}`
       );
 
       setToastMessage(fr.exceptions.toastRelanceSuccess);
@@ -431,11 +228,48 @@ export const Exceptions: React.FC = () => {
     }
   };
 
-  // Bloc 2 : Séances sans PV (pv_en_retard)
-  const seancesSansPv = getSeancesSansPvKeys(creneaux, pvs, seancesStatuts).map((s) => ({
-    ...s,
-    enseignantNom: getEnseignantName(s.enseignantId),
-  }));
+  // Séances sans PV (pv_en_retard)
+  const seanceKeys = new Set<string>();
+  creneaux.forEach((c) => {
+    if (c.enseignantId && c.date) {
+      if (c.statut === 'confirme' || c.statut === 'reserve' || c.candidatId) {
+        seanceKeys.add(`${c.enseignantId}_${c.date}`);
+      }
+    }
+  });
+  pvs.forEach((p) => {
+    if (p.directeurId && p.date) {
+      seanceKeys.add(`${p.directeurId}_${p.date}`);
+    }
+  });
+  Object.keys(seancesStatuts).forEach((k) => {
+    seanceKeys.add(k);
+  });
+
+  const seancesSansPv = Array.from(seanceKeys)
+    .map((key) => {
+      const [ensId, ...dateParts] = key.split('_');
+      const date = dateParts.join('_');
+      const sessionCreneaux = creneaux.filter((c) => c.enseignantId === ensId && c.date === date);
+      const sessionPvs = pvs.filter((p) => p.directeurId === ensId && p.date === date);
+      const statutRecord = seancesStatuts[key];
+      const statutInfo = calculerStatutSeance(date, ensId, sessionPvs, statutRecord);
+      const lieu = sessionCreneaux[0]?.lieu || 'CED';
+      const ensNom = getEnseignantName(ensId);
+      return {
+        key,
+        enseignantId: ensId,
+        date,
+        lieu,
+        enseignantNom: ensNom,
+        statut: statutInfo.statut,
+        diffJours: statutInfo.diffJours,
+        motif: statutInfo.motif,
+        relanceLe: statutInfo.relanceLe || statutRecord?.relanceLe,
+        creneaux: sessionCreneaux,
+      };
+    })
+    .filter((s) => s.statut === 'pv_en_retard');
 
   const handleRelancerDirecteur = (seance: (typeof seancesSansPv)[0]) => {
     const nowIso = new Date().toISOString();
@@ -560,96 +394,7 @@ export const Exceptions: React.FC = () => {
         </p>
       </div>
 
-      {/* Bloc 1 : Entretiens sans présence constatée */}
-      <section className="space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-2.5 h-2.5 rounded-full bg-rose-500" />
-            <h2 className="text-sm font-bold text-slate-900">
-              {fr.exceptions.sectionSansPresenceTitle}
-            </h2>
-          </div>
-          <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200">
-            {entretiensSansPresence.length}
-          </span>
-        </div>
-
-        {entretiensSansPresence.length === 0 ? (
-          <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center text-xs text-slate-500 shadow-xs flex flex-col items-center justify-center gap-2">
-            <CheckCircle2 size={28} className="text-emerald-500" />
-            <span className="font-medium">{fr.exceptions.aucuneException}</span>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {entretiensSansPresence.map((c) => {
-              const candNom = getCandidatNom(c.candidatId);
-              const ensNom = getEnseignantName(c.enseignantId);
-              const dureeDepuis = getDureeDepuisEntretien(c.date, c.heure);
-              const isRelance = Boolean(c.relancePresenceLe);
-
-              return (
-                <div
-                  key={c.id}
-                  className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4"
-                >
-                  {/* Ligne supérieure : Candidat, Directeur & Durée depuis l'entretien */}
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <h3 className="font-bold text-sm text-slate-900">{candNom}</h3>
-                      <p className="text-xs text-slate-600 mt-0.5">{ensNom}</p>
-                    </div>
-                    <span className="inline-flex items-center gap-1.5 font-medium text-xs px-2.5 py-1 rounded-full bg-rose-50 text-rose-700 border border-rose-200 shrink-0">
-                      <Clock size={12} className="text-rose-500" />
-                      <span>{dureeDepuis}</span>
-                    </span>
-                  </div>
-
-                  {/* Ligne médiane : Entretien du JJ/MM/AAAA à HH:mm */}
-                  <div className="flex items-center gap-2 text-xs text-slate-700 bg-slate-50 border border-slate-100 px-3 py-2 rounded-xl">
-                    <Calendar size={14} className="text-slate-400 shrink-0" />
-                    <span className="font-semibold">{formatEntretienDateHeure(c.date, c.heure)}</span>
-                  </div>
-
-                  {/* Ligne d'action : Pastille texte + icône & Bouton Relancer le directeur */}
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
-                    <span className="inline-flex items-center gap-1.5 font-semibold text-xs px-2.5 py-1 rounded-full bg-rose-100 text-rose-800 w-fit">
-                      <AlertCircle size={13} className="text-rose-600 shrink-0" />
-                      <span>{fr.exceptions.badgePresenceNonConstatee}</span>
-                    </span>
-
-                    {isRelance ? (
-                      <div className="flex flex-col sm:items-end gap-1">
-                        <button
-                          type="button"
-                          disabled
-                          className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed"
-                        >
-                          <Clock size={12} />
-                          <span>{formatRelanceDate(c.relancePresenceLe)}</span>
-                        </button>
-                        <p className="text-[11px] font-medium text-slate-500 sm:text-right">
-                          {fr.exceptions.relanceDirecteurPresenceRaison}
-                        </p>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => handleRelancerDirecteurPresence(c)}
-                        className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold text-white bg-rose-700 hover:bg-rose-800 shadow-xs cursor-pointer active:scale-98 transition"
-                      >
-                        <Send size={12} />
-                        <span>{fr.exceptions.btnRelancerDirecteurPresence}</span>
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
-      {/* Bloc 2 : Séances sans PV */}
+      {/* Section 1 : Séances sans PV */}
       <section className="space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -747,7 +492,7 @@ export const Exceptions: React.FC = () => {
         )}
       </section>
 
-      {/* Bloc 3 : Convocations non reçues (> 48 h) */}
+      {/* Section : Entretiens non confirmés (> 48 h) */}
       <section className="space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -757,18 +502,18 @@ export const Exceptions: React.FC = () => {
             </h2>
           </div>
           <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200">
-            {convocationsNonRecues.length}
+            {nonConfirmes.length}
           </span>
         </div>
 
-        {convocationsNonRecues.length === 0 ? (
+        {nonConfirmes.length === 0 ? (
           <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center text-xs text-slate-500 shadow-xs flex flex-col items-center justify-center gap-2">
             <CheckCircle2 size={28} className="text-emerald-500" />
             <span className="font-medium">{fr.exceptions.emptyNonConfirmes}</span>
           </div>
         ) : (
           <div className="space-y-4">
-            {convocationsNonRecues.map((c) => {
+            {nonConfirmes.map((c) => {
               const candNom = getCandidatNom(c.candidatId);
               const ensNom = getEnseignantName(c.enseignantId);
               const dureeSilence = getDureeSilence(c.dateReservation);
@@ -782,7 +527,7 @@ export const Exceptions: React.FC = () => {
                   key={c.id}
                   className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4"
                 >
-                  {/* Ligne supérieure : Candidat, Directeur & Durée */}
+                  {/* Ligne supérieure : Candidat, Directeur & Durée de silence */}
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <h3 className="font-bold text-sm text-slate-900">{candNom}</h3>
@@ -794,13 +539,13 @@ export const Exceptions: React.FC = () => {
                     </span>
                   </div>
 
-                  {/* Ligne médiane : Entretien du JJ/MM/AAAA à HH:mm */}
+                  {/* Ligne médiane : Date JJ/MM à HH:mm */}
                   <div className="flex items-center gap-2 text-xs text-slate-700 bg-slate-50 border border-slate-100 px-3 py-2 rounded-xl">
                     <Calendar size={14} className="text-slate-400 shrink-0" />
-                    <span className="font-semibold">{formatEntretienDateHeure(c.date, c.heure)}</span>
+                    <span className="font-semibold">{formatCreneauDate(c.date, c.heure)}</span>
                   </div>
 
-                  {/* Ligne d'action : Pastille & Bouton Relancer */}
+                  {/* Ligne d'action : Pastille de silence & Bouton Relancer */}
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
                     <span className="inline-flex items-center gap-1.5 font-semibold text-xs px-2.5 py-1 rounded-full bg-rose-100 text-rose-800 w-fit">
                       <Clock size={13} className="text-rose-600" />
@@ -808,19 +553,14 @@ export const Exceptions: React.FC = () => {
                     </span>
 
                     {isRelance ? (
-                      <div className="flex flex-col sm:items-end gap-1">
-                        <button
-                          type="button"
-                          disabled
-                          className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed"
-                        >
-                          <Clock size={12} />
-                          <span>{formatRelanceDate(c.relanceLe)}</span>
-                        </button>
-                        <p className="text-[11px] font-medium text-slate-500 sm:text-right">
-                          {fr.exceptions.relanceCandidatRaison}
-                        </p>
-                      </div>
+                      <button
+                        type="button"
+                        disabled
+                        className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed"
+                      >
+                        <Clock size={12} />
+                        <span>{formatRelanceDate(c.relanceLe)}</span>
+                      </button>
                     ) : (
                       <div className="flex flex-col sm:items-end gap-1">
                         <button

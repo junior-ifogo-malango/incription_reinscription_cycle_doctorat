@@ -13,11 +13,6 @@ import {
 } from '../data/mockData';
 import { storageService } from '../services/storage';
 import { fr } from '../i18n/fr';
-import {
-  hasMeaningfulCandidateData,
-  persistUnifiedCandidate,
-  reconcileCandidateFromStorage,
-} from './messages';
 
 export interface ResolvedGoogleSession {
   role: UserRole;
@@ -167,39 +162,6 @@ export function resolveGoogleSession(
         }
       }
     }
-    if (!existingCandidate) {
-      const rawOverrides = localStorage.getItem('usmba_candidats_overrides');
-      if (rawOverrides) {
-        const overrides: Record<string, Candidat> = JSON.parse(rawOverrides);
-        const foundOv = Object.values(overrides).find(
-          (ov) => ov?.email && ov.email.toLowerCase().trim() === cleanEmail
-        );
-        if (foundOv) {
-          existingCandidate = foundOv;
-        }
-      }
-    }
-
-    if (!existingCandidate) {
-      const probed = reconcileCandidateFromStorage({
-        id: profile.uid,
-        nom: profile.displayName,
-        cne: '',
-        cin: '',
-        email: cleanEmail,
-        tel: '',
-        panier: [],
-        candidatures: [],
-        compteCree: true,
-      });
-      if (hasMeaningfulCandidateData(probed)) {
-        existingCandidate = probed;
-      }
-    }
-
-    if (existingCandidate) {
-      existingCandidate = reconcileCandidateFromStorage(existingCandidate);
-    }
   } catch {
     // safe fallback
   }
@@ -228,7 +190,7 @@ export function resolveGoogleSession(
         panier: mergedExistingPanier,
         panierInteret: mergedExistingPanier,
       }
-    : reconcileCandidateFromStorage({
+    : {
         id: profile.uid,
         nom: profile.displayName,
         cne: '',
@@ -241,19 +203,31 @@ export function resolveGoogleSession(
         interets: [],
         compteCree: true,
         verificationStatut: 'verifie',
-      });
+      };
 
-  const syncedCandidateData = persistUnifiedCandidate(candidateData, true);
+  try {
+    const rawAccounts = localStorage.getItem('usmba_registered_accounts');
+    const accounts: Candidat[] = rawAccounts ? JSON.parse(rawAccounts) : [];
+    const filtered = accounts.filter(
+      (a) => !a.email || a.email.toLowerCase().trim() !== cleanEmail
+    );
+    filtered.push(candidateData);
+    localStorage.setItem('usmba_registered_accounts', JSON.stringify(filtered));
+  } catch {
+    // safe fallback
+  }
+
+  storageService.setCandidat(candidateData);
 
   const isInstitutionalUsmba = isUsmbaEmail(cleanEmail);
 
   return {
     role: 'candidat',
     email: cleanEmail,
-    candidateData: syncedCandidateData,
+    candidateData,
     compte: {
       id: profile.uid,
-      nom: syncedCandidateData.nom || profile.displayName,
+      nom: candidateData.nom || profile.displayName,
       email: cleanEmail,
       role: 'candidat',
       roles: ['candidat'],
