@@ -175,9 +175,6 @@ export const CedSeances: React.FC = () => {
   const [openedPvIds, setOpenedPvIds] = useState<Record<string, boolean>>({});
   const [activeDocPv, setActiveDocPv] = useState<{ pv: PV; candidatId?: string; autoPrint?: boolean } | null>(null);
   const [scanCameraPvId, setScanCameraPvId] = useState<string | null>(null);
-  const [refusModalPvId, setRefusModalPvId] = useState<string | null>(null);
-  const [refusMotif, setRefusMotif] = useState('');
-  const [refusError, setRefusError] = useState<string | null>(null);
   const [sendingEmailMap, setSendingEmailMap] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
@@ -186,8 +183,6 @@ export const CedSeances: React.FC = () => {
         if (scanModalPv) {
           setScanModalPv(null);
           setScanModalCandidatId(null);
-        } else if (refusModalPvId) {
-          setRefusModalPvId(null);
         } else if (scanCameraPvId) {
           setScanCameraPvId(null);
         } else if (activeDocPv) {
@@ -197,7 +192,7 @@ export const CedSeances: React.FC = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [scanModalPv, refusModalPvId, scanCameraPvId, activeDocPv]);
+  }, [scanModalPv, scanCameraPvId, activeDocPv]);
 
   const getConnectedAccountInfo = (): { isMainCed: boolean; structureName: string } => {
     try {
@@ -527,52 +522,6 @@ export const CedSeances: React.FC = () => {
     }
   };
 
-  const handleRefuserScan = (pvId: string, motif: string = 'Scan illisible ou signatures incomplètes') => {
-    const curPv = pvs.find((p) => p.id === pvId);
-    if (connectedDirecteurId && curPv?.directeurId === connectedDirecteurId) {
-      setMessage({ type: 'error', text: fr.cedSeances.conflitDirecteur });
-      return;
-    }
-    try {
-      const raw = localStorage.getItem('usmba_doctorat_pvs');
-      let curPvs: PV[] = raw ? JSON.parse(raw) : [];
-      const idx = curPvs.findIndex((p) => p.id === pvId);
-      if (idx !== -1) {
-        // Règle : le PV repasse à 'a_signer'
-        curPvs[idx].statut = 'a_signer';
-        curPvs[idx].scanStatut = 'refuse';
-        curPvs[idx].scanMotifRefus = motif;
-        delete curPvs[idx].envoyeLe;
-        delete curPvs[idx].envoyePar;
-        localStorage.setItem('usmba_doctorat_pvs', JSON.stringify(curPvs));
-        setPvs(curPvs.filter((p) => !p.remplaceePar).map(enrichirPVLecture));
-        broadcastPvsUpdated();
-        void syncPvBestEffort();
-        logEvent({ id: 'dir-ced', nom: 'Directeur de structure', role: 'directeur_ced' }, fr.journalActions.scanPvRefuse, `PV-${curPvs[idx].date}-${(curPvs[idx].code || '').slice(0, 4)}`, motif);
-        setMessage({ type: 'error', text: `Scan du PV refusé : ${motif}. Le PV repasse à À signer.` });
-        setTimeout(() => setMessage(null), 4000);
-      }
-    } catch {}
-  };
-
-  const handleOpenRefusModal = (pvId: string) => {
-    setRefusModalPvId(pvId);
-    setRefusMotif('');
-    setRefusError(null);
-  };
-
-  const handleConfirmRefus = () => {
-    if (!refusModalPvId) return;
-    const cleanMotif = (refusMotif || '').trim();
-    if (cleanMotif.length < 5) {
-      setRefusError(fr.cedSeances.motifRefusMinError);
-      return;
-    }
-    handleRefuserScan(refusModalPvId, cleanMotif);
-    setRefusModalPvId(null);
-    setRefusMotif('');
-  };
-
   const [expandedPvIds, setExpandedPvIds] = useState<Record<string, boolean>>({});
 
   const togglePvExpanded = (pvId: string) => {
@@ -614,13 +563,6 @@ export const CedSeances: React.FC = () => {
       refSeance,
       detail
     );
-  };
-
-  const handleOpenScanModal = (pv: PV) => {
-    setScanModalCandidatId(null);
-    setScanModalPv(pv);
-    setScanTab(pv.scanStructureFichier && !pv.scanFichier ? 'structure' : 'directeur');
-    markPvOpenedAndLog(pv);
   };
 
   const handleOpenCandidatePV = (pv: PV, candidatId: string) => {
@@ -927,16 +869,6 @@ export const CedSeances: React.FC = () => {
                     {/* Barre d'actions */}
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-white p-3.5 rounded-xl border border-slate-200">
                       <div className="flex items-center gap-2 flex-wrap">
-                        {/* Voir le PV / scan */}
-                        <button
-                          type="button"
-                          onClick={() => handleOpenScanModal(pv)}
-                          className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-sky-800 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-xl transition cursor-pointer min-h-[44px]"
-                        >
-                          <Eye size={15} />
-                          <span>{fr.cedSeances.btnVoirScan}</span>
-                        </button>
-
                         {/* Bouton groupé unique : Tout télécharger */}
                         <button
                           type="button"
@@ -974,23 +906,6 @@ export const CedSeances: React.FC = () => {
                             <FileCheck size={13} className="text-emerald-600 shrink-0" />
                             <span>{fr.cedSeances.scanStructureBadge}</span>
                           </span>
-                        )}
-
-                        {/* Refuser le scan */}
-                        {!isPublished && (
-                          <button
-                            type="button"
-                            disabled={isDirecteurOfPv}
-                            onClick={() => !isDirecteurOfPv && handleOpenRefusModal(pv.id)}
-                            className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-colors min-h-[44px] ${
-                              isDirecteurOfPv
-                                ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
-                                : 'text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 cursor-pointer active:scale-98'
-                            }`}
-                          >
-                            <XCircle size={15} />
-                            <span>{fr.cedSeances.btnRefuserScan}</span>
-                          </button>
                         )}
                       </div>
 
@@ -1309,63 +1224,6 @@ export const CedSeances: React.FC = () => {
           </div>
         );
       })()}
-
-      {/* Modal : Refus du scan avec motif obligatoire */}
-      {refusModalPvId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between border-b pb-3 border-slate-100">
-              <h3 className="font-bold text-sm text-slate-900 flex items-center gap-2">
-                <XCircle size={16} className="text-rose-600" />
-                <span>{fr.cedSeances.modalRefusTitle}</span>
-              </h3>
-              <button
-                type="button"
-                onClick={() => setRefusModalPvId(null)}
-                className="text-slate-400 hover:text-slate-600 text-base font-bold p-1 cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="block text-xs font-bold text-slate-700">
-                {fr.cedSeances.motifRefusLabel} *
-              </label>
-              <textarea
-                rows={3}
-                value={refusMotif}
-                onChange={(e) => {
-                  setRefusMotif(e.target.value);
-                  setRefusError(null);
-                }}
-                placeholder={fr.cedSeances.motifRefusPlaceholder}
-                className="w-full text-xs p-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-rose-500 focus:outline-none"
-              />
-              {refusError && (
-                <p className="text-[11px] font-semibold text-rose-600">{refusError}</p>
-              )}
-            </div>
-
-            <div className="flex items-center justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setRefusModalPvId(null)}
-                className="px-3.5 py-1.5 text-xs font-semibold rounded-xl text-slate-600 hover:bg-slate-100 cursor-pointer"
-              >
-                Annuler
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmRefus}
-                className="px-4 py-1.5 text-xs font-semibold rounded-xl bg-rose-700 hover:bg-rose-800 text-white shadow-xs cursor-pointer active:scale-98"
-              >
-                {fr.cedSeances.btnConfirmerRefus}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Caméra pour scanner le PV avec la signature de la Structure */}
       {scanCameraPvId && (
