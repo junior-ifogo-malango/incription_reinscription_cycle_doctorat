@@ -317,9 +317,185 @@ export const DEMO_AGENT_KARIMA = {
   role: 'agent' as const,
 };
 
-export const MOCK_CANDIDATS: Candidat[] = [DEMO_CANDIDAT_YASSINE];
+export const DEMO_CANDIDAT_MEHDI: Candidat = {
+  id: 'cand-mehdi-tazi',
+  nom: 'Mehdi Tazi',
+  nomFamille: 'TAZI',
+  prenom: 'MEHDI',
+  dateNaissance: '05/11/1997',
+  cne: 'N138251042',
+  cin: 'BE789012',
+  email: 'mehdi.tazi@usmba.ac.ma',
+  role: 'candidat',
+  tel: '0661458290',
+  panier: ['suj-04', 'suj-01', 'suj-07'],
+  panierInteret: ['suj-04', 'suj-01', 'suj-07'],
+  candidatures: ['suj-04', 'suj-01', 'suj-07'],
+  interets: ['suj-04', 'suj-01', 'suj-07'],
+  candidaturesStatuts: {
+    'suj-04': 'retenue',
+    'suj-01': 'deposee',
+    'suj-07': 'deposee',
+  },
+  envoyeLe: '2026-11-05T10:00:00.000Z',
+  compteCree: true,
+  verificationStatut: 'verifie',
+  cursus: {
+    diplome: 'Master Cybersécurité et Réseaux Avancés',
+    etablissement: 'Faculté des Sciences',
+    anneeObtention: 2025,
+  },
+  dossier: {
+    casParticulier: false,
+    guichet: false,
+    dateEnvoi: '2026-11-05T10:00:00.000Z',
+  },
+  pieces: [
+    {
+      type: 'CIN',
+      statut: 'prouvee',
+      fichier: '/assets/aistudio/cin_recto_b0fb6be1.jpg',
+      fichierVerso: '/assets/aistudio/cin_verso_e07a4b85.jpg',
+      source: 'televersement',
+      sourceVerso: 'televersement',
+      dateMaj: '2026-11-05T09:50:00.000Z',
+    },
+    {
+      type: 'DIPLOME',
+      statut: 'prouvee',
+      fichier: '/assets/aistudio/diplome_tazi_mehdi_6e12e69d.jpg',
+      source: 'televersement',
+      dateMaj: '2026-11-05T09:52:00.000Z',
+    },
+    {
+      type: 'RELEVES',
+      statut: 'prouvee',
+      fichier: '/assets/aistudio/releve_tazi_mehdi_9dcca321.jpg',
+      source: 'televersement',
+      dateMaj: '2026-11-05T09:55:00.000Z',
+    },
+    {
+      type: 'CV',
+      statut: 'absente',
+    },
+  ],
+};
 
-export const INITIAL_CRENEAUX: Creneau[] = [];
+export const DEMO_CANDIDAT_SALMA_BENNANI: Candidat = {
+  id: 'cand-salma-bennani',
+  nom: 'Salma Bennani',
+  nomFamille: 'BENNANI',
+  prenom: 'SALMA',
+  dateNaissance: '22/03/1999',
+  cne: 'R142098765',
+  cin: 'CD456789',
+  email: 'salma.bennani@usmba.ac.ma',
+  role: 'candidat',
+  tel: '0662983410',
+  panier: ['suj-01', 'suj-07', 'suj-04'],
+  panierInteret: ['suj-01', 'suj-07', 'suj-04'],
+  candidatures: ['suj-01', 'suj-07', 'suj-04'],
+  interets: ['suj-01', 'suj-07', 'suj-04'],
+  candidaturesStatuts: {
+    'suj-01': 'retenue',
+    'suj-07': 'deposee',
+    'suj-04': 'deposee',
+  },
+  envoyeLe: '2026-11-08T11:15:00.000Z',
+  compteCree: true,
+  verificationStatut: 'verifie',
+  cursus: {
+    diplome: 'Master Science des Données et Intelligence Artificielle',
+    etablissement: 'Faculté des Sciences',
+    anneeObtention: 2026,
+  },
+  dossier: {
+    casParticulier: false,
+    guichet: false,
+    dateEnvoi: '2026-11-08T11:15:00.000Z',
+  },
+  pieces: [
+    {
+      type: 'CIN',
+      statut: 'prouvee',
+      fichier: '/assets/aistudio/cin_recto_95ef8a1d.jpg',
+      fichierVerso: '/assets/aistudio/cin_verso_ea375a19.jpg',
+      source: 'televersement',
+      sourceVerso: 'televersement',
+      dateMaj: '2026-11-08T11:00:00.000Z',
+    },
+    {
+      type: 'DIPLOME',
+      statut: 'prouvee',
+      fichier: '/assets/aistudio/diplome_salma_bennani_dd6ab7d7.jpg',
+      source: 'televersement',
+      dateMaj: '2026-11-08T11:05:00.000Z',
+    },
+    {
+      type: 'RELEVES',
+      statut: 'prouvee',
+      fichier: '/assets/aistudio/releve_salma_bennani_f60c31c4.jpg',
+      source: 'televersement',
+      dateMaj: '2026-11-08T11:10:00.000Z',
+    },
+    {
+      type: 'CV',
+      statut: 'absente',
+    },
+  ],
+};
+
+export const MOCK_CANDIDATS: Candidat[] = [
+  DEMO_CANDIDAT_YASSINE,
+  DEMO_CANDIDAT_MEHDI,
+  DEMO_CANDIDAT_SALMA_BENNANI,
+];
+
+function computeDemoIsoOffset(daysOffset: number): string {
+  let baseIso = '';
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const demoDate = localStorage.getItem('usmba_demo_date');
+      if (demoDate && /^\d{4}-\d{2}-\d{2}$/.test(demoDate.trim())) {
+        baseIso = demoDate.trim();
+      }
+    }
+  } catch {}
+  if (!baseIso) {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    baseIso = `${y}-${m}-${d}`;
+  }
+  const dt = new Date(`${baseIso}T12:00:00Z`);
+  dt.setUTCDate(dt.getUTCDate() + daysOffset);
+  return dt.toISOString().slice(0, 10);
+}
+
+export const INITIAL_CRENEAUX: Creneau[] = [
+  {
+    id: 'cr-exc-presence-1',
+    enseignantId: 'ens-2',
+    date: computeDemoIsoOffset(-6),
+    heure: '10:00',
+    lieu: 'Salle A1 - FST Fès',
+    candidatId: 'cand-mehdi-tazi',
+    statut: 'confirme',
+    dateReservation: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
+    dateConfirmation: new Date(Date.now() - 9 * 24 * 60 * 60 * 1000).toISOString(),
+  },
+  {
+    id: 'cr-exc-convoc-1',
+    enseignantId: 'ens-1',
+    date: computeDemoIsoOffset(3),
+    heure: '14:30',
+    lieu: 'Salle B2 - FSDM Fès',
+    candidatId: 'cand-salma-bennani',
+    statut: 'reserve',
+    dateReservation: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString(),
+  },
+];
 
 export const ApogeeFictif: Record<string, string> = {
   'N138249871': 'Master en Informatique, USMBA 2023',
@@ -362,7 +538,43 @@ export const DEMO_DOCTORANT_NADIA: Doctorant = {
   structure: 'Laboratoire LISAC - Faculté des Sciences Dhar El Mehraz (FSDM)',
 };
 
-export const INITIAL_RAPPORTS: Rapport[] = [];
+export const INITIAL_RAPPORTS: Rapport[] = [
+  {
+    id: 'rap-doc-nadia-2026',
+    doctorantId: 'doc-nadia',
+    encadrantId: 'ens-1',
+    annee: 2,
+    titre: DEMO_DOCTORANT_NADIA.sujetTitre,
+    avancement:
+      'Modélisation multi-agents du pilotage énergétique des bâtiments tertiaires et évaluation sur jeu de données simulé (réduction de 18 % des pics de consommation). Rédaction de l’état de l’art et validation expérimentale du prototype sous Python/PyTorch.',
+    publications: [
+      {
+        titre: 'Distributed Reinforcement Learning for Smart Building HVAC Optimization',
+        doi: '10.1109/SMARTGRID.2026.0142',
+      },
+    ],
+    communications: [
+      {
+        titre: 'Optimisation énergétique distribuée par apprentissage multi-agents',
+        lieu: 'Colloque International IA & Énergies, FSDM Fès',
+      },
+    ],
+    formationsHeures: 60,
+    perspectives:
+      'Finalisation des tests sur scénarios réels de micro-réseaux, soumission d’un second article en revue indexée et préparation du manuscrit de thèse.',
+    aucuneActivite: false,
+    statut: 'soumis',
+    commentaires: [],
+    chronologie: [
+      {
+        date: '18/11/2026',
+        acteur: `Doctorante (${DEMO_DOCTORANT_NADIA.nom})`,
+        action: 'Rapport annuel d’avancement déposé et soumis pour validation de l’encadrant',
+      },
+    ],
+    soumisLe: '2026-11-18T10:30:00.000Z',
+  },
+];
 
 /* ========================================================================= */
 /* ÉCHÉANCES ET DATE DE DÉMO (PARCOURS CANDIDAT)                             */
@@ -558,6 +770,8 @@ const CLEANUP_ALAOUI_TARIQ_KEY = 'usmba_cleanup_alaoui_tariq_v1';
 const CLEANUP_SALMA_KHADIJA_KEY = 'usmba_cleanup_salma_khadija_v1';
 const CLEANUP_SALMA_ALAMI_KEY = 'usmba_cleanup_salma_alami_v1';
 const SYNC_DIRECTORS_ACCOUNTS_KEY = 'usmba_sync_directors_accounts_v1';
+const SEED_RAPPORT_NADIA_KEY = 'usmba_seed_rapport_nadia_v1';
+const SEED_EXCEPTIONS_V1_KEY = 'usmba_seed_exceptions_v1';
 
 export function migrateTestAccountsIfNeeded(): void {
   try {
@@ -568,19 +782,22 @@ export function migrateTestAccountsIfNeeded(): void {
     localStorage.setItem('usmba_doctorat_enseignants', JSON.stringify(INITIAL_ENSEIGNANTS));
     localStorage.setItem('usmba_registered_accounts', JSON.stringify([]));
     localStorage.setItem('usmba_candidats_overrides', JSON.stringify({}));
-    localStorage.setItem('usmba_all_candidates', JSON.stringify([]));
+    localStorage.setItem(
+      'usmba_all_candidates',
+      JSON.stringify([DEMO_CANDIDAT_MEHDI, DEMO_CANDIDAT_SALMA_BENNANI])
+    );
     localStorage.setItem('usmba_doctorat_candidat', JSON.stringify(INITIAL_CANDIDAT));
     localStorage.setItem('usmba_doctorat_pieces', JSON.stringify(INITIAL_PIECES));
     localStorage.setItem('usmba_doctorat_dossier', JSON.stringify(INITIAL_DOSSIER));
-    localStorage.setItem('usmba_doctorat_creneaux', JSON.stringify([]));
+    localStorage.setItem('usmba_doctorat_creneaux', JSON.stringify(INITIAL_CRENEAUX));
     localStorage.setItem('usmba_doctorat_pvs', JSON.stringify([]));
     localStorage.setItem('usmba_doctorat_resultats', JSON.stringify([]));
     localStorage.setItem('usmba_seances_statuts', JSON.stringify({}));
     localStorage.setItem('usmba_commission_pv_downloaded', JSON.stringify({}));
     localStorage.setItem('usmba_commission_seance_membres', JSON.stringify({}));
     localStorage.setItem('usmba_notifications', JSON.stringify([]));
-    localStorage.setItem('usmba_doctorat_rapports', JSON.stringify([]));
-    localStorage.setItem('usmba_rapports', JSON.stringify([]));
+    localStorage.setItem('usmba_doctorat_rapports', JSON.stringify(INITIAL_RAPPORTS));
+    localStorage.setItem('usmba_rapports', JSON.stringify(INITIAL_RAPPORTS));
     localStorage.setItem('usmba_doctorat_role', 'candidat');
     localStorage.removeItem('usmba_active_account');
     localStorage.setItem(MIGRATION_4COMPTES_KEY, 'true');
@@ -1037,11 +1254,19 @@ export function isSalmaOrAlamiRecord(rec: {
   email?: string;
 } | null | undefined): boolean {
   if (!rec) return false;
+  const idLower = (rec.id || '').trim().toLowerCase();
+  if (idLower === 'cand-salma-bennani') return false;
   const combined = `${rec.id || ''} ${rec.nom || ''} ${rec.displayName || ''} ${rec.prenom || ''} ${rec.nomFamille || ''} ${rec.email || ''}`
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase();
-  return /\bsalma\b/.test(combined) || /\balami\b/.test(combined);
+  if (/\bsalma\b/.test(combined) && /\bbennani\b/.test(combined)) return false;
+  return (
+    idLower === 'cand-salma' ||
+    idLower === 'cand-alami' ||
+    (/\bsalma\b/.test(combined) && /\balami\b/.test(combined)) ||
+    /\balami\b/.test(combined)
+  );
 }
 
 export function cleanupSalmaAlamiIfNeeded(force = false): number {
@@ -1248,11 +1473,107 @@ export function syncDirectorAccountsIfNeeded(): void {
   }
 }
 
+export function seedDemoRapportNadiaIfNeeded(): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    if (localStorage.getItem(SEED_RAPPORT_NADIA_KEY)) return;
+
+    const rawDocRapports = localStorage.getItem('usmba_doctorat_rapports');
+    const rawRapports = localStorage.getItem('usmba_rapports');
+    const parseList = (raw: string | null): Rapport[] => {
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    };
+
+    const existingDocRapports = parseList(rawDocRapports);
+    const existingRapports = parseList(rawRapports);
+    const baseList = existingDocRapports.length > 0 ? existingDocRapports : existingRapports;
+    const hasNadia = baseList.some((r) => r && r.doctorantId === DEMO_DOCTORANT_NADIA.id);
+
+    if (!hasNadia) {
+      const nextList = [...baseList, ...INITIAL_RAPPORTS];
+      localStorage.setItem('usmba_doctorat_rapports', JSON.stringify(nextList));
+      localStorage.setItem('usmba_rapports', JSON.stringify(nextList));
+    }
+
+    localStorage.setItem(SEED_RAPPORT_NADIA_KEY, 'true');
+  } catch {
+    // safe fallback
+  }
+}
+
+export function seedDemoExceptionsAndCandidatesIfNeeded(): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    if (localStorage.getItem(SEED_EXCEPTIONS_V1_KEY)) return;
+
+    const demoCandidates = [DEMO_CANDIDAT_MEHDI, DEMO_CANDIDAT_SALMA_BENNANI];
+
+    // 1. Ajouter dans usmba_all_candidates
+    try {
+      const rawAll = localStorage.getItem('usmba_all_candidates');
+      const all: Candidat[] = rawAll ? JSON.parse(rawAll) : [];
+      const nextAll = Array.isArray(all) ? [...all] : [];
+      let changedAll = false;
+      demoCandidates.forEach((dc) => {
+        if (!nextAll.some((c) => c && c.id === dc.id)) {
+          nextAll.push(dc);
+          changedAll = true;
+        }
+      });
+      if (changedAll || !rawAll) {
+        localStorage.setItem('usmba_all_candidates', JSON.stringify(nextAll));
+      }
+    } catch {}
+
+    // 2. Ajouter dans usmba_candidats_overrides
+    try {
+      const rawOv = localStorage.getItem('usmba_candidats_overrides');
+      const overrides: Record<string, Candidat> = rawOv ? JSON.parse(rawOv) : {};
+      const nextOv = overrides && typeof overrides === 'object' ? { ...overrides } : {};
+      let changedOv = false;
+      demoCandidates.forEach((dc) => {
+        if (!nextOv[dc.id]) {
+          nextOv[dc.id] = dc;
+          changedOv = true;
+        }
+      });
+      if (changedOv || !rawOv) {
+        localStorage.setItem('usmba_candidats_overrides', JSON.stringify(nextOv));
+      }
+    } catch {}
+
+    // 3. Ajouter les créneaux d'exceptions dans usmba_doctorat_creneaux
+    try {
+      const rawCr = localStorage.getItem('usmba_doctorat_creneaux');
+      const crList: Creneau[] = rawCr ? JSON.parse(rawCr) : [];
+      const nextCr = Array.isArray(crList) ? [...crList] : [];
+      let changedCr = false;
+      INITIAL_CRENEAUX.forEach((seedCr) => {
+        if (!nextCr.some((c) => c && c.id === seedCr.id)) {
+          nextCr.push(seedCr);
+          changedCr = true;
+        }
+      });
+      if (changedCr || !rawCr) {
+        localStorage.setItem('usmba_doctorat_creneaux', JSON.stringify(nextCr));
+      }
+    } catch {}
+
+    localStorage.setItem(SEED_EXCEPTIONS_V1_KEY, 'true');
+  } catch {
+    // safe fallback
+  }
+}
+
 migrateTestAccountsIfNeeded();
 cleanupAlaouiTariqIfNeeded();
 cleanupSalmaKhadijaIfNeeded();
 cleanupSalmaAlamiIfNeeded();
 syncDirectorAccountsIfNeeded();
+seedDemoRapportNadiaIfNeeded();
+seedDemoExceptionsAndCandidatesIfNeeded();
 
 export function getDirectorStructure(directeurId?: string): string {
   if (!directeurId) return '';

@@ -59,6 +59,7 @@ import {
   syncGoogleUserProfile,
 } from './firebase';
 import { resolveGoogleSession } from './utils/googleAuthResolver';
+import { syncDepositedToFirestore } from './utils/firebaseSync';
 
 export type AppTabType =
   | TabType
@@ -367,6 +368,11 @@ export default function App() {
         return;
       }
       setGoogleUserPhoto(firebaseUser.photoURL || null);
+      if (firebaseUser.emailVerified) {
+        void syncDepositedToFirestore({ promptGoogleLoginIfNeeded: false }).catch((err) => {
+          console.warn('Firestore candidature sync error:', err);
+        });
+      }
       if (isLoggedInRef.current) return;
       try {
         const profile = await syncGoogleUserProfile(firebaseUser);

@@ -2,7 +2,6 @@ import {
   collection,
   deleteDoc,
   doc,
-  getDoc,
   getDocs,
   query,
   serverTimestamp,
@@ -21,6 +20,7 @@ import {
 import {
   cleanupSalmaAlamiIfNeeded,
   isSalmaOrAlamiRecord,
+  MOCK_CANDIDATS,
 } from '../data/mockData';
 import { reconcileCandidateFromStorage, trouverCandidat } from './messages';
 
@@ -54,6 +54,8 @@ function collectLocalDepositedCandidates(): Candidat[] {
     if (!isDepositedCandidate(reconciled)) return;
     byId.set(reconciled.id, reconciled);
   };
+
+  MOCK_CANDIDATS.forEach(pushCandidate);
 
   try {
     const rawOv = localStorage.getItem('usmba_candidats_overrides');
@@ -211,26 +213,40 @@ export interface FirebaseSyncSummary {
   removedSalmaAlami: number;
 }
 
+async function loadExistingDocsMap(
+  collectionName: 'candidatures_deposees' | 'pvs',
+  ownerUid: string,
+  isAdminUser: boolean
+): Promise<Map<string, Record<string, unknown>>> {
+  const map = new Map<string, Record<string, unknown>>();
+  const colRef = collection(db, collectionName);
+  const q = isAdminUser ? colRef : query(colRef, where('ownerUid', '==', ownerUid));
+  try {
+    const snap = await getDocs(q);
+    snap.forEach((d) => {
+      map.set(d.id, d.data() as Record<string, unknown>);
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.LIST, collectionName);
+  }
+  return map;
+}
+
 async function upsertDocWithRules(
   collectionName: 'candidatures_deposees' | 'pvs',
   docId: string,
   createData: Record<string, unknown>,
   updateData: Record<string, unknown>,
+  existingMap: Map<string, Record<string, unknown>>,
   isAdminUser: boolean,
   skipIfPublished = false
 ): Promise<boolean> {
   const path = `${collectionName}/${docId}`;
   const ref = doc(db, collectionName, docId);
-  let snap;
-  try {
-    snap = await getDoc(ref);
-  } catch (err) {
-    handleFirestoreError(err, OperationType.GET, path);
-  }
+  const existingData = existingMap.get(docId);
 
-  if (snap && snap.exists()) {
-    const data = snap.data();
-    if (skipIfPublished && data?.statut === 'publie' && !isAdminUser) {
+  if (existingData) {
+    if (skipIfPublished && existingData.statut === 'publie' && !isAdminUser) {
       return false;
     }
     try {
@@ -270,6 +286,11 @@ export async function syncDepositedToFirestore(
 
   // 2. Synchroniser toutes les candidatures déposées
   const depositedCandidates = collectLocalDepositedCandidates();
+  const existingCandidatures = await loadExistingDocsMap(
+    'candidatures_deposees',
+    user.uid,
+    isAdminUser
+  );
   let candidaturesSynced = 0;
   for (const cand of depositedCandidates) {
     const docId = sanitizeFirestoreId(cand.id, 'cand');
@@ -280,6 +301,7 @@ export async function syncDepositedToFirestore(
       docId,
       createPayload,
       updatePayload,
+      existingCandidatures,
       isAdminUser
     );
     if (ok) candidaturesSynced += 1;
@@ -297,6 +319,9 @@ export async function syncDepositedToFirestore(
     }
   } catch {}
 
+  const existingPvs = localPvs.length > 0
+    ? await loadExistingDocsMap('pvs', user.uid, isAdminUser)
+    : new Map<string, Record<string, unknown>>();
   let pvsSynced = 0;
   for (const pv of localPvs) {
     const pvDocId = sanitizeFirestoreId(pv.id, 'pv');
@@ -307,6 +332,7 @@ export async function syncDepositedToFirestore(
       pvDocId,
       createPayload,
       updatePayload,
+      existingPvs,
       isAdminUser,
       true
     );
