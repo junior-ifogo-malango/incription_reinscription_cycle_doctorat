@@ -83,7 +83,7 @@ function formatDatePourMessage(dateStr: string): string {
  */
 export const messageConvocation = (date: string, heure: string, lieu: string): string => {
   const dateFr = formatDatePourMessage(date);
-  return `Vous êtes convoqué(e) à l'entretien le ${dateFr} à ${heure}, lieu : ${lieu}. Confirmez votre présence sur la plateforme.`;
+  return `Vous êtes convoqué(e) à l'entretien le ${dateFr} à ${heure}, lieu : ${lieu}. Accusez réception de votre convocation sur la plateforme.`;
 };
 
 /**

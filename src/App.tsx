@@ -42,7 +42,7 @@ import { Dossier } from './components/Dossier';
 import { DossierDirecteur } from './components/DossierDirecteur';
 import { Entretiens } from './components/Entretiens';
 import { MesCreneaux } from './components/MesCreneaux';
-import { Exceptions } from './components/Exceptions';
+import { Exceptions, compterExceptions } from './components/Exceptions';
 import { Commission } from './components/Commission';
 import { RapportComponent } from './components/Rapport';
 import { VoteComite } from './components/VoteComite';
@@ -339,6 +339,9 @@ export default function App() {
     window.addEventListener('usmba_candidat_updated', handleSync);
     window.addEventListener('usmba_dossier_updated', handleSync);
     window.addEventListener('usmba_creneaux_updated', handleSync);
+    window.addEventListener('usmba_pvs_updated', handleSync);
+    window.addEventListener('usmba_seances_updated', handleSync);
+    window.addEventListener('usmba_demo_date_updated', handleSync);
     window.addEventListener('usmba_account_updated', handleAccountUpdated);
     window.addEventListener('storage', handleSync);
     return () => {
@@ -348,6 +351,9 @@ export default function App() {
       window.removeEventListener('usmba_candidat_updated', handleSync);
       window.removeEventListener('usmba_dossier_updated', handleSync);
       window.removeEventListener('usmba_creneaux_updated', handleSync);
+      window.removeEventListener('usmba_pvs_updated', handleSync);
+      window.removeEventListener('usmba_seances_updated', handleSync);
+      window.removeEventListener('usmba_demo_date_updated', handleSync);
       window.removeEventListener('usmba_account_updated', handleAccountUpdated);
       window.removeEventListener('storage', handleSync);
     };
@@ -748,16 +754,8 @@ export default function App() {
     (c) => c.enseignantId === activeEnseignant.id
   );
 
-  // Alertes CED (> 48h en attente de confirmation - Tableau d'exceptions)
-  const now = Date.now();
-  const alertesCreneaux = creneaux.filter((c) => {
-    if (c.statut === 'reserve' && c.dateReservation) {
-      const reservationTime = new Date(c.dateReservation).getTime();
-      const diffHours = (now - reservationTime) / (1000 * 60 * 60);
-      return diffHours > 48;
-    }
-    return false;
-  });
+  // Alertes CED (total des cas affichés dans le Tableau d'exceptions)
+  const alertesCreneauxCount = compterExceptions(creneaux);
 
   // Candidatures reçues pour l'enseignant actif
   const teacherSubjectIds = sujetsEnseignant.map((s) => s.id);
@@ -1396,9 +1394,9 @@ export default function App() {
                           }`}
                         >
                           <span>{fr.nav.exceptionsCed}</span>
-                          {alertesCreneaux.length > 0 && (
+                          {alertesCreneauxCount > 0 && (
                             <span className="px-1.5 py-0.2 rounded-full bg-rose-500 text-white font-bold text-[10px]">
-                              {alertesCreneaux.length}
+                              {alertesCreneauxCount}
                             </span>
                           )}
                         </button>
@@ -1674,9 +1672,9 @@ export default function App() {
               }`}
             >
               <span>{fr.nav.exceptionsCed}</span>
-              {alertesCreneaux.length > 0 && (
+              {alertesCreneauxCount > 0 && (
                 <span className="px-1.5 py-0.2 rounded-full bg-rose-500 text-white font-bold text-[10px]">
-                  {alertesCreneaux.length}
+                  {alertesCreneauxCount}
                 </span>
               )}
             </button>
@@ -2293,7 +2291,7 @@ export default function App() {
             candidaturesCount: candidaturesActionCount,
             creneauxCount: candidaturesActionCount,
             piecesPretes: piecesAProverCount,
-            alertesCed: alertesCreneaux.length,
+            alertesCed: alertesCreneauxCount,
             reinscriptionsCount: rapportsAValider.length,
           }}
         />

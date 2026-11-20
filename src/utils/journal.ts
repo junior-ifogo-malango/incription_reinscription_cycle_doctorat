@@ -157,3 +157,29 @@ export function logPvConsulte(
     detail
   );
 }
+
+export function logRelancePresenceDirecteur(
+  acteur: ActeurJournal,
+  directeurNom: string,
+  detail?: string
+): EvenementJournal | null {
+  return logEvent(
+    acteur,
+    'Relance présence entretien',
+    directeurNom,
+    detail
+  );
+}
+
+export function logRelanceConvocationNonRecue(
+  acteur: ActeurJournal,
+  candidatNom: string,
+  detail?: string
+): EvenementJournal | null {
+  return logEvent(
+    acteur,
+    'Relance convocation non reçue',
+    candidatNom,
+    detail
+  );
+}
